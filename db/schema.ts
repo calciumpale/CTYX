@@ -1,4 +1,4 @@
-import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
+import { integer, primaryKey, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 
 /** One isolated, versioned JSON workspace per platform-authenticated user. */
 export const workbenchWorkspaces = sqliteTable('workbench_workspaces', {
@@ -8,3 +8,15 @@ export const workbenchWorkspaces = sqliteTable('workbench_workspaces', {
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
 });
+
+/** User-owned connection settings. The credential is AES-GCM ciphertext only. */
+export const workbenchApiConnections = sqliteTable('workbench_api_connections', {
+  userId:text('user_id').notNull(),
+  kind:text('kind').notNull(),
+  enabled:integer('enabled').notNull().default(1),
+  baseUrl:text('base_url').notNull(),
+  modelName:text('model_name').notNull(),
+  secretCiphertext:text('secret_ciphertext').notNull(),
+  version:integer('version').notNull().default(1),
+  updatedAt:text('updated_at').notNull(),
+},table=>[primaryKey({columns:[table.userId,table.kind]})]);

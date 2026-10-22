@@ -24,7 +24,7 @@ async function body(request:Request):Promise<Record<string,unknown>> {
   return parsed as Record<string,unknown>;
 }
 export async function GET(request:Request):Promise<Response> {
-  try {return Response.json(await readWorkbench(requireUserId(request),readRole(request)),{headers:responseHeaders});}catch(error){return errorResponse(error);}
+  try {return Response.json(await readWorkbench(requireUserId(request),readRole(request),new URL(request.url).origin),{headers:responseHeaders});}catch(error){return errorResponse(error);}
 }
 export async function POST(request:Request):Promise<Response> {
   try {
@@ -37,9 +37,9 @@ export async function POST(request:Request):Promise<Response> {
     if(input.action==='switch_role') {
       const role=(payload as Record<string,unknown>).role;
       if(role!=='sales'&&role!=='manager')throw new DomainError('体验视角不正确');
-      return Response.json({state:await readWorkbench(userId,role as Role),message:`已切换${role==='sales'?'销售':'销售管理者'}体验视角`},{headers:{...responseHeaders,'Set-Cookie':roleCookie(role as Role,request)}});
+      return Response.json({state:await readWorkbench(userId,role as Role,new URL(request.url).origin),message:`已切换${role==='sales'?'销售':'销售管理者'}体验视角`},{headers:{...responseHeaders,'Set-Cookie':roleCookie(role as Role,request)}});
     }
-    const result=await mutateWorkbench(userId,readRole(request),input.action,payload as Record<string,unknown>,input.revision);
+    const result=await mutateWorkbench(userId,readRole(request),input.action,payload as Record<string,unknown>,input.revision,new URL(request.url).origin);
     return Response.json(result,{headers:responseHeaders});
   } catch(error){return errorResponse(error);}
 }

@@ -1,5 +1,5 @@
 import { AGENTS, STAGES } from './types.ts';
-import type { AgentId, ApiResult, Deal, FlowNode, Knowledge, Role, Run, Skill, TraceStep, TrainingSession, WorkbenchState, Workflow } from './types.ts';
+import type { AgentId, ApiResult, Deal, FlowNode, FollowupRecording, Knowledge, Role, Run, Skill, TraceStep, TrainingSession, WorkbenchState, Workflow } from './types.ts';
 
 export class DomainError extends Error {
   status:number;
@@ -9,7 +9,7 @@ export class DomainError extends Error {
 type StoredState=WorkbenchState & {_access?:Record<string,string>};
 export interface GenerationInput {query:string;agentId:AgentId;deal?:Deal;deals:Deal[];knowledge:Knowledge[];instruction?:string;previous?:string;}
 export interface GenerationOutput {answer:string;mode:'demo'|'live';}
-export interface ActionContext {now?:string;generate?:(input:GenerationInput)=>Promise<GenerationOutput>;}
+export interface ActionContext {now?:string;generate?:(input:GenerationInput)=>Promise<GenerationOutput>;trustedRecording?:FollowupRecording;}
 const agentIds=new Set(AGENTS.map(item=>item.id));
 const nodeTypes=new Set(['start','intent','knowledge','agent','review','output']);
 const managerActions=new Set(['skill_review','knowledge_add','workflow_save','workflow_publish']);
@@ -227,9 +227,12 @@ export async function executeAction(original:WorkbenchState,role:Role,action:str
   let run:Run|undefined;let session:TrainingSession|undefined;let message='已保存';
   switch(action) {
     case 'deal_note': {
-      const deal=visibleDeal(state,role,payload.dealId);const value=text(payload.text,'跟进备注',5000);
-      deal.notes.unshift({id:uid('note'),text:value,author:actor,date:now});deal.version++;deal.lastContact=now.slice(0,10);
-      activity(state,role,`${deal.name}新增跟进`,value.slice(0,100),'deal',now);break;
+      const deal=visibleDeal(state,role,payload.dealId);
+      if(Object.prototype.hasOwnProperty.call(payload,'recording'))fail('请通过录音上传入口添加附件');
+      const recording=context.trustedRecording;
+      const value=recording?optional(payload.text,5000):text(payload.text,'跟进备注',5000);
+      deal.notes.unshift({id:uid('note'),text:value,author:actor,date:now,...(recording?{recording:{...recording}}:{})});deal.version++;deal.lastContact=now.slice(0,10);
+      activity(state,role,`${deal.name}新增跟进`,value.slice(0,100)||(recording?`上传录音：${recording.name}`:''),'deal',now);break;
     }
     case 'deal_stage': {
       const deal=visibleDeal(state,role,payload.dealId);checkVersion(deal.version,payload.version);

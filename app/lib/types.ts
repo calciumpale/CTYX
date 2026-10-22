@@ -9,7 +9,8 @@ export const AGENTS: {id: AgentId; name: string; description: string; starter: s
   {id:'coach',name:'培训带练',description:'在真实沟通之前，先练习一次',starter:'陪我练习客户提出免租期异议时如何回应'},
 ];
 export const STAGES = ['线索','商机','方案','合同','回款'] as const;
-export interface Deal {id:string; name:string; contact:string; position:string; industry:string; owner:string; ownerId:string; stage:string; amount:number; health:number; priority:'high'|'medium'|'low'; lastContact:string; nextAction:string; summary:string; needs:string[]; risks:string[]; notes:{id:string;text:string;author:string;date:string}[]; version:number; avatar:string;}
+export interface FollowupRecording {id:string;name:string;size:number;mimeType:string;}
+export interface Deal {id:string; name:string; contact:string; position:string; industry:string; owner:string; ownerId:string; stage:string; amount:number; health:number; priority:'high'|'medium'|'low'; lastContact:string; nextAction:string; summary:string; needs:string[]; risks:string[]; notes:{id:string;text:string;author:string;date:string;recording?:FollowupRecording}[]; version:number; avatar:string;}
 export interface Skill {id:string;title:string;category:string;status:'candidate'|'published'|'rejected';author:string;description:string;scenario:string;steps:string[];boundaries:string[];evidence:string;source:string;version:number;reviewer?:string;reviewNote?:string;updatedAt:string;}
 export interface Knowledge {id:string;title:string;category:string;content:string;source:string;status:'published'|'draft';updatedAt:string;}
 export type NodeType = 'start'|'intent'|'knowledge'|'agent'|'review'|'output';

@@ -1,0 +1,51 @@
+import { env } from 'cloudflare:workers';
+import { DomainError, projectState } from '../../lib/domain.ts';
+import { authorizedRecording, parseAudioRange, parseRecordingForm, recordingObjectKey, saveRecordingNote } from '../../lib/followup-recordings.ts';
+import { loadWorkspace, readRole, requireUserId, saveWorkspace } from '../../lib/server.ts';
+
+export const dynamic='force-dynamic';
+const responseHeaders={'Cache-Control':'private, no-store','Vary':'Cookie, oai-authenticated-user-id','X-Content-Type-Options':'nosniff'};
+function bucket():R2Bucket {
+  const store=(env as Cloudflare.Env).BUCKET;
+  if(!store)throw new DomainError('录音存储服务尚未就绪，请稍后重试',503);
+  return store;
+}
+function failure(error:unknown):Response {
+  if(error instanceof DomainError)return Response.json({error:error.message},{status:error.status,headers:responseHeaders});
+  console.error('Follow-up recording request failed',error instanceof Error?error.name:'UnknownError');
+  return Response.json({error:'录音暂时无法读取或保存，请稍后重试'},{status:503,headers:responseHeaders});
+}
+export async function POST(request:Request):Promise<Response> {
+  try {
+    const userId=requireUserId(request);const siteOrigin=new URL(request.url).origin;
+    const origin=request.headers.get('origin');
+    if((origin&&origin!==siteOrigin)||request.headers.get('sec-fetch-site')==='cross-site')throw new DomainError('只允许从当前站点上传录音',403);
+    const storage=bucket();const input=await parseRecordingForm(request);const role=readRole(request);
+    const result=await saveRecordingNote(userId,role,input,{bucket:storage,load:()=>loadWorkspace(userId,siteOrigin),save:(revision,state)=>saveWorkspace(userId,revision,state)});
+    return Response.json(result,{headers:responseHeaders});
+  }catch(error){return failure(error);}
+}
+async function read(request:Request,head=false):Promise<Response> {
+  try {
+    const userId=requireUserId(request);const url=new URL(request.url);const role=readRole(request);
+    const dealId=url.searchParams.get('dealId')??'';const id=url.searchParams.get('id')??'';
+    if(!dealId||dealId.length>100)throw new DomainError('录音不存在或当前视角无权访问',404);
+    const state=projectState(await loadWorkspace(userId,url.origin),role);
+    const recording=authorizedRecording(state,dealId,id);const storage=bucket();const key=await recordingObjectKey(userId,id);
+    const metadata=await storage.head(key);
+    if(!metadata||metadata.size!==recording.size)throw new DomainError('录音不存在或暂时无法读取',404);
+    const headers=new Headers({...responseHeaders,'Content-Type':recording.mimeType,'Accept-Ranges':'bytes','Content-Disposition':`inline; filename*=UTF-8''${encodeURIComponent(recording.name)}`});
+    const rangeHeader=request.headers.get('range');let range:{offset:number;length:number}|undefined;
+    if(rangeHeader) {
+      try{range=parseAudioRange(rangeHeader,metadata.size);}catch(error){if(error instanceof DomainError&&error.status===416){headers.set('Content-Range',`bytes */${metadata.size}`);return new Response(null,{status:416,headers});}throw error;}
+      headers.set('Content-Range',`bytes ${range.offset}-${range.offset+range.length-1}/${metadata.size}`);
+    }
+    headers.set('Content-Length',String(range?.length??metadata.size));
+    if(head)return new Response(null,{status:range?206:200,headers});
+    const object=await storage.get(key,range?{range}:undefined);
+    if(!object)throw new DomainError('录音不存在或暂时无法读取',404);
+    return new Response(object.body,{status:range?206:200,headers});
+  }catch(error){const response=failure(error);return head?new Response(null,{status:response.status,headers:response.headers}):response;}
+}
+export async function GET(request:Request):Promise<Response> {return read(request);}
+export async function HEAD(request:Request):Promise<Response> {return read(request,true);}

@@ -1,0 +1,24 @@
+.followup-recording-field { margin: 10px 0 20px; min-width: 0; }
+.followup-recording-input { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+.followup-recording-actions { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+.followup-recording-help { margin: 9px 0 0; color: var(--cds-text-muted); font-size: 10px; line-height: 1.7; overflow-wrap: anywhere; }
+.followup-recording-card { margin-top: 13px; padding: 13px; min-width: 0; border: 1px solid var(--cds-border); border-radius: var(--cds-panel-radius); background: var(--cds-surface-0); }
+.followup-recording-file { display: flex; gap: 10px; align-items: center; min-width: 0; }
+.followup-recording-file > svg { flex-shrink: 0; color: var(--cds-text-secondary); }
+.followup-recording-file > div { flex: 1; min-width: 0; }
+.followup-recording-file strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--cds-text-primary); font-size: 11px; line-height: 1.6; font-weight: 500; }
+.followup-recording-file span { color: var(--cds-text-muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+.followup-recording-file .icon-button { flex-shrink: 0; border: 0; }
+.followup-audio { margin-top: 11px; min-width: 0; }
+.followup-audio audio { display: block; width: min(100%, 440px); max-width: 100%; height: 38px; }
+.followup-audio-hint { display: flex; align-items: center; gap: 5px; margin-top: 7px; font-size: 10px; line-height: 1.7; color: var(--cds-text-muted); }
+.followup-recording-field .followup-recording-error, .followup-audio .followup-recording-error { color: var(--cds-text-accent); font-size: 11px; line-height: 1.7; margin-top: 8px; }
+.note-list article .followup-recording-card { margin-top: 12px; }
+.followup-recording-download { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; color: var(--cds-text-secondary); text-decoration: none; border-radius: var(--radius-sm); padding: 5px; }
+.followup-recording-download:hover { background: var(--cds-alpha-1); }
+.followup-recording-download:focus-visible { outline: 2px solid var(--cds-clay); outline-offset: 2px; }
+.followup-recording-download span { color: inherit; }
+@media (max-width: 380px) {
+  .followup-recording-actions .button { flex: 1 1 130px; }
+  .followup-recording-card { padding: 10px; }
+}

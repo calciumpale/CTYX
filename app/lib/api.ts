@@ -32,5 +32,19 @@ export function useWorkbench() {
     mutationQueue.current = result.then(() => undefined, () => undefined);
     return result;
   }, [accept, reload]);
-  return { state, loading, error, mutate, reload };
+  const uploadFollowup = useCallback((dealId: string, text: string, audio: File): Promise<ApiResult> => {
+    const perform = async () => {
+      const form = new FormData();
+      form.set('dealId', dealId); form.set('text', text); form.set('audio', audio);
+      form.set('revision', String(stateRef.current?.revision ?? ''));
+      const response = await fetch('/api/deal-recordings', { method: 'POST', credentials: 'same-origin', body: form });
+      const result = await response.json() as ApiResult & { error?: string };
+      if (!response.ok) { if (response.status === 409) await reload(); throw new Error(result.error || '录音未能保存，请稍后重试'); }
+      accept(result.state); return result;
+    };
+    const result = mutationQueue.current.then(perform, perform);
+    mutationQueue.current = result.then(() => undefined, () => undefined);
+    return result;
+  }, [accept, reload]);
+  return { state, loading, error, mutate, reload, uploadFollowup };
 }

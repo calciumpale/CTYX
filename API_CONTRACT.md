@@ -1,0 +1,20 @@
+# Shared API contract
+
+GET `/api/workbench` returns `WorkbenchState` from app/lib/types.ts. POST accepts `{action, payload, revision}` and returns `ApiResult` with updated state; reject errors as `{error:string}` with HTTP status. Client api.ts supplies current revision. Server-generated runs persist. Timestamps ISO. Currency amount = RMB yuan. All records are sample data. All server writes authenticated and serialized optimistic revision, 409 when stale; client reload state on409 and show conflict instead of silent replay. `switch_role` changes HttpOnly experience-role cookie; manager is default private workspace owner view. Sales sampleId `sales-1`, see only their deals. Role preview is experience, not real enterprise SSO.
+
+Actions:
+- `switch_role`: `{role:'sales'|'manager'}`. Return filtered state. Do not increment data revision.
+- `chat`: `{query:string,agentId?:AgentId,dealId?:string}`. Return state + run. Only authorized deal and published knowledge can enter prompt. Selected agent optional; otherwise route deterministically by intent. Trace actual performed route/retrieval/generate/verify steps, label demo/live truthfully. Run answer in readable plain text paragraphs. Live service env: `MODEL_API_KEY`, `MODEL_BASE_URL` (https OpenAI-compatible origin+path e.g /v1), `MODEL_NAME`; API key only server. No client API key entry.
+- `deal_note`: `{dealId,text}`. Adds note. Sales restricted own deals.
+- `deal_stage`: `{dealId,stage,confirmed:true,version:number}`. Checks stage in STAGES and record version, requires confirmation.
+- `skill_review`: `{skillId,decision:'publish'|'reject',note:string,version:number}` manager only. Publish updates Skill and adds published Knowledge. Repeated/stale review409, reviewer audit.
+- `skill_candidate`: `{dealId?:string,title?:string,description?:string,scenario?:string,steps?:string[],boundaries?:string[],evidence?:string,source?:string}` generates candidate only; can start from a completed run or manual known example. No auto publish.
+- `knowledge_add`: `{title,content,category?}` manager only; max content 50000 chars, plain text/Markdown. Imported entries published by manager.
+- `workflow_save`: `{workflow:Workflow}` manager only. Draft can incomplete, validate allowed node types and valid agent IDs; generate id when blank. Enforce supplied workflow.version matches current if exists.
+- `workflow_publish`: `{workflowId,version:number}` manager only, validates single start, output, no cycles, every node reachable and output reachable; no arbitrary code nodes.
+- `workflow_run`: `{workflowId,query}` manager can test draft; sales only published. Honors graph node order and agent configuration, records trace; review node pauses (return warning, no autonomous publish).
+- `training_start`: `{scenario:string}` generates session + initial customer line. Return state + session.
+- `training_reply`: `{sessionId,text}` appends user and customer reply; reject completed sessions.
+- `training_finish`: `{sessionId}` completes with honest rule-based demo rubric + feedback (0-100), persists. Return state + session.
+
+Frontend uses `const result = await mutate(action,payload)` and consume result.state. Do not hold stale copies of selected skill/workflow: retrieve from current state by id. CoreViews exports `HomeView` and `DealsView` (props extends ViewProps, Home optional manager check inside); StudioViews exports `TrainingView`, `KnowledgeView`, `StudioView`, `RunsView`, `SettingsView`, each props ViewProps. Shell implements global chat panel using onAsk and result.run. Root owns api.ts integration. Do not edit other owners' files.

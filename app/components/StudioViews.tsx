@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
-import { ArrowRight, ArrowUp, BookOpen, Bot, Check, CheckCheck, ChevronRight, CircleHelp, Clock3, Code2, Database, FileText, GitBranch, GraduationCap, Grip, History, Info, Layers, Link2, Loader2, MessageSquare, Mic, Play, Plus, RotateCcw, Save, Search, Send, ShieldCheck, Sparkles, Square, Trash2, Upload, Volume2, X } from 'lucide-react';
+import { ArrowUp, BookOpen, Bot, Check, CheckCheck, ChevronRight, CircleHelp, Clock3, Code2, Database, FileText, GitBranch, GraduationCap, History, Info, Layers, Loader2, MessageSquare, Mic, Play, Plus, RotateCcw, Search, Send, ShieldCheck, Sparkles, Square, Upload, Volume2, X } from 'lucide-react';
 import './studio.css';
 import './training-voice.css';
 import { TrainingVoiceControls } from './TrainingVoiceControls';
@@ -10,12 +10,11 @@ import { DuplexVoiceControls } from './DuplexVoiceControls';
 import { useTrainingVoice } from '../lib/use-training-voice';
 import { useDuplexVoice } from '../lib/use-duplex-voice';
 import { createVoiceTurnQueue, type VoiceTurn, type VoiceQueueSnapshot } from '../lib/voice-turn-queue';
-import { AGENTS, type ApiResult, type FlowNode, type Mutate, type NodeType, type Run, type Skill, type ViewProps, type Workflow } from '../lib/types';
+import { AGENTS, type ApiResult, type Mutate, type Run, type Skill, type ViewProps } from '../lib/types';
 
 const dateLabel = (value: string) => new Date(value).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 const durationLabel = (duration: number) => duration < 1000 ? `${Math.round(duration)} ms` : `${(duration / 1000).toFixed(1)} s`;
 const agentName = (id: string) => AGENTS.find(agent => agent.id === id)?.name ?? id;
-const cloneWorkflow = (workflow: Workflow): Workflow => ({ ...workflow, nodes: workflow.nodes.map(node => ({ ...node })), edges: workflow.edges.map(edge => ({ ...edge })) });
 
 function useMutation(mutate: Mutate) {
   const [busy, setBusy] = useState(false);
@@ -306,108 +305,10 @@ export function KnowledgeView({ state, mutate, notify }: ViewProps) {
   </section>;
 }
 
-const NODE_TYPES: { type: NodeType; label: string; detail: string }[] = [
-  { type: 'start', label: '开始', detail: '接收任务输入' }, { type: 'intent', label: '意图识别', detail: '识别任务与路由' }, { type: 'knowledge', label: '知识检索', detail: '检索生效知识' }, { type: 'agent', label: '领域专家', detail: '调用配置的专家' }, { type: 'review', label: '人工审核', detail: '在此暂停，等待确认' }, { type: 'output', label: '结果输出', detail: '返回本次执行结果' },
-];
-function NodeIcon({ type, size = 18 }: { type: NodeType; size?: number }) {
-  if (type === 'start') return <Play size={size} />;
-  if (type === 'intent') return <GitBranch size={size} />;
-  if (type === 'knowledge') return <BookOpen size={size} />;
-  if (type === 'agent') return <Bot size={size} />;
-  if (type === 'review') return <ShieldCheck size={size} />;
-  return <CheckCheck size={size} />;
-}
-
-export function StudioView(props: ViewProps) {
-  return <WorkflowStudio key={props.state.role} {...props} />;
-}
-
-function WorkflowStudio({ state, mutate, notify }: ViewProps) {
-  const manager = state.role === 'manager';
-  const available = state.workflows.filter(item => manager || item.status === 'published');
-  const { busy, error, setError, perform } = useMutation(mutate);
-  const [selectedId, setSelectedId] = useState(() => available[0]?.id ?? '');
-  const [draftState, setDraft] = useState<Workflow | null>(() => available[0] ? cloneWorkflow(available[0]) : null);
-  const [dirty, setDirty] = useState(false);
-  const [selectedNodeId, setSelectedNodeId] = useState(() => available[0]?.nodes[0]?.id ?? '');
-  const [nodeType, setNodeType] = useState<NodeType>('agent');
-  const [edgeFrom, setEdgeFrom] = useState('');
-  const [edgeTo, setEdgeTo] = useState('');
-  const [query, setQuery] = useState('帮我准备一次客户拜访，明确需求、风险和下一步。');
-  const [run, setRun] = useState<Run | null>(null);
-  const [showTest, setShowTest] = useState(false);
-  const drag = useRef<{ nodeId: string; clientX: number; clientY: number; x: number; y: number } | null>(null);
-  const current = state.workflows.find(item => item.id === selectedId);
-  const draft = dirty ? draftState : current ?? draftState;
-  const selectedNode = draft?.nodes.find(node => node.id === selectedNodeId);
-  const edit = (update: (workflow: Workflow) => Workflow) => {
-    if (!manager || busy) return;
-    setDraft(previous => { const base = dirty ? previous : current ?? previous; return base ? update(base) : base; });
-    setDirty(true);
-  };
-  const selectWorkflow = (workflow: Workflow) => {
-    if (dirty) { setError('当前有未保存的修改。请先保存草稿，或撤销修改后再切换。'); return; }
-    setSelectedId(workflow.id); setDraft(cloneWorkflow(workflow)); setSelectedNodeId(workflow.nodes[0]?.id ?? ''); setEdgeFrom(''); setEdgeTo(''); setRun(null); setError('');
-  };
-  const createWorkflow = () => {
-    if (dirty) { setError('请先保存当前草稿，或撤销修改后再新建。'); return; }
-    const workflow: Workflow = { id: '', name: '新的工作流', description: '从任务输入到专家协作，搭建一条可复用的业务路径。', status: 'draft', version: 0, updatedAt: new Date().toISOString(), nodes: [{ id: 'start', type: 'start', label: '开始', x: 48, y: 175 }, { id: 'output', type: 'output', label: '结果输出', x: 670, y: 175 }], edges: [] };
-    setSelectedId('new'); setDraft(workflow); setDirty(true); setSelectedNodeId('start'); setRun(null); setError('');
-  };
-  const reset = () => { setDraft(current ? cloneWorkflow(current) : null); setSelectedNodeId(current?.nodes[0]?.id ?? ''); setDirty(false); setError(''); };
-  const addNode = () => {
-    if (!draft) return;
-    const id = `node-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`;
-    const node: FlowNode = { id, type: nodeType, label: NODE_TYPES.find(item => item.type === nodeType)?.label ?? '节点', x: 60 + (draft.nodes.length % 3) * 250, y: 65 + Math.floor(draft.nodes.length / 3) * 145, ...(nodeType === 'agent' ? { agentId: 'strategy' as const } : {}) };
-    edit(workflow => ({ ...workflow, nodes: [...workflow.nodes, node] })); setSelectedNodeId(id);
-  };
-  const updateNode = (changes: Partial<FlowNode>) => edit(workflow => ({ ...workflow, nodes: workflow.nodes.map(node => node.id === selectedNodeId ? { ...node, ...changes } : node) }));
-  const connect = () => {
-    if (!draft || !edgeFrom || !edgeTo) { setError('请选择起点和终点节点。'); return; }
-    if (edgeFrom === edgeTo) { setError('节点不能连接自身。'); return; }
-    if (draft.edges.some(edge => edge.from === edgeFrom && edge.to === edgeTo)) { setError('这条连线已经存在。'); return; }
-    edit(workflow => ({ ...workflow, edges: [...workflow.edges, { from: edgeFrom, to: edgeTo }] })); setError('');
-  };
-  const save = async () => {
-    if (!draft || !draft.name.trim()) { setError('请填写工作流名称。'); return; }
-    const result = await perform('workflow_save', { workflow: { ...draft, name: draft.name.trim() } });
-    if (result) {
-      const saved = result.state.workflows.find(item => item.id === draft.id) ?? result.state.workflows.find(item => !state.workflows.some(old => old.id === item.id));
-      if (saved) { setDraft(cloneWorkflow(saved)); setSelectedId(saved.id); setDirty(false); }
-      notify('工作流草稿已保存。测试将按已保存的节点和连线执行。');
-    }
-  };
-  const publish = async () => {
-    if (!current || dirty) return;
-    const result = await perform('workflow_publish', { workflowId: current.id, version: current.version });
-    if (result) { const published = result.state.workflows.find(item => item.id === current.id); if (published) setDraft(cloneWorkflow(published)); notify('工作流已发布，销售视角可使用。'); }
-  };
-  const test = async (event: FormEvent) => {
-    event.preventDefault();
-    if (!current || dirty || !query.trim()) return;
-    const result = await perform('workflow_run', { workflowId: current.id, query: query.trim() });
-    if (result?.run) { setRun(result.run); notify(result.message || '工作流运行记录已保存。'); }
-  };
-  const canvasWidth = Math.max(920, ...(draft?.nodes.map(node => node.x + 240) ?? []));
-  const canvasHeight = Math.max(510, ...(draft?.nodes.map(node => node.y + 160) ?? []));
-  return <section className="studio-view studio-builder-view">
-    <PageHeading eyebrow="BUILD WITH INTENTION" title="把协作方式，搭建成工作流" description={manager ? '配置节点、连接路径、用真实执行结果验证，再发布给团队。' : '选择已发布的工作流，把成熟的协作路径用于今天的任务。'}>{manager && <button className="studio-btn studio-btn-secondary" onClick={createWorkflow} disabled={busy}><Plus size={16} />新建工作流</button>}</PageHeading>
-    {error && <Notice error>{error}</Notice>}
-    <div className="studio-flow-picker" aria-label="选择工作流">{available.map(workflow => <button key={workflow.id} className={`studio-flow-choice${selectedId === workflow.id ? ' studio-flow-choice-active' : ''}`} onClick={() => selectWorkflow(workflow)} disabled={busy}><GitBranch size={20} /><div><strong>{workflow.name}</strong><span>{workflow.status === 'published' ? '已发布' : '草稿'} · {workflow.nodes.length} 个节点 · v{workflow.version}</span></div><ChevronRight size={16} /></button>)}{!available.length && !draft && <Empty icon={<GitBranch size={30} />} title={manager ? '搭建第一条业务路径' : '暂无可用工作流'} detail={manager ? '新建一个工作流，从开始节点连接到结果输出。' : '管理者发布工作流后，可在这里发起任务。'} />}</div>
-    {draft && <div className="studio-builder"><div className="studio-builder-top"><div><div className="studio-row"><GitBranch size={18} /><h2>{draft.name}</h2><span className="studio-tag">{dirty ? '未保存' : current?.status === 'published' ? '已发布' : '草稿'}</span></div><p>{draft.description}</p></div><div className="studio-row">{manager && <><button className="studio-btn studio-btn-ghost" onClick={reset} disabled={busy || !dirty}><RotateCcw size={15} />撤销修改</button><button className="studio-btn studio-btn-secondary" onClick={save} disabled={busy || !dirty}><BusyIcon busy={busy}><Save size={15} /></BusyIcon>保存草稿</button></>}<button className="studio-btn studio-btn-secondary" onClick={() => setShowTest(!showTest)} disabled={busy}><Play size={15} />{showTest ? '收起测试' : manager ? '测试运行' : '运行工作流'}</button>{manager && <button className="studio-btn studio-btn-primary" onClick={publish} disabled={busy || dirty || !current || current.status === 'published'}><Check size={15} />发布</button>}</div></div>
-      <div className="studio-canvas-toolbar"><div className="studio-row">{manager ? <><label><span className="studio-sr-only">新增节点类型</span><select value={nodeType} onChange={event => setNodeType(event.target.value as NodeType)} disabled={busy}>{NODE_TYPES.map(item => <option key={item.type} value={item.type}>{item.label}</option>)}</select></label><button className="studio-btn studio-btn-ghost" onClick={addNode} disabled={busy}><Plus size={15} />添加节点</button><span className="studio-toolbar-divider" /><button className="studio-btn studio-btn-ghost" disabled={busy || draft.nodes.length < 2} onClick={() => { const nodes = [...draft.nodes].sort((a, b) => a.x - b.x || a.y - b.y); edit(workflow => ({ ...workflow, edges: nodes.slice(0, -1).map((node, index) => ({ from: node.id, to: nodes[index + 1].id })) })); setError(''); }}><Link2 size={15} />从左至右连接</button></> : <span>已发布工作流 · 只读配置</span>}</div><span><Grip size={14} />{manager ? '拖动节点 · 方向键移动 24px' : '点击节点查看配置'}</span></div>
-      <div className="studio-canvas-layout"><div className="studio-canvas-scroll"><div className="studio-canvas" style={{ width: canvasWidth, height: canvasHeight }} aria-label="工作流画布"><svg className="studio-edges" width={canvasWidth} height={canvasHeight} aria-hidden="true"><defs><marker id="studio-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="currentColor" /></marker></defs>{draft.edges.map((edge, index) => { const from = draft.nodes.find(node => node.id === edge.from); const to = draft.nodes.find(node => node.id === edge.to); if (!from || !to) return null; const x1 = from.x + 206, y1 = from.y + 46, x2 = to.x, y2 = to.y + 46; const curve = Math.max(55, Math.abs(x2 - x1) / 2); return <path key={`${edge.from}-${edge.to}-${index}`} d={`M${x1},${y1} C${x1 + curve},${y1} ${x2 - curve},${y2} ${x2 - 6},${y2}`} markerEnd="url(#studio-arrow)" />; })}</svg>{draft.nodes.map(node => <button key={node.id} type="button" className={`studio-flow-node studio-node-${node.type}${selectedNodeId === node.id ? ' studio-node-selected' : ''}`} style={{ left: node.x, top: node.y }} aria-pressed={selectedNodeId === node.id} aria-label={`${node.label}，${NODE_TYPES.find(item => item.type === node.type)?.label}节点${manager ? '，方向键可移动' : ''}`} onClick={() => setSelectedNodeId(node.id)} onPointerDown={event => { setSelectedNodeId(node.id); if (!manager || busy || event.button !== 0) return; drag.current = { nodeId: node.id, clientX: event.clientX, clientY: event.clientY, x: node.x, y: node.y }; event.currentTarget.setPointerCapture(event.pointerId); }} onPointerMove={event => { const moving = drag.current; if (!moving || moving.nodeId !== node.id) return; const x = Math.max(12, Math.round(moving.x + event.clientX - moving.clientX)), y = Math.max(12, Math.round(moving.y + event.clientY - moving.clientY)); edit(workflow => ({ ...workflow, nodes: workflow.nodes.map(item => item.id === node.id ? { ...item, x, y } : item) })); }} onPointerUp={event => { drag.current = null; if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); }} onPointerCancel={() => { drag.current = null; }} onKeyDown={event => { const movement: Record<string, [number, number]> = { ArrowLeft: [-24, 0], ArrowRight: [24, 0], ArrowUp: [0, -24], ArrowDown: [0, 24] }; if (manager && movement[event.key]) { event.preventDefault(); const [dx, dy] = movement[event.key]; edit(workflow => ({ ...workflow, nodes: workflow.nodes.map(item => item.id === node.id ? { ...item, x: Math.max(12, item.x + dx), y: Math.max(12, item.y + dy) } : item) })); } }}><span className="studio-node-input" /><div><span className="studio-node-icon"><NodeIcon type={node.type} /></span><strong>{node.label}</strong>{manager && <Grip size={14} className="studio-node-grip" />}</div><p>{node.type === 'agent' && node.agentId ? agentName(node.agentId) : NODE_TYPES.find(item => item.type === node.type)?.detail}</p><span className="studio-node-output" /></button>)}</div></div>
-        <aside className="studio-node-config"><div className="studio-config-heading"><h3>{selectedNode ? '节点配置' : '工作流配置'}</h3><span>{selectedNode ? NODE_TYPES.find(item => item.type === selectedNode.type)?.label : '基础信息'}</span></div><div className="studio-config-content"><label>工作流名称<input value={draft.name} readOnly={!manager} maxLength={100} onChange={event => edit(workflow => ({ ...workflow, name: event.target.value }))} /></label><label>工作流说明<textarea rows={2} maxLength={1000} readOnly={!manager} value={draft.description} onChange={event => edit(workflow => ({ ...workflow, description: event.target.value }))} /></label>{selectedNode ? <><div className="studio-config-divider" /><label>节点名称<input value={selectedNode.label} maxLength={80} readOnly={!manager} onChange={event => updateNode({ label: event.target.value })} /></label>{selectedNode.type === 'agent' && <label>调用专家<select value={selectedNode.agentId ?? 'strategy'} disabled={!manager || busy} onChange={event => updateNode({ agentId: event.target.value as FlowNode['agentId'] })}>{AGENTS.map(agent => <option key={agent.id} value={agent.id}>{agent.name}</option>)}</select></label>}<label>执行指令<textarea rows={4} maxLength={3000} readOnly={!manager} value={selectedNode.instruction ?? ''} onChange={event => updateNode({ instruction: event.target.value })} placeholder="补充本节点的目标、处理要求与边界…" /></label>{manager && <><div className="studio-form-row studio-node-coordinates"><label>X 坐标<input type="number" min={12} max={6000} value={selectedNode.x} onChange={event => updateNode({ x: Math.max(12, Math.min(6000, Number(event.target.value))) })} /></label><label>Y 坐标<input type="number" min={12} max={4000} value={selectedNode.y} onChange={event => updateNode({ y: Math.max(12, Math.min(4000, Number(event.target.value))) })} /></label></div><button className="studio-btn studio-btn-danger" disabled={busy} onClick={() => { edit(workflow => ({ ...workflow, nodes: workflow.nodes.filter(node => node.id !== selectedNode.id), edges: workflow.edges.filter(edge => edge.from !== selectedNode.id && edge.to !== selectedNode.id) })); setSelectedNodeId(''); }}><Trash2 size={14} />删除此节点</button></>}{selectedNode.type === 'review' && <Notice>执行到此节点会暂停并提示人工审核，不会自动批准或发布。</Notice>}</> : <p className="studio-muted">点击画布节点查看配置。使用 Tab 可依次选择节点。</p>}</div></aside>
-      </div>
-      {manager && <div className="studio-connections"><div className="studio-connect-form"><span><Link2 size={16} />连接节点</span><label><span className="studio-sr-only">连线起点</span><select value={edgeFrom} onChange={event => setEdgeFrom(event.target.value)} disabled={busy}><option value="">选择起点</option>{draft.nodes.map(node => <option key={node.id} value={node.id}>{node.label}</option>)}</select></label><ArrowRight size={15} /><label><span className="studio-sr-only">连线终点</span><select value={edgeTo} onChange={event => setEdgeTo(event.target.value)} disabled={busy}><option value="">选择终点</option>{draft.nodes.map(node => <option key={node.id} value={node.id}>{node.label}</option>)}</select></label><button className="studio-btn studio-btn-secondary" onClick={connect} disabled={busy || !edgeFrom || !edgeTo}><Plus size={14} />添加连线</button></div><div className="studio-edge-list">{draft.edges.map((edge, index) => <span key={`${edge.from}-${edge.to}-${index}`}>{draft.nodes.find(node => node.id === edge.from)?.label}<ArrowRight size={12} />{draft.nodes.find(node => node.id === edge.to)?.label}<button onClick={() => edit(workflow => ({ ...workflow, edges: workflow.edges.filter((_, edgeIndex) => edgeIndex !== index) }))} aria-label={`删除从${draft.nodes.find(node => node.id === edge.from)?.label}到${draft.nodes.find(node => node.id === edge.to)?.label}的连线`} disabled={busy}><X size={12} /></button></span>)}{!draft.edges.length && <small>暂无连线。可使用上方选择框连接节点，或从左至右自动连接。</small>}</div></div>}
-      <footer className="studio-canvas-footer"><span><Square size={13} />{draft.nodes.length} 个节点 · {draft.edges.length} 条连线</span><span>{dirty ? '请保存草稿后测试或发布' : `版本 ${draft.version} · 已保存配置`}</span></footer>
-    </div>}
-    {draft && showTest && <section className="studio-test-panel"><div className="studio-panel-heading"><div><h2><Play size={17} />{manager ? '测试这条业务路径' : '发起工作流任务'}</h2><p>运行按已保存图结构执行，结果和每一步处理均会持久保存。</p></div>{state.model.connected ? <ModeTag mode="live" configured /> : <ModeTag mode="demo" />}</div>{dirty && <Notice>当前有未保存修改，请先保存草稿，再测试这次配置。</Notice>}<form onSubmit={test} className="studio-test-form"><label className="studio-sr-only" htmlFor="workflow-query">工作流任务输入</label><textarea id="workflow-query" rows={3} value={query} maxLength={5000} onChange={event => setQuery(event.target.value)} placeholder="输入这次需要工作流完成的业务任务…" /><button className="studio-btn studio-btn-primary" disabled={busy || dirty || !current || !query.trim()}><BusyIcon busy={busy}><Play size={15} /></BusyIcon>{busy ? '执行中…' : '开始运行'}</button></form>{run && <RunDetail run={run} compact />}</section>}
-  </section>;
-}
+export { BuilderStudio as StudioView } from './BuilderStudio';
 
 function RunDetail({ run, compact = false }: { run: Run; compact?: boolean }) {
-  return <article className={`studio-run-detail${compact ? ' studio-run-compact' : ''}`}><div className="studio-detail-kicker"><ModeTag mode={run.mode} /><span><Clock3 size={13} />{durationLabel(run.duration)} · {dateLabel(run.createdAt)}</span></div><h2>{run.query}</h2><div className="studio-run-experts">{run.agentIds.map(id => <span key={id}><Bot size={13} />{agentName(id)}</span>)}{run.workflowId && <span><GitBranch size={13} />工作流执行</span>}</div><div className="studio-run-answer"><span className="studio-section-label">任务结果</span><div>{run.answer}</div></div><div className="studio-run-section"><h3><GitBranch size={16} />执行轨迹<span>{run.steps.length} 步</span></h3><ol className="studio-trace">{run.steps.map((step, index) => <li key={step.id} className={`studio-trace-${step.status}`}><span className="studio-trace-marker">{step.status === 'success' ? <Check size={12} /> : step.status === 'warning' ? <Info size={12} /> : <X size={12} />}</span><div><div className="studio-trace-heading"><strong>{index + 1}. {step.title}</strong><small>{durationLabel(step.duration)}</small></div>{step.agent && <span className="studio-trace-agent">{agentName(step.agent)}</span>}<p>{step.detail}</p></div></li>)}</ol></div><div className="studio-run-section"><h3><BookOpen size={16} />引用依据<span>{run.citations.length} 条</span></h3>{run.citations.length ? run.citations.map(citation => <div className="studio-citation" key={citation.id}><strong><FileText size={15} />{citation.title}</strong><p>{citation.excerpt}</p><small>引用编号：{citation.id}</small></div>) : <p className="studio-muted">本次运行没有引用知识条目。请结合执行轨迹核对结论依据。</p>}</div><div className="studio-run-id">运行编号 {run.id}</div></article>;
+  return <article className={`studio-run-detail${compact ? ' studio-run-compact' : ''}`}><div className="studio-detail-kicker"><ModeTag mode={run.mode} />{run.status && <span className="studio-tag">{run.status === 'completed' ? '执行完成' : run.status === 'paused' ? '等待人工确认' : run.status === 'rejected' ? '已拒绝继续' : '执行失败'}</span>}<span><Clock3 size={13} />{durationLabel(run.duration)} · {dateLabel(run.createdAt)}</span></div><h2>{run.query}</h2><div className="studio-run-experts">{run.agentIds.map(id => <span key={id}><Bot size={13} />{agentName(id)}</span>)}{run.workflowId && <span><GitBranch size={13} />工作流执行</span>}</div><div className="studio-run-answer"><span className="studio-section-label">任务结果</span><div>{run.answer}</div></div><div className="studio-run-section"><h3><GitBranch size={16} />执行轨迹<span>{run.steps.length} 步</span></h3><ol className="studio-trace">{run.steps.map((step, index) => <li key={step.id} className={`studio-trace-${step.status}`}><span className="studio-trace-marker">{step.status === 'success' ? <Check size={12} /> : step.status === 'error' ? <X size={12} /> : <Info size={12} />}</span><div><div className="studio-trace-heading"><strong>{index + 1}. {step.title}</strong><small>{durationLabel(step.duration)}</small></div>{step.agent && <span className="studio-trace-agent">{agentName(step.agent)}</span>}<p>{step.detail}</p></div></li>)}</ol></div><div className="studio-run-section"><h3><BookOpen size={16} />引用依据<span>{run.citations.length} 条</span></h3>{run.citations.length ? run.citations.map(citation => <div className="studio-citation" key={citation.id}><strong><FileText size={15} />{citation.title}</strong><p>{citation.excerpt}</p><small>引用编号：{citation.id}</small></div>) : <p className="studio-muted">本次运行没有引用知识条目。请结合执行轨迹核对结论依据。</p>}</div><div className="studio-run-id">运行编号 {run.id}</div></article>;
 }
 
 export function RunsView({ state, mutate, notify }: ViewProps) {

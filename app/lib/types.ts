@@ -14,10 +14,12 @@ export interface Deal {id:string; name:string; contact:string; position:string; 
 export interface Skill {id:string;title:string;category:string;status:'candidate'|'published'|'rejected';author:string;description:string;scenario:string;steps:string[];boundaries:string[];evidence:string;source:string;version:number;reviewer?:string;reviewNote?:string;updatedAt:string;}
 export interface Knowledge {id:string;title:string;category:string;content:string;source:string;status:'published'|'draft';updatedAt:string;}
 export type NodeType = 'start'|'intent'|'knowledge'|'agent'|'review'|'output';
-export interface FlowNode {id:string;type:NodeType;label:string;x:number;y:number;agentId?:AgentId;instruction?:string;}
-export interface Workflow {id:string;name:string;description:string;status:'draft'|'published';nodes:FlowNode[];edges:{from:string;to:string}[];version:number;updatedAt:string;}
-export interface TraceStep {id:string;title:string;agent?:AgentId;detail:string;duration:number;status:'success'|'warning'|'error';}
-export interface Run {id:string;query:string;answer:string;agentIds:AgentId[];steps:TraceStep[];citations:{id:string;title:string;excerpt:string}[];mode:'demo'|'live';createdAt:string;duration:number;workflowId?:string;}
+export interface FlowNode {id:string;type:NodeType;label:string;x:number;y:number;agentId?:AgentId;instruction?:string;knowledgeIds?:string[];}
+export interface FlowEdge {from:string;to:string;condition?:AgentId|'default';}
+export interface PublishedWorkflow {name:string;description:string;kind?:'agent'|'workflow';nodes:FlowNode[];edges:FlowEdge[];version:number;publishedAt:string;}
+export interface Workflow {id:string;name:string;description:string;kind?:'agent'|'workflow';status:'draft'|'published';nodes:FlowNode[];edges:FlowEdge[];version:number;updatedAt:string;published?:PublishedWorkflow;}
+export interface TraceStep {id:string;title:string;agent?:AgentId;nodeId?:string;input?:string;output?:string;detail:string;duration:number;status:'success'|'warning'|'error'|'skipped';}
+export interface Run {id:string;query:string;answer:string;agentIds:AgentId[];steps:TraceStep[];citations:{id:string;title:string;excerpt:string}[];mode:'demo'|'live';createdAt:string;duration:number;workflowId?:string;status?:'completed'|'paused'|'failed'|'rejected';workflowVersion?:number;workflowSource?:'draft'|'published';awaitingNodeId?:string;review?:{reviewer:string;decision:'approve'|'reject';note:string;date:string};}
 export interface TrainingSession {id:string;scenario:string;customer:string;messages:{role:'user'|'assistant';content:string}[];status:'active'|'completed';voiceTurnIds?:string[];score?:number;feedback?:{label:string;score:number;evidence:string;suggestion:string}[];createdAt:string;}
 export interface Activity {id:string;title:string;detail:string;date:string;type:string;}
 export interface WorkbenchState {revision:number;role:Role;viewer:{name:string;team:string;salesId:string};dataMode:'example';model:{connected:boolean;name:string};deals:Deal[];skills:Skill[];knowledge:Knowledge[];workflows:Workflow[];runs:Run[];trainingSessions:TrainingSession[];activities:Activity[];}

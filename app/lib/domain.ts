@@ -1,18 +1,20 @@
 import { AGENTS, STAGES } from './types.ts';
-import type { AgentId, ApiResult, Deal, FlowNode, FollowupRecording, Knowledge, Role, Run, Skill, TraceStep, TrainingSession, WorkbenchState, Workflow } from './types.ts';
+import type { AgentId, ApiResult, Deal, FlowNode, FollowupRecording, Knowledge, PublishedWorkflow, Role, Run, Skill, TraceStep, TrainingSession, WorkbenchState, Workflow } from './types.ts';
 
 export class DomainError extends Error {
   status:number;
   constructor(message:string,status=400) { super(message); this.name='DomainError'; this.status=status; }
 }
 /** Internal visibility metadata stays in D1 and is stripped from API projections. */
-type StoredState=WorkbenchState & {_access?:Record<string,string>};
+interface WorkflowFrame {knowledgeIds:string[];answerIds:string[];targets?:string[];}
+interface WorkflowCheckpoint {workflow:Workflow;role:Role;deal?:Deal;deals:Deal[];knowledge:Record<string,Knowledge>;answers:Record<string,string>;frames:Record<string,WorkflowFrame>;order:string[];cursor:number;}
+type StoredState=WorkbenchState & {_access?:Record<string,string>;_workflowRuns?:Record<string,WorkflowCheckpoint>};
 export interface GenerationInput {query:string;agentId:AgentId;deal?:Deal;deals:Deal[];knowledge:Knowledge[];instruction?:string;previous?:string;}
 export interface GenerationOutput {answer:string;mode:'demo'|'live';}
 export interface ActionContext {now?:string;generate?:(input:GenerationInput)=>Promise<GenerationOutput>;trustedRecording?:FollowupRecording;}
 const agentIds=new Set(AGENTS.map(item=>item.id));
 const nodeTypes=new Set(['start','intent','knowledge','agent','review','output']);
-const managerActions=new Set(['skill_review','knowledge_add','workflow_save','workflow_publish']);
+const managerActions=new Set(['skill_review','knowledge_add','workflow_save','workflow_publish','workflow_review']);
 const uid=(prefix:string)=>`${prefix}-${crypto.randomUUID()}`;
 function fail(message:string,status=400):never { throw new DomainError(message,status); }
 function text(value:unknown,label:string,max=4000):string {
@@ -54,7 +56,7 @@ export function projectState(state:WorkbenchState,role:Role):WorkbenchState {
   const result=structuredClone(state) as StoredState;
   if(role==='sales') {
     result.deals=result.deals.filter(item=>item.ownerId==='sales-1');
-    result.workflows=result.workflows.filter(item=>item.status==='published');
+    result.workflows=result.workflows.filter(item=>item.published||item.status==='published').map(publishedView);
     result.skills=result.skills.filter(item=>item.status==='published'||ownerOf(result,item.id)==='sales-1'||(!result._access?.[item.id]&&item.author==='林晓'));
     result.knowledge=result.knowledge.filter(item=>item.status==='published');
     result.runs=result.runs.filter(item=>ownerOf(result,item.id)==='sales-1');
@@ -64,6 +66,7 @@ export function projectState(state:WorkbenchState,role:Role):WorkbenchState {
   result.role=role;
   result.viewer={name:role==='sales'?'林晓':'周予安',team:'云栖园区 · 招商团队（体验空间）',salesId:'sales-1'};
   delete result._access;
+  delete result._workflowRuns;
   return result;
 }
 
@@ -75,17 +78,29 @@ export function validateWorkflow(workflow:Workflow,complete=false):string[] {
   for(const node of workflow.nodes) {
     if(!node||typeof node!=='object') fail('节点格式不正确');
     text(node.id,'节点编号',100);text(node.label,'节点名称',120);
+    if(['__proto__','constructor','prototype'].includes(node.id))fail('节点编号使用了保留名称，请更换编号');
     if(!nodeTypes.has(node.type)) fail('只允许开始、意图、知识、专家、人工审核和输出节点');
     if(nodeMap.has(node.id)) fail('节点编号不能重复');
     if(!Number.isFinite(node.x)||!Number.isFinite(node.y)) fail('节点位置必须为有效数值');
     if(node.agentId!==undefined&&!agentIds.has(node.agentId)) fail('请选择五位领域专家之一');
     if(complete&&node.type==='agent'&&!node.agentId) fail(`请为“${node.label}”选择专家`);
     optional(node.instruction,3000);nodeMap.set(node.id,node);
+    if(node.knowledgeIds!==undefined&&(!Array.isArray(node.knowledgeIds)||node.knowledgeIds.length>40||node.knowledgeIds.some(id=>typeof id!=='string'||!id.trim()||id.length>100)))fail('知识选择格式不正确，最多选择40条生效资料');
   }
   const edgeKeys=new Set<string>();
   for(const edge of workflow.edges) {
     if(!edge||typeof edge!=='object'||!nodeMap.has(edge.from)||!nodeMap.has(edge.to)) fail('连接引用了不存在的节点');
     const key=`${edge.from}\0${edge.to}`;if(edgeKeys.has(key)) fail('连接不能重复');edgeKeys.add(key);
+    if(edge.condition!==undefined&&(!agentIds.has(edge.condition as AgentId)&&edge.condition!=='default'))fail('意图分支条件不正确');
+    if(edge.condition!==undefined&&nodeMap.get(edge.from)!.type!=='intent')fail('只有意图识别节点可以配置分支条件');
+  }
+  for(const node of workflow.nodes.filter(node=>node.type==='intent')) {
+    const outgoing=workflow.edges.filter(edge=>edge.from===node.id);
+    if(!outgoing.some(edge=>edge.condition!==undefined))continue;
+    if(outgoing.some(edge=>edge.condition===undefined))fail('意图分支需为每条连线选择条件');
+    const conditions=outgoing.map(edge=>edge.condition);
+    if(new Set(conditions).size!==conditions.length)fail('同一个意图节点的分支条件不能重复');
+    if(complete&&!conditions.includes('default'))fail('意图分支必须有且只有一条默认路径');
   }
   const indegree=new Map(workflow.nodes.map(node=>[node.id,0]));
   for(const edge of workflow.edges) indegree.set(edge.to,indegree.get(edge.to)!+1);
@@ -111,8 +126,18 @@ function sanitizeWorkflow(value:unknown,now:string):Workflow {
   const input=value as Workflow;
   if(!Array.isArray(input.nodes)||!Array.isArray(input.edges)) fail('工作流节点与连接格式不正确');
   if(input.nodes.some(node=>!node||typeof node!=='object')||input.edges.some(edge=>!edge||typeof edge!=='object')) fail('工作流节点或连接格式不正确');
-  const workflow:Workflow={id:optional(input.id,100)||uid('workflow'),name:text(input.name,'工作流名称',100),description:optional(input.description,2000),status:'draft',version:input.version,updatedAt:now,nodes:input.nodes.map(node=>({id:node.id,type:node.type,label:node.label,x:node.x,y:node.y,...(node.agentId?{agentId:node.agentId}:{}),...(node.instruction?{instruction:node.instruction}:{})})),edges:input.edges.map(edge=>({from:edge.from,to:edge.to}))};
+  if(input.kind!==undefined&&input.kind!=='agent'&&input.kind!=='workflow')fail('应用类型不正确');
+  const workflow:Workflow={id:optional(input.id,100)||uid('workflow'),name:text(input.name,'工作流名称',100),description:optional(input.description,2000),...(input.kind?{kind:input.kind}:{}),status:'draft',version:Number.isInteger(input.version)?input.version:0,updatedAt:now,nodes:input.nodes.map(node=>({id:node.id,type:node.type,label:node.label,x:node.x,y:node.y,...(node.agentId?{agentId:node.agentId}:{}),...(node.instruction?{instruction:node.instruction}:{}),...(node.knowledgeIds!==undefined?{knowledgeIds:node.knowledgeIds}:{})})),edges:input.edges.map(edge=>({from:edge.from,to:edge.to,...(edge.condition!==undefined?{condition:edge.condition}:{})}))};
   validateWorkflow(workflow);return workflow;
+}
+function publication(workflow:Workflow):PublishedWorkflow|undefined {
+  if(workflow.published)return structuredClone(workflow.published);
+  if(workflow.status!=='published')return;
+  return {name:workflow.name,description:workflow.description,...(workflow.kind?{kind:workflow.kind}:{}),nodes:structuredClone(workflow.nodes),edges:structuredClone(workflow.edges),version:workflow.version,publishedAt:workflow.updatedAt};
+}
+function publishedView(workflow:Workflow):Workflow {
+  const saved=publication(workflow);if(!saved)fail('此应用尚未发布',403);
+  return {id:workflow.id,name:saved.name,description:saved.description,...(saved.kind?{kind:saved.kind}:{}),status:'published',nodes:saved.nodes,edges:saved.edges,version:saved.version,updatedAt:saved.publishedAt};
 }
 export function routeAgents(query:string):AgentId[] {
   if(/培训|练习|带练|扮演|陪练/.test(query))return ['coach'];
@@ -120,6 +145,14 @@ export function routeAgents(query:string):AgentId[] {
   if(/优先|预测|健康|本周|商机|漏斗|推进/.test(query))return ['opportunity'];
   if(/拜访|方案|策略|开场|话术|谈判/.test(query))return ['insight','strategy'];
   return ['insight'];
+}
+/** A conditional edge needs one intent; main-agent collaboration may select several experts. */
+function workflowIntent(query:string):AgentId {
+  if(/培训|训练|练习|带练|扮演|陪练/.test(query))return 'coach';
+  if(/风险|合同|免租|审批|合规|资质|违约|授权/.test(query))return 'risk';
+  if(/商机|预测|漏斗|健康|优先|推进/.test(query))return 'opportunity';
+  if(/方案|策略|谈判|拜访|开场|话术/.test(query))return 'strategy';
+  return 'insight';
 }
 function publishedKnowledge(state:WorkbenchState):Knowledge[] {
   const entries=state.knowledge.filter(item=>item.status==='published');
@@ -130,8 +163,11 @@ function publishedKnowledge(state:WorkbenchState):Knowledge[] {
   return entries;
 }
 function retrieve(state:WorkbenchState,query:string):Knowledge[] {
+  return rankedKnowledge(publishedKnowledge(state),query);
+}
+function rankedKnowledge(entries:Knowledge[],query:string):Knowledge[] {
   const terms=new Set(query.match(/[\p{Script=Han}]{2}|[A-Za-z0-9]{2,}/gu)??[]);
-  return publishedKnowledge(state).map(item=>({item,score:(query.includes(item.title)?100:0)+[...terms].filter(term=>`${item.title}${item.content}`.includes(term)).length})).sort((a,b)=>b.score-a.score).slice(0,4).map(item=>item.item);
+  return entries.map(item=>({item,score:(query.includes(item.title)?100:0)+[...terms].filter(term=>`${item.title}${item.content}`.includes(term)).length})).sort((a,b)=>b.score-a.score).slice(0,4).map(item=>item.item);
 }
 function chooseDeal(state:WorkbenchState,role:Role,query:string,dealId?:unknown):Deal|undefined {
   if(role==='sales'&&state.deals.some(deal=>deal.ownerId!=='sales-1'&&query.includes(deal.name))) fail('当前销售体验视角无权访问问题中提及的客户',403);
@@ -156,8 +192,8 @@ export function demoGenerate(input:GenerationInput):GenerationOutput {
   if(knowledge.length) answer+=`\n\n依据资料：${knowledge.map(item=>item.title).join('、')}。`;
   return {answer:`演示生成 · 未调用外部模型\n\n${answer}`,mode:'demo'};
 }
-async function buildRun(state:StoredState,role:Role,query:string,context:ActionContext,now:string,options:{agentId?:unknown;dealId?:unknown;workflow?:Workflow}={}):Promise<Run> {
-  const started=Date.now();const steps:TraceStep[]=[];const citations:Run['citations']=[];const usedAgents:AgentId[]=[];let mode:Run['mode']='demo';let answers:string[]=[];
+async function buildRun(state:StoredState,role:Role,query:string,context:ActionContext,now:string,options:{agentId?:unknown;dealId?:unknown}={}):Promise<Run> {
+  const started=Date.now();const steps:TraceStep[]=[];const citations:Run['citations']=[];const usedAgents:AgentId[]=[];let mode:Run['mode']='demo';const answers:string[]=[];
   const deal=chooseDeal(state,role,query,options.dealId);const visibleDeals=role==='sales'?state.deals.filter(item=>item.ownerId==='sales-1'):state.deals;
   let knowledge:Knowledge[]=[];
   const step=(title:string,detail:string,status:TraceStep['status']='success',agent?:AgentId,duration=0)=>steps.push({id:uid('step'),title,detail,status,agent,duration});
@@ -169,33 +205,99 @@ async function buildRun(state:StoredState,role:Role,query:string,context:ActionC
     step(`${agentName(agentId)}生成`,`${output.mode==='demo'?'本地规则演示，未请求外部模型':'服务端外部模型返回'}；使用${knowledge.length}条生效资料${deal?`；客户：${deal.name}`:''}${instruction?`；节点指令：${instruction}`:''}`, 'success',agentId,Date.now()-tick);
     return `${agentName(agentId)}\n${output.answer}`;
   };
-  if(options.workflow) {
-    const workflow=options.workflow;const order=validateWorkflow(workflow,true);let paused=false;
-    const frames=new Map<string,{knowledge:Knowledge[];answers:string[]}>();
-    for(const id of order) {
-      const node=workflow.nodes.find(item=>item.id===id)!;
-      const incoming=workflow.edges.filter(edge=>edge.to===id).map(edge=>frames.get(edge.from)!).filter(Boolean);
-      knowledge=[...new Map(incoming.flatMap(frame=>frame.knowledge).map(item=>[item.id,item])).values()];
-      const upstreamAnswers=[...new Set(incoming.flatMap(frame=>frame.answers))];
-      const frame={knowledge,answers:upstreamAnswers};
-      if(node.type==='start')step(`开始 · ${node.label}`,'读取当前用户输入和授权客户范围。');
-      if(node.type==='intent')step(`意图 · ${node.label}`,`建议专家：${routeAgents(query).map(agentName).join('、')}；按已保存图中的专家配置执行。`);
-      if(node.type==='knowledge'){getKnowledge();frame.knowledge=knowledge;step(`知识 · ${node.label}`,`实际检索${knowledge.length}条已发布资料；候选及退回Skill未进入检索。`);}
-      if(node.type==='agent')frame.answers=[...upstreamAnswers,await generate(node.agentId!,node.instruction,upstreamAnswers.join('\n\n'))];
-      if(node.type==='review') {step(`人工确认 · ${node.label}`,'已暂停执行，未通过人工审核；后续节点未执行。','warning');answers.push('工作流已暂停，等待销售管理者人工确认。当前运行不会自动通过审核、发布Skill或修改商务条件。');paused=true;break;}
-      if(node.type==='output')step(`输出 · ${node.label}`,'汇总已经执行的专家结果，完成当前工作流分支。');
-      frames.set(id,frame);
-    }
-    if(!answers.length)answers=[paused?'等待人工确认。':'工作流已运行；当前图未配置专家生成节点，请在搭建中心补充后测试。'];
-  } else {
     if(options.agentId!==undefined&&!agentIds.has(options.agentId as AgentId))fail('请选择五位领域专家之一');
     const routed=options.agentId?[options.agentId as AgentId]:routeAgents(query);
     step('主 Agent 识别意图',`${role==='manager'?'销售管理者':'销售'}主 Agent ${options.agentId?'按指定专家':'按问题关键词路由'}至${routed.map(agentName).join('、')}。`);
     getKnowledge();step('检索生效知识',`检索当前空间的${knowledge.length}条生效资料；未读取候选或退回Skill。`);
     for(const agentId of routed)await generate(agentId);
     step('核对建议边界','保留待核实事项；健康度为规则分值；未自动承诺商务条件或修改商机。');
+  return {id:uid('run'),query,answer:answers.join('\n\n────────\n\n'),agentIds:[...new Set(usedAgents)],steps,citations,mode,createdAt:now,duration:Date.now()-started};
+}
+
+const clip=(value:string,max=3000)=>value.length>max?`${value.slice(0,max)}\n（内容较长，已截取）`:value;
+const byteSize=(value:unknown)=>new TextEncoder().encode(JSON.stringify(value)).byteLength;
+const own=<T>(record:Record<string,T>,id:string):T|undefined=>Object.hasOwn(record,id)?record[id]:undefined;
+const mergeIds=(items:string[][])=>[...new Set(items.flat())];
+const frameAnswer=(checkpoint:WorkflowCheckpoint,frame:WorkflowFrame,max=18000)=>clip(frame.answerIds.map(id=>own(checkpoint.answers,id)??'').filter(Boolean).join('\n\n────────\n\n'),max);
+function validateKnowledgeSelections(state:WorkbenchState,workflow:Workflow) {
+  const available=new Set(publishedKnowledge(state).map(item=>item.id));
+  for(const node of workflow.nodes.filter(node=>node.type==='knowledge'))if(node.knowledgeIds?.some(id=>!available.has(id)))fail(`“${node.label}”包含不存在或尚未发布的知识，请重新选择`);
+}
+function compactDeal(deal:Deal):Deal {
+  return {...deal,notes:deal.notes.slice(0,5).map(note=>({...note,text:clip(note.text,1000)}))};
+}
+/** A checkpoint contains references to shared outputs rather than nested copies of upstream text. */
+async function executeWorkflow(state:StoredState,run:Run,checkpoint:WorkflowCheckpoint,context:ActionContext):Promise<void> {
+  const started=Date.now();const {workflow}=checkpoint;
+  const trace=(node:FlowNode,detail:string,input:string,output:string,status:TraceStep['status']='success',duration=0)=>run.steps.push({id:uid('step'),nodeId:node.id,title:`${({start:'开始',intent:'意图',knowledge:'知识',agent:'专家',review:'人工确认',output:'输出'} as const)[node.type]} · ${node.label}`,detail:clip(detail,1000),input:clip(input,1500),output:clip(output,2500),status,duration,...(node.type==='agent'?{agent:node.agentId}:{})});
+  run.status='completed';delete run.awaitingNodeId;
+  for(;checkpoint.cursor<checkpoint.order.length;checkpoint.cursor++) {
+    const node=workflow.nodes.find(item=>item.id===checkpoint.order[checkpoint.cursor])!;
+    const incoming=workflow.edges.filter(edge=>edge.to===node.id).flatMap(edge=>{const frame=own(checkpoint.frames,edge.from);return frame&&(!frame.targets||frame.targets.includes(node.id))?[frame]:[];});
+    if(node.type!=='start'&&!incoming.length){trace(node,'当前输入未进入此分支。','','','skipped');continue;}
+    const frame:WorkflowFrame={knowledgeIds:mergeIds(incoming.map(item=>item.knowledgeIds)),answerIds:mergeIds(incoming.map(item=>item.answerIds))};
+    const previous=frameAnswer(checkpoint,frame,12000);const input=JSON.stringify({query:run.query,previous,knowledgeIds:frame.knowledgeIds,...(node.instruction?{instruction:node.instruction}:{})});
+    const tick=Date.now();
+    try {
+      if(node.type==='start')trace(node,'读取本次输入与发起人的授权客户范围。',run.query,run.query);
+      if(node.type==='intent') {
+        const routes=workflow.edges.filter(edge=>edge.from===node.id);const intent=workflowIntent(run.query);
+        if(routes.some(edge=>edge.condition!==undefined)) {
+          const selected=routes.find(edge=>edge.condition===intent)??routes.find(edge=>edge.condition==='default')!;
+          frame.targets=[selected.to];trace(node,`关键词分流为${agentName(intent)}，仅执行选中路径。`,input,`分支：${selected.condition==='default'?'默认':agentName(selected.condition! as AgentId)} → ${workflow.nodes.find(item=>item.id===selected.to)!.label}`);
+        } else trace(node,'按关键词分流；当前节点未配置条件分支，沿已有连线继续。',input,`关键词分流：${agentName(intent)}`);
+      }
+      if(node.type==='knowledge') {
+        const available=publishedKnowledge(state);const selected=node.knowledgeIds;
+        if(selected?.some(id=>!available.some(item=>item.id===id)))fail('所选知识不存在或尚未发布，请重新选择生效资料');
+        const entries=rankedKnowledge(selected===undefined?available:available.filter(item=>selected.includes(item.id)),run.query);
+        for(const entry of entries) {
+          checkpoint.knowledge[entry.id]={...entry,content:clip(entry.content,6000)};
+          if(!run.citations.some(item=>item.id===entry.id))run.citations.push({id:entry.id,title:entry.title,excerpt:entry.content.slice(0,240)});
+        }
+        frame.knowledgeIds=mergeIds([frame.knowledgeIds,entries.map(item=>item.id)]);
+        trace(node,`检索到${entries.length}条生效资料；候选和退回 Skill 不参与检索。`,input,entries.map(item=>`${item.id} · ${item.title}`).join('\n')||'未检索资料');
+      }
+      if(node.type==='agent') {
+        const knowledge=frame.knowledgeIds.map(id=>own(checkpoint.knowledge,id)).filter((item):item is Knowledge=>!!item);
+        const generation:GenerationInput={query:run.query,agentId:node.agentId!,deal:checkpoint.deal,deals:checkpoint.deals,knowledge,instruction:node.instruction,previous};
+        const output=context.generate?await context.generate(generation):demoGenerate(generation);
+        if(typeof output.answer!=='string'||!output.answer.trim())fail('专家未返回有效文本，请检查模型连接后重试',502);
+        checkpoint.answers[node.id]=`${agentName(node.agentId!)}\n${clip(output.answer.trim(),6000)}`;
+        frame.answerIds=mergeIds([frame.answerIds,[node.id]]);if(!run.agentIds.includes(node.agentId!))run.agentIds.push(node.agentId!);if(output.mode==='live')run.mode='live';
+        trace(node,`${output.mode==='live'?'服务端模型生成':'本地规则演示，未请求外部模型'}；使用${knowledge.length}条生效资料。`,input,checkpoint.answers[node.id],'success',Date.now()-tick);
+      }
+      if(node.type==='review') {
+        checkpoint.frames[node.id]=frame;checkpoint.cursor++;
+        const checkpoints={...(state._workflowRuns??{}),[run.id]:checkpoint};
+        if(byteSize(checkpoints)>512*1024)fail('待审核运行内容过多，请先处理现有审核后重试');
+        state._workflowRuns=checkpoints;run.status='paused';run.awaitingNodeId=node.id;
+        run.answer=[previous,'工作流已暂停，等待销售管理者人工确认。确认只控制此任务继续，不会批准商务条件或发布 Skill。'].filter(Boolean).join('\n\n');
+        trace(node,'已暂停；后续节点将在管理者明确确认后继续。',input,'等待销售管理者确认','warning');run.duration+=Date.now()-started;return;
+      }
+      if(node.type==='output')trace(node,'汇总实际到达此输出节点的上游专家结果。',previous,previous||'当前路径未配置专家输出。');
+      checkpoint.frames[node.id]=frame;
+    } catch(error) {
+      const detail=error instanceof DomainError?clip(error.message,500):'此节点执行失败，请检查模型连接或节点配置后重试';
+      trace(node,detail,input,detail,'error',Date.now()-tick);run.status='failed';run.answer=detail;delete run.awaitingNodeId;delete state._workflowRuns?.[run.id];run.duration+=Date.now()-started;return;
+    }
   }
-  return {id:uid('run'),query,answer:answers.join('\n\n────────\n\n'),agentIds:[...new Set(usedAgents)],steps,citations,mode,createdAt:now,duration:Date.now()-started,...(options.workflow?{workflowId:options.workflow.id}:{})};
+  const outputFrames=workflow.nodes.filter(node=>node.type==='output').map(node=>own(checkpoint.frames,node.id)).filter((item):item is WorkflowFrame=>!!item);
+  run.answer=frameAnswer(checkpoint,{knowledgeIds:[],answerIds:mergeIds(outputFrames.map(frame=>frame.answerIds))})||'工作流已完成；当前路径未配置专家生成节点。';
+  delete state._workflowRuns?.[run.id];run.duration+=Date.now()-started;
+}
+async function startWorkflow(state:StoredState,role:Role,workflow:Workflow,source:'draft'|'published',query:string,context:ActionContext,now:string,dealId?:unknown):Promise<Run> {
+  const order=validateWorkflow(workflow,true);const deal=chooseDeal(state,role,query,dealId);
+  const scoped=role==='sales'?state.deals.filter(item=>item.ownerId==='sales-1'):state.deals;
+  const checkpoint:WorkflowCheckpoint={workflow:structuredClone({...workflow,published:undefined}),role,deal:deal?compactDeal(deal):undefined,deals:scoped.map(compactDeal),order,cursor:0,knowledge:{},answers:{},frames:{}};
+  const run:Run={id:uid('run'),query,answer:'',agentIds:[],steps:[],citations:[],mode:'demo',createdAt:now,duration:0,workflowId:workflow.id,workflowVersion:workflow.version,workflowSource:source,status:'completed'};
+  await executeWorkflow(state,run,checkpoint,context);return run;
+}
+/** Bound persisted traces/checkpoints independently of the number of generated nodes. */
+function trimRunHistory(state:StoredState) {
+  state.runs=state.runs.slice(0,100);
+  while(state.runs.length>1&&byteSize(state.runs)>768*1024)state.runs.pop();
+  if(state._workflowRuns)for(const id of Object.keys(state._workflowRuns))if(!state.runs.some(run=>run.id===id))delete state._workflowRuns[id];
 }
 
 function trainingFeedback(session:TrainingSession):NonNullable<TrainingSession['feedback']> {
@@ -259,18 +361,36 @@ export async function executeAction(original:WorkbenchState,role:Role,action:str
     }
     case 'workflow_save': {
       const workflow=sanitizeWorkflow(payload.workflow,now);const previous=state.workflows.find(item=>item.id===workflow.id);
-      if(previous){checkVersion(previous.version,workflow.version);workflow.version=previous.version+1;state.workflows[state.workflows.findIndex(item=>item.id===workflow.id)]=workflow;}else {workflow.version=1;state.workflows.unshift(workflow);}
-      activity(state,role,'工作流草稿已保存',`${workflow.name} · v${workflow.version}，发布前需要通过结构验证。`,'workflow',now);message='草稿已保存；修改后需重新发布';break;
+      if(previous){checkVersion(previous.version,workflow.version);workflow.version=previous.version+1;const saved=publication(previous);if(saved){workflow.published=saved;workflow.status='published';}state.workflows[state.workflows.findIndex(item=>item.id===workflow.id)]=workflow;}else {workflow.version=1;state.workflows.unshift(workflow);}
+      activity(state,role,'应用草稿已保存',`${workflow.name} · v${workflow.version}，线上版本在重新发布前继续生效。`,'workflow',now);message='草稿已保存；发布后团队才会使用此版本';break;
     }
     case 'workflow_publish': {
-      const workflow=find(state.workflows,payload.workflowId,'工作流');checkVersion(workflow.version,payload.version);if(workflow.status==='published')fail('工作流已经发布',409);validateWorkflow(workflow,true);workflow.status='published';workflow.version++;workflow.updatedAt=now;activity(state,role,'工作流已发布',`${workflow.name} · v${workflow.version}`,'workflow',now);break;
+      const workflow=find(state.workflows,payload.workflowId,'工作流');checkVersion(workflow.version,payload.version);const existing=publication(workflow);if(existing&&existing.version===workflow.version)fail('此版本已经发布，请修改并保存新草稿后再发布',409);validateWorkflow(workflow,true);validateKnowledgeSelections(state,workflow);workflow.status='published';workflow.version++;workflow.updatedAt=now;
+      workflow.published={name:workflow.name,description:workflow.description,...(workflow.kind?{kind:workflow.kind}:{}),nodes:structuredClone(workflow.nodes),edges:structuredClone(workflow.edges),version:workflow.version,publishedAt:now};
+      activity(state,role,'应用已发布',`${workflow.name} · v${workflow.version}`,'workflow',now);message='已发布，销售视角现在可以使用此版本';break;
     }
     case 'chat': {
       const query=text(payload.query,'问题',6000);run=await buildRun(state,role,query,context,now,{agentId:payload.agentId,dealId:payload.dealId});state.runs.unshift(run);mark(state,run.id,role);activity(state,role,'专家协作已完成',`${run.agentIds.map(agentName).join('、')} · ${run.mode==='demo'?'演示生成':'外部模型生成'}`,'run',now);message=run.mode==='demo'?'已完成演示生成，未调用外部模型':'已完成服务端模型生成';break;
     }
     case 'workflow_run': {
-      const workflow=find(state.workflows,payload.workflowId,'工作流');if(role==='sales'&&workflow.status!=='published')fail('销售体验视角只能运行已发布工作流',403);
-      const query=text(payload.query,'工作流输入',6000);run=await buildRun(state,role,query,context,now,{workflow});state.runs.unshift(run);mark(state,run.id,role);activity(state,role,'工作流测试已记录',`${workflow.name} · ${run.steps.some(step=>step.status==='warning')?'等待人工确认':'执行完成'}`,'workflow',now);message=run.steps.some(step=>step.status==='warning')?'工作流已暂停，等待人工确认':'工作流运行完成';break;
+      if(payload.mode!==undefined&&payload.mode!=='draft'&&payload.mode!=='published')fail('运行模式不正确');
+      if(role==='sales'&&(payload.mode==='draft'||payload.workflow!==undefined))fail('销售体验视角只能运行管理者发布的应用',403);
+      const source=role==='sales'||payload.mode==='published'?'published':'draft';
+      const workflow=source==='draft'&&payload.workflow!==undefined?sanitizeWorkflow(payload.workflow,now):find(state.workflows,payload.workflowId,'工作流');
+      const executable=source==='published'?publishedView(workflow):workflow;const query=text(payload.query,'工作流输入',6000);
+      run=await startWorkflow(state,role,executable,source,query,context,now,payload.dealId);state.runs.unshift(run);mark(state,run.id,role);
+      activity(state,role,source==='draft'?'应用调试已记录':'应用运行已记录',`${executable.name} · ${run.status==='paused'?'等待人工确认':run.status==='failed'?'执行失败':'执行完成'}`,'workflow',now);message=run.status==='paused'?'工作流已暂停，等待人工确认':run.status==='failed'?'节点执行失败，已保存调试轨迹':'工作流运行完成';break;
+    }
+    case 'workflow_review': {
+      run=find(state.runs,payload.runId,'运行');const checkpoint=state._workflowRuns?.[run.id];
+      if(run.status!=='paused'||!checkpoint||!run.awaitingNodeId)fail('此运行已处理或不在等待人工确认，请刷新后查看',409);
+      if(payload.decision!=='approve'&&payload.decision!=='reject')fail('请选择确认继续或拒绝');
+      const note=text(payload.note,'审核说明',1000);run.review={reviewer:actor,decision:payload.decision,note,date:now};
+      const step=run.steps.find(item=>item.nodeId===run!.awaitingNodeId&&item.status==='warning');
+      if(step){step.status=payload.decision==='approve'?'success':'error';step.detail=`${actor}${payload.decision==='approve'?'确认继续':'拒绝继续'}：${note}`;step.output=step.detail;}
+      if(payload.decision==='reject'){run.status='rejected';delete run.awaitingNodeId;delete state._workflowRuns![run.id];run.answer=`本次运行已由${actor}拒绝继续：${note}`;message='已拒绝，后续节点未执行';}
+      else {await executeWorkflow(state,run,checkpoint,context);message=run.status==='paused'?'已继续执行，等待下一项人工确认':run.status==='failed'?'后续节点执行失败，已保存轨迹':'已确认并继续完成任务';}
+      activity(state,role,'应用运行已审核',`${run.query.slice(0,100)} · ${note}`,'workflow',now);break;
     }
     case 'training_start': {
       const scenario=text(payload.scenario,'训练场景',1000);session={id:uid('training'),scenario,customer:'园区招商客户 · 演示扮演',messages:[{role:'assistant',content:`（演示客户）${/决策|需求|首次|首访|拜访/.test(scenario)?'我们在考虑换办公地点，但团队对面积和交付时间还没达成一致。您想先了解什么？':/竞品|比较/.test(scenario)?'我们也在比较隔壁园区的报价，租金看起来比这里低。您能说清两边的费用和交付条件有什么区别吗？':'我对这里有兴趣，但别的园区给的条件更优惠。装修还需要时间，你们能直接给60天免租吗？'}`}],status:'active',createdAt:now};state.trainingSessions.unshift(session);mark(state,session.id,role);message='演示训练已开始，结束后按实际回答进行规则评分';break;
@@ -288,6 +408,6 @@ export async function executeAction(original:WorkbenchState,role:Role,action:str
     }
     default:fail('不支持的操作');
   }
-  state.runs=state.runs.slice(0,100);state.revision=original.revision+1;
+  trimRunHistory(state);state.revision=original.revision+1;
   return {state,...(run?{run}:{}),...(session?{session}:{}),message};
 }

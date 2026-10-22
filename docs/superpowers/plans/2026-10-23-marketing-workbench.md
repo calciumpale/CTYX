@@ -46,4 +46,4 @@
 **Files:** app/page.tsx, app/layout.tsx, app/lib/api.ts, README.md, scripts/check-tokens.mjs
 - [x] 类型检查、token 检查、领域测试、数据库迁移、构建。
 - [x] 桌面移动浅深主题和主要闭环浏览器 QA；修复已观察问题。
-- [ ] 私有部署，打开验证后的地址，交付运行方式与真实接入边界。
+- [x] 私有部署成功，已请求在应用中打开验证后的地址，交付运行方式与真实接入边界。

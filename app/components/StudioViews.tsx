@@ -1,8 +1,11 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
-import { ArrowRight, ArrowUp, BookOpen, Bot, Check, CheckCheck, ChevronRight, CircleHelp, Clock3, Code2, Database, FileText, GitBranch, GraduationCap, Grip, History, Info, Layers, Link2, Loader2, MessageSquare, Play, Plus, RotateCcw, Save, Search, Send, ShieldCheck, Sparkles, Square, Trash2, Upload, X } from 'lucide-react';
+import { ArrowRight, ArrowUp, BookOpen, Bot, Check, CheckCheck, ChevronRight, CircleHelp, Clock3, Code2, Database, FileText, GitBranch, GraduationCap, Grip, History, Info, Layers, Link2, Loader2, MessageSquare, Mic, Play, Plus, RotateCcw, Save, Search, Send, ShieldCheck, Sparkles, Square, Trash2, Upload, Volume2, X } from 'lucide-react';
 import './studio.css';
+import './training-voice.css';
+import { TrainingVoiceControls } from './TrainingVoiceControls';
+import { useTrainingVoice } from '../lib/use-training-voice';
 import { AGENTS, type ApiResult, type FlowNode, type Mutate, type NodeType, type Run, type Skill, type ViewProps, type Workflow } from '../lib/types';
 
 const dateLabel = (value: string) => new Date(value).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
@@ -44,55 +47,142 @@ const SCENARIOS = [
   { name: '首访剧本', icon: <MessageSquare size={22} />, tag: '客户拜访', detail: '用一次自然对话，练习开场、需求探索与下一步约定。', duration: '建议 4–6 轮' },
 ];
 
+type TrainingInteractionMode = 'text' | 'voice';
+
 export function TrainingView({ state, mutate, notify }: ViewProps) {
   const { busy, error, perform } = useMutation(mutate);
   const [scenario, setScenario] = useState(SCENARIOS[0].name);
   const [sessionId, setSessionId] = useState<string | null>(() => state.trainingSessions.find(session => session.status === 'active')?.id ?? null);
   const [reply, setReply] = useState('');
+  const [interactionMode, setInteractionMode] = useState<TrainingInteractionMode>('text');
+  const [autoSpeak, setAutoSpeak] = useState(true);
+  const [unaddedTranscript, setUnaddedTranscript] = useState('');
+  const [playingMessage, setPlayingMessage] = useState<string | null>(null);
+  const draftRef = useRef('');
+  const inputOwner = useRef<string | null>(null);
+  const voiceContext = useRef({ sessionId, active: false, mode: interactionMode, busy: false });
+  const autoSpokenMessages = useRef(new Set<string>());
+  const playbackGeneration = useRef(0);
   const session = state.trainingSessions.find(item => item.id === sessionId);
   const history = [...state.trainingSessions].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   const chatRef = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
   const lastScroll = useRef(0);
+  const setDraft = useCallback((text: string) => { draftRef.current = text; setReply(text); }, []);
+  const onTranscript = useCallback((text: string) => {
+    const context = voiceContext.current;
+    if (!inputOwner.current || inputOwner.current !== context.sessionId || !context.active || context.mode !== 'voice' || context.busy || !text.trim()) return;
+    const previous = draftRef.current;
+    const separator = previous && !/\s$/.test(previous) ? '\n' : '';
+    const available = Math.max(0, 4000 - previous.length - separator.length);
+    let addition = text.trim().slice(0, available);
+    // Avoid splitting an emoji's UTF-16 surrogate pair at the input limit.
+    if (/[\uD800-\uDBFF]$/.test(addition)) addition = addition.slice(0, -1);
+    if (addition) setDraft(`${previous}${separator}${addition}`);
+    const remainder = text.trim().slice(addition.length);
+    if (remainder) setUnaddedTranscript(current => current ? `${current}\n${remainder}` : remainder);
+  }, [setDraft]);
+  const voice = useTrainingVoice({ onTranscript });
+  const { stopAll, speak } = voice;
+  const capturing = voice.phase === 'requesting' || voice.phase === 'listening' || voice.phase === 'stopping';
+  const speechActive = voice.phase === 'preparing-speech' || voice.phase === 'speaking';
+  const stopVoice = useCallback(() => { inputOwner.current = null; stopAll(); setPlayingMessage(null); }, [stopAll]);
+
+  useEffect(() => {
+    voiceContext.current = { sessionId, active: session?.status === 'active', mode: interactionMode, busy };
+  }, [sessionId, session?.status, interactionMode, busy]);
+  useEffect(() => {
+    const invalidatePendingPlayback = () => { if (document.hidden) playbackGeneration.current += 1; };
+    document.addEventListener('visibilitychange', invalidatePendingPlayback);
+    return () => document.removeEventListener('visibilitychange', invalidatePendingPlayback);
+  }, []);
+  // Media belongs to the selected conversation. Cleanup also invalidates late recognition results.
+  useEffect(() => () => { inputOwner.current = null; stopAll(); }, [sessionId, session?.status, interactionMode, stopAll]);
+  const lastMessage = session?.messages.at(-1);
+  const lastMessageIndex = (session?.messages.length ?? 0) - 1;
+  useEffect(() => {
+    if (document.hidden || interactionMode !== 'voice' || !autoSpeak || !voice.ready || !voice.outputSupported || busy || capturing || !sessionId || session?.status !== 'active' || lastMessage?.role !== 'assistant') return;
+    const key = `${sessionId}:${lastMessageIndex}:${lastMessage.content}`;
+    if (autoSpokenMessages.current.has(key)) return;
+    // Defer until the current effect has settled; Strict Mode cleanup must not consume playback.
+    const generation = playbackGeneration.current;
+    const timer = window.setTimeout(() => {
+      const context = voiceContext.current;
+      if (generation !== playbackGeneration.current || document.hidden || context.sessionId !== sessionId || context.mode !== 'voice' || !context.active || context.busy || inputOwner.current) return;
+      autoSpokenMessages.current.add(key);
+      setPlayingMessage(key);
+      speak(lastMessage.content);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [interactionMode, autoSpeak, voice.ready, voice.outputSupported, busy, capturing, sessionId, session?.status, lastMessage?.role, lastMessage?.content, lastMessageIndex, speak]);
   useEffect(() => {
     const container = chatRef.current;
     if (container && pinned.current && Date.now() - lastScroll.current > 150) container.scrollTop = container.scrollHeight;
   }, [session?.messages.length, sessionId]);
+
+  const changeMode = (mode: TrainingInteractionMode) => { if (mode !== interactionMode) { stopVoice(); setInteractionMode(mode); } };
+  const chooseSession = (id: string | null) => { stopVoice(); setSessionId(id); setDraft(''); setUnaddedTranscript(''); pinned.current = true; };
   const start = async () => {
+    stopVoice();
     const result = await perform('training_start', { scenario });
-    if (result?.session) { setSessionId(result.session.id); setReply(''); pinned.current = true; notify('带练已开始，可以像面对客户一样自然回应。'); }
+    if (result?.session) { setSessionId(result.session.id); setDraft(''); setUnaddedTranscript(''); pinned.current = true; notify('带练已开始，可以像面对客户一样自然回应。'); }
   };
   const sendReply = async (event?: FormEvent) => {
     event?.preventDefault();
-    if (!session || !reply.trim() || busy) return;
+    if (!session || session.status !== 'active' || !reply.trim() || busy || capturing) return;
+    stopVoice();
     const result = await perform('training_reply', { sessionId: session.id, text: reply.trim() });
-    if (result) setReply('');
+    if (result) setDraft('');
   };
   const finish = async () => {
-    if (!session) return;
+    if (!session || session.status !== 'active') return;
+    stopVoice();
     const result = await perform('training_finish', { sessionId: session.id });
     if (result) notify('本次带练已完成，复盘已保存。');
   };
-  return <section className="studio-view">
+  const startListening = () => {
+    if (!session || session.status !== 'active' || interactionMode !== 'voice' || busy || capturing || !voice.ready || !voice.inputSupported) return;
+    if (lastMessage?.role === 'assistant') autoSpokenMessages.current.add(`${session.id}:${lastMessageIndex}:${lastMessage.content}`);
+    inputOwner.current = session.id;
+    setPlayingMessage(null);
+    voice.startListening();
+  };
+  const cancelListening = () => { inputOwner.current = null; voice.cancelListening(); };
+  const playCustomer = (text: string, key: string) => {
+    if (capturing || !voice.ready || !voice.outputSupported) return;
+    if (speechActive && playingMessage === key) { voice.stopSpeaking(); setPlayingMessage(null); }
+    else { setPlayingMessage(key); voice.speak(text); }
+  };
+
+  return <section className="studio-view studio-training-view">
     <PageHeading eyebrow="PRACTICE MAKES PROGRESS" title="下一次沟通，先练习一次" description="培训带练专家扮演客户，陪你把关键时刻说得更好。"><span className="studio-example"><GraduationCap size={15} />规则演示带练 · 示例客户</span></PageHeading>
     {error && <Notice error>{error}</Notice>}
     <div className="studio-training-layout">
       <main className="studio-training-main">
+        <div className="training-interaction-bar"><div><strong>选择你的练习方式</strong><p>{interactionMode === 'voice' ? '听客户说，再把你的回应说出来。' : '留一点思考时间，把回应写得更清楚。'}</p></div><div className="training-mode-switch" role="group" aria-label="带练方式"><button type="button" aria-pressed={interactionMode === 'text'} onClick={() => changeMode('text')}><MessageSquare size={15} />文字带练</button><button type="button" aria-pressed={interactionMode === 'voice'} onClick={() => changeMode('voice')}><Mic size={15} />语音带练</button></div></div>
+        {interactionMode === 'text' && voice.error && <div className="training-voice-error training-voice-text-error" role="alert"><Info size={16} /><div><p>{voice.error}</p><span>文字回应仍可正常发送，也可稍后重新播放客户语音。</span></div><button type="button" className="studio-icon-button" onClick={voice.clearError} aria-label="关闭语音提示"><X size={15} /></button></div>}
+        {interactionMode === 'voice' && <TrainingVoiceControls voice={voice} customer={session?.customer} hasSession={Boolean(session)} active={session?.status === 'active'} busy={busy} autoSpeak={autoSpeak} onAutoSpeakChange={enabled => { setAutoSpeak(enabled); if (!enabled) voice.stopSpeaking(); }} onStartListening={startListening} onCancelListening={cancelListening} onUseText={() => changeMode('text')} />}
         {!session ? <>
           <div className="studio-section-label">选择这次想练习的场景</div>
-          <div className="studio-scenario-grid">{SCENARIOS.map(item => <button key={item.name} type="button" className={`studio-scenario${scenario === item.name ? ' studio-scenario-selected' : ''}`} onClick={() => setScenario(item.name)} aria-pressed={scenario === item.name}><div className="studio-scenario-top"><span className="studio-icon-clay">{item.icon}</span><span>{item.tag}</span>{scenario === item.name && <Check size={17} />}</div><h3>{item.name}</h3><p>{item.detail}</p><small>{item.duration}</small></button>)}</div>
-          <div className="studio-training-start"><p><Sparkles size={16} />基于业务场景的规则演示，每次对话都留有复盘依据。</p><button className="studio-btn studio-btn-primary" disabled={busy} onClick={start}><BusyIcon busy={busy}><Play size={16} /></BusyIcon>开始带练</button></div>
+          <div className="studio-scenario-grid">{SCENARIOS.map(item => <button key={item.name} type="button" className={`studio-scenario${scenario === item.name ? ' studio-scenario-selected' : ''}`} onClick={() => { stopVoice(); setScenario(item.name); }} aria-pressed={scenario === item.name}><div className="studio-scenario-top"><span className="studio-icon-clay">{item.icon}</span><span>{item.tag}</span>{scenario === item.name && <Check size={17} />}</div><h3>{item.name}</h3><p>{item.detail}</p><small>{item.duration}</small></button>)}</div>
+          <div className="studio-training-start"><p><Sparkles size={16} />基于业务场景的规则演示，每次对话都留有复盘依据。</p><button className="studio-btn studio-btn-primary" disabled={busy} onClick={start}><BusyIcon busy={busy}><Play size={16} /></BusyIcon>开始{interactionMode === 'voice' ? '语音' : ''}带练</button></div>
           <div className="studio-training-guide"><span className="studio-guide-number">01</span><div><h3>把这里当成客户现场</h3><p>先回应客户，再逐步澄清需求、给出依据、推动下一步。完成后查看逐项反馈。</p></div></div>
         </> : <div className="studio-session-panel">
-          <div className="studio-session-head"><div className="studio-row"><span className="studio-icon-clay"><GraduationCap size={22} /></span><div><h2>{session.scenario}</h2><p>{session.customer} · {session.status === 'active' ? '客户角色对话' : '已完成的练习'}</p></div></div><button className="studio-btn studio-btn-ghost" disabled={busy} onClick={() => { setSessionId(null); setReply(''); }}>选择场景<ChevronRight size={15} /></button></div>
+          <div className="studio-session-head"><div className="studio-row"><span className="studio-icon-clay"><GraduationCap size={22} /></span><div><h2>{session.scenario}</h2><p>{session.customer} · {session.status === 'active' ? '客户角色对话' : '已完成的练习'}</p></div></div><button className="studio-btn studio-btn-ghost" disabled={busy} onClick={() => chooseSession(null)}>选择场景<ChevronRight size={15} /></button></div>
           <div className="studio-training-chat" ref={chatRef} onScroll={event => { const target = event.currentTarget; pinned.current = target.scrollHeight - target.scrollTop - target.clientHeight < 48; lastScroll.current = Date.now(); }} aria-live="polite" aria-relevant="additions text">
-            {session.messages.map((message, index) => <div className={`studio-training-message studio-training-${message.role}`} key={`${session.id}-${index}`}><span>{message.role === 'user' ? '我的回应' : session.customer}</span><p>{message.content}</p></div>)}
+            {session.messages.map((message, index) => {
+              const key = `${session.id}:${index}:${message.content}`;
+              const playing = speechActive && playingMessage === key;
+              return <div className={`studio-training-message studio-training-${message.role}`} key={`${session.id}-${index}`}><span>{message.role === 'user' ? '我的回应' : session.customer}</span><p>{message.content}</p>{message.role === 'assistant' && <button type="button" className="training-message-play" disabled={!voice.ready || !voice.outputSupported || capturing} onClick={() => playCustomer(message.content, key)} aria-label={playing ? '停止客户语音' : '播放客户语音'} title={!voice.ready ? '正在检查语音播放能力' : !voice.outputSupported ? '此浏览器不支持客户语音播放' : undefined}>{playing ? <Square size={12} /> : <Volume2 size={13} />}{playing ? '停止播报' : '播放客户语音'}</button>}</div>;
+            })}
             {busy && session.status === 'active' && <div className="studio-training-thinking"><Loader2 size={15} className="studio-spin" /> 正在处理本轮练习…</div>}
           </div>
-          {session.status === 'active' ? <div className="studio-training-bottom"><form className="studio-reply-composer" onSubmit={sendReply}><label className="studio-sr-only" htmlFor="training-reply">输入你的回应</label><textarea id="training-reply" rows={3} value={reply} onChange={event => setReply(event.target.value)} placeholder="试着回应客户的顾虑…" maxLength={4000} onKeyDown={event => { if (event.nativeEvent.isComposing || event.keyCode === 229) return; if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void sendReply(); } }} /><div><span>Enter 发送 · Shift + Enter 换行</span><button type="submit" className="studio-send" disabled={busy || !reply.trim()} aria-label="发送回应"><BusyIcon busy={busy}><ArrowUp size={18} /></BusyIcon></button></div></form><div className="studio-training-footer"><span>{session.messages.filter(message => message.role === 'user').length} 轮回应 · 可随时结束并复盘</span><button className="studio-btn studio-btn-secondary" disabled={busy} onClick={finish}><CheckCheck size={15} />结束并复盘</button></div></div> : <div className="studio-feedback"><div className="studio-score"><div><span className="studio-eyebrow">本次练习复盘</span><h3>从证据中找到下一次的进步</h3><p>规则演示评分，仅依据本次对话文本，不代表真实销售能力测评。</p></div><div className="studio-score-value">{session.score ?? '—'}<small>/ 100</small></div></div>{session.feedback?.map(item => <div className="studio-feedback-item" key={item.label}><div><strong>{item.label}</strong><span>{item.score} 分</span></div><p><b>对话依据</b>{item.evidence}</p><p><b>下次试试</b>{item.suggestion}</p></div>)}</div>}
+          {session.status === 'active' ? <div className="studio-training-bottom">
+            {unaddedTranscript && <div className="training-transcript-overflow" role="alert"><Info size={15} /><div><strong>回应已达 4,000 字，部分识别内容尚未加入。</strong><details><summary>查看未加入的 {unaddedTranscript.length.toLocaleString('zh-CN')} 字，可选中复制</summary><p>{unaddedTranscript}</p></details><button type="button" onClick={() => setUnaddedTranscript('')}>我已处理，收起提示</button></div></div>}
+            <form className="studio-reply-composer" onSubmit={sendReply}><label className="studio-sr-only" htmlFor="training-reply">输入你的回应</label><textarea id="training-reply" rows={3} value={reply} onChange={event => setDraft(event.target.value)} placeholder={interactionMode === 'voice' ? '识别文字会加入这里，检查或修改后再发送…' : '试着回应客户的顾虑…'} maxLength={4000} onKeyDown={event => { if (event.nativeEvent.isComposing || event.keyCode === 229) return; if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void sendReply(); } }} /><div><span>{capturing ? '识别完成后，可编辑并发送' : 'Enter 发送 · Shift + Enter 换行'}<span className="training-draft-count">{reply.length.toLocaleString('zh-CN')} / 4,000</span></span><button type="submit" className="studio-send" disabled={busy || capturing || !reply.trim()} aria-label="发送回应"><BusyIcon busy={busy}><ArrowUp size={18} /></BusyIcon></button></div></form><div className="studio-training-footer"><span>{session.messages.filter(message => message.role === 'user').length} 轮回应 · 可随时结束并复盘</span><button className="studio-btn studio-btn-secondary" disabled={busy} onClick={finish}><CheckCheck size={15} />结束并复盘</button></div></div> : <div className="studio-feedback"><div className="studio-score"><div><span className="studio-eyebrow">本次练习复盘</span><h3>从证据中找到下一次的进步</h3><p>规则演示评分，仅依据本次对话文本，不代表真实销售能力测评。</p></div><div className="studio-score-value">{session.score ?? '—'}<small>/ 100</small></div></div>{session.feedback?.map(item => <div className="studio-feedback-item" key={item.label}><div><strong>{item.label}</strong><span>{item.score} 分</span></div><p><b>对话依据</b>{item.evidence}</p><p><b>下次试试</b>{item.suggestion}</p></div>)}</div>}
         </div>}
       </main>
-      <aside className="studio-training-aside"><div className="studio-aside-heading"><History size={17} /><h2>我的练习记录</h2><span>{history.length}</span></div>{history.length ? <div className="studio-history-list">{history.map(item => <button className={`studio-history-item${sessionId === item.id ? ' studio-history-active' : ''}`} key={item.id} disabled={busy} onClick={() => { setSessionId(item.id); setReply(''); pinned.current = true; }}><div><strong>{item.scenario}</strong><span className="studio-history-score">{item.status === 'completed' ? `${item.score ?? '—'} 分` : '进行中'}</span></div><small>{dateLabel(item.createdAt)} · {item.messages.filter(message => message.role === 'user').length} 轮</small></button>)}</div> : <Empty icon={<History size={26} />} title="练习从这里开始" detail="完成一次带练，你的对话和复盘会保存在这里。" />}<div className="studio-side-note"><CircleHelp size={17} /><p>示例客户由系统扮演。请勿输入真实客户隐私或未经授权的商务信息。</p></div></aside>
+      <aside className="studio-training-aside"><div className="studio-aside-heading"><History size={17} /><h2>我的练习记录</h2><span>{history.length}</span></div>{history.length ? <div className="studio-history-list">{history.map(item => <button className={`studio-history-item${sessionId === item.id ? ' studio-history-active' : ''}`} key={item.id} disabled={busy} onClick={() => chooseSession(item.id)}><div><strong>{item.scenario}</strong><span className="studio-history-score">{item.status === 'completed' ? `${item.score ?? '—'} 分` : '进行中'}</span></div><small>{dateLabel(item.createdAt)} · {item.messages.filter(message => message.role === 'user').length} 轮</small></button>)}</div> : <Empty icon={<History size={26} />} title="练习从这里开始" detail="完成一次带练，你的对话和复盘会保存在这里。" />}<div className="studio-side-note"><CircleHelp size={17} /><p>示例客户由系统扮演。请勿输入真实客户隐私或未经授权的商务信息。</p></div></aside>
     </div>
   </section>;
 }

@@ -8,6 +8,16 @@ const context = { now: '2026-10-23T08:00:00.000Z' };
 const rejectsStatus = (status: number) => (error: unknown) => error instanceof DomainError && error.status === status;
 const flow = (): Workflow => ({id:'test',name:'测试',description:'',status:'draft',version:1,updatedAt:context.now,nodes:[{id:'s',type:'start',label:'开始',x:0,y:0},{id:'a',type:'agent',agentId:'risk',label:'风控',x:1,y:0},{id:'o',type:'output',label:'输出',x:2,y:0}],edges:[{from:'s',to:'a'},{from:'a',to:'o'}]});
 
+test('a retried automatic voice turn is saved once and remains ownership protected', async () => {
+  const started = await executeAction(createSeed(context.now), 'sales', 'training_start', {scenario:'首访剧本'}, context);
+  const payload = {sessionId:started.session!.id,text:'我们先确认面积和交付时间。',voiceTurnId:'voice:test-turn-1'};
+  const first = await executeAction(started.state, 'sales', 'training_reply', payload, context);
+  const retry = await executeAction(first.state, 'sales', 'training_reply', payload, context);
+  assert.equal(retry.session!.messages.length, 3);
+  const privateSession=await executeAction(first.state,'manager','training_start',{scenario:'首访剧本'},context);
+  await assert.rejects(executeAction(privateSession.state,'sales','training_reply',{...payload,sessionId:privateSession.session!.id},context), rejectsStatus(403));
+});
+
 test('training openings match the selected first-visit and competitor scenarios', async () => {
   const state = createSeed(context.now);
   const firstVisit = await executeAction(state, 'sales', 'training_start', { scenario: '首访剧本' }, context);

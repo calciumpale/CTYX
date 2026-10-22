@@ -1,4 +1,14 @@
 /* Voice practice uses the shared warm CDS surfaces in both themes. */
+.training-transport-switch{display:flex;gap:16px;margin:-7px 0 16px;border-bottom:1px solid var(--cds-border)}
+.training-transport-switch button{font-size:11px;color:var(--cds-text-muted);background:transparent;border:0;border-bottom:2px solid transparent;padding:7px 1px 10px}
+.training-transport-switch button[aria-pressed="true"]{color:var(--cds-clay);border-bottom-color:var(--cds-clay)}
+.training-duplex-signals{display:flex;gap:14px;flex-wrap:wrap;padding:0 0 16px;color:var(--cds-text-muted);font-size:10px}
+.training-duplex-signals>span{display:flex;gap:5px;align-items:center}
+.training-signal-live,.training-duplex-connected{color:var(--cds-clay)}
+.training-duplex-connected>span{background:var(--cds-clay);opacity:1}
+.training-duplex-voice-detail{color:var(--cds-text-muted);font-size:10px;flex:1;min-width:140px;line-height:1.8}
+.training-auto-submit{display:flex;gap:9px;align-items:center;background:var(--cds-alpha-1);border-radius:var(--radius-lg);padding:15px 16px;color:var(--cds-text-secondary);font-size:11px;line-height:1.8}
+.training-auto-submit>svg{color:var(--cds-clay);flex-shrink:0}
 .training-interaction-bar{display:flex;align-items:center;justify-content:space-between;gap:18px;margin:0 0 24px}
 .training-interaction-bar>div:first-child{min-width:0}
 .training-interaction-bar strong{font-size:12px;font-weight:550;color:var(--cds-text-secondary)}

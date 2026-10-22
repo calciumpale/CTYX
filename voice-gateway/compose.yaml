@@ -1,0 +1,21 @@
+services:
+  gateway:
+    build: .
+    init: true
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./models/asr:/models/asr:ro
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      - kokoro
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+  kokoro:
+    # Official documented CPU image. Pin a verified release/digest at deployment.
+    image: ghcr.io/remsky/kokoro-fastapi-cpu:latest
+    init: true
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8880:8880"

@@ -17,7 +17,7 @@ export interface FlowNode {id:string;type:NodeType;label:string;x:number;y:numbe
 export interface Workflow {id:string;name:string;description:string;status:'draft'|'published';nodes:FlowNode[];edges:{from:string;to:string}[];version:number;updatedAt:string;}
 export interface TraceStep {id:string;title:string;agent?:AgentId;detail:string;duration:number;status:'success'|'warning'|'error';}
 export interface Run {id:string;query:string;answer:string;agentIds:AgentId[];steps:TraceStep[];citations:{id:string;title:string;excerpt:string}[];mode:'demo'|'live';createdAt:string;duration:number;workflowId?:string;}
-export interface TrainingSession {id:string;scenario:string;customer:string;messages:{role:'user'|'assistant';content:string}[];status:'active'|'completed';score?:number;feedback?:{label:string;score:number;evidence:string;suggestion:string}[];createdAt:string;}
+export interface TrainingSession {id:string;scenario:string;customer:string;messages:{role:'user'|'assistant';content:string}[];status:'active'|'completed';voiceTurnIds?:string[];score?:number;feedback?:{label:string;score:number;evidence:string;suggestion:string}[];createdAt:string;}
 export interface Activity {id:string;title:string;detail:string;date:string;type:string;}
 export interface WorkbenchState {revision:number;role:Role;viewer:{name:string;team:string;salesId:string};dataMode:'example';model:{connected:boolean;name:string};deals:Deal[];skills:Skill[];knowledge:Knowledge[];workflows:Workflow[];runs:Run[];trainingSessions:TrainingSession[];activities:Activity[];}
 export interface ApiResult {state:WorkbenchState;run?:Run;session?:TrainingSession;message?:string;}

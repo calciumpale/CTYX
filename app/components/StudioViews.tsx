@@ -5,7 +5,10 @@ import { ArrowRight, ArrowUp, BookOpen, Bot, Check, CheckCheck, ChevronRight, Ci
 import './studio.css';
 import './training-voice.css';
 import { TrainingVoiceControls } from './TrainingVoiceControls';
+import { DuplexVoiceControls } from './DuplexVoiceControls';
 import { useTrainingVoice } from '../lib/use-training-voice';
+import { useDuplexVoice } from '../lib/use-duplex-voice';
+import { createVoiceTurnQueue, type VoiceTurn, type VoiceQueueSnapshot } from '../lib/voice-turn-queue';
 import { AGENTS, type ApiResult, type FlowNode, type Mutate, type NodeType, type Run, type Skill, type ViewProps, type Workflow } from '../lib/types';
 
 const dateLabel = (value: string) => new Date(value).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
@@ -49,18 +52,27 @@ const SCENARIOS = [
 
 type TrainingInteractionMode = 'text' | 'voice';
 
-export function TrainingView({ state, mutate, notify }: ViewProps) {
+export function TrainingView({ state, mutate, notify,onPendingChange,onMediaStopReady }: ViewProps & {onPendingChange?:(count:number)=>void;onMediaStopReady?:(stop:(()=>void)|null)=>void}) {
   const { busy, error, perform } = useMutation(mutate);
   const [scenario, setScenario] = useState(SCENARIOS[0].name);
   const [sessionId, setSessionId] = useState<string | null>(() => state.trainingSessions.find(session => session.status === 'active')?.id ?? null);
   const [reply, setReply] = useState('');
   const [interactionMode, setInteractionMode] = useState<TrainingInteractionMode>('text');
+  const [voiceTransport, setVoiceTransport] = useState<'duplex'|'browser'>('duplex');
+  const [gatewayConfigured, setGatewayConfigured] = useState<boolean|null>(null);
+  const [gatewayError, setGatewayError] = useState('');
+  const [voiceQueue, setVoiceQueue] = useState<VoiceQueueSnapshot>({pending:0,failed:null,error:''});
+  const [browserRevision,setBrowserRevision]=useState(0);
   const [autoSpeak, setAutoSpeak] = useState(true);
   const [unaddedTranscript, setUnaddedTranscript] = useState('');
   const [playingMessage, setPlayingMessage] = useState<string | null>(null);
-  const draftRef = useRef('');
+  const browserTranscript = useRef('');
+  const browserAutoStop = useRef<ReturnType<typeof setTimeout>|null>(null);
+  const saveVoiceTurn = useRef<(turn:VoiceTurn)=>Promise<void>>(async()=>{});
+  const queueRef = useRef<ReturnType<typeof createVoiceTurnQueue>|null>(null);
+  useEffect(()=>{queueRef.current=createVoiceTurnQueue(turn=>saveVoiceTurn.current(turn),snapshot=>{setVoiceQueue(snapshot);onPendingChange?.(snapshot.pending);});return()=>queueRef.current?.reset();},[onPendingChange]);
   const inputOwner = useRef<string | null>(null);
-  const voiceContext = useRef({ sessionId, active: false, mode: interactionMode, busy: false });
+  const voiceContext = useRef({ sessionId, active: false, mode: interactionMode, busy: false, transport:voiceTransport });
   const autoSpokenMessages = useRef(new Set<string>());
   const playbackGeneration = useRef(0);
   const session = state.trainingSessions.find(item => item.id === sessionId);
@@ -68,60 +80,88 @@ export function TrainingView({ state, mutate, notify }: ViewProps) {
   const chatRef = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
   const lastScroll = useRef(0);
-  const setDraft = useCallback((text: string) => { draftRef.current = text; setReply(text); }, []);
+  const setDraft = useCallback((text: string) => { setReply(text); }, []);
   const onTranscript = useCallback((text: string) => {
     const context = voiceContext.current;
-    if (!inputOwner.current || inputOwner.current !== context.sessionId || !context.active || context.mode !== 'voice' || context.busy || !text.trim()) return;
-    const previous = draftRef.current;
-    const separator = previous && !/\s$/.test(previous) ? '\n' : '';
-    const available = Math.max(0, 4000 - previous.length - separator.length);
-    let addition = text.trim().slice(0, available);
-    // Avoid splitting an emoji's UTF-16 surrogate pair at the input limit.
-    if (/[\uD800-\uDBFF]$/.test(addition)) addition = addition.slice(0, -1);
-    if (addition) setDraft(`${previous}${separator}${addition}`);
-    const remainder = text.trim().slice(addition.length);
-    if (remainder) setUnaddedTranscript(current => current ? `${current}\n${remainder}` : remainder);
-  }, [setDraft]);
+    if (!inputOwner.current || inputOwner.current !== context.sessionId || !context.active || context.mode !== 'voice' || context.transport!=='browser' || !text.trim()) return;
+    browserTranscript.current += text.trim();
+    setBrowserRevision(value=>value+1);
+  }, []);
+  const onDuplexFinal=useCallback(({id,text}:{id:string;text:string})=>{
+    const context=voiceContext.current;
+    if(!context.sessionId||!context.active||context.mode!=='voice'||context.transport!=='duplex')return;
+    try{queueRef.current?.enqueue({id:`duplex:${id}`,sessionId:context.sessionId,text});}
+    catch(cause){setGatewayError(cause instanceof Error?cause.message:'语音回应未能加入队列');setUnaddedTranscript(text);}
+  },[]);
+  const duplex=useDuplexVoice({onFinal:onDuplexFinal});
+  const {disconnect:disconnectDuplex,speak:speakDuplex,phase:duplexPhase,inputActive:duplexInputActive,partial:duplexPartial}=duplex;
   const voice = useTrainingVoice({ onTranscript });
-  const { stopAll, speak } = voice;
+  const { stopAll, speak,stopListening } = voice;
   const capturing = voice.phase === 'requesting' || voice.phase === 'listening' || voice.phase === 'stopping';
-  const speechActive = voice.phase === 'preparing-speech' || voice.phase === 'speaking';
-  const stopVoice = useCallback(() => { inputOwner.current = null; stopAll(); setPlayingMessage(null); }, [stopAll]);
+  const speechActive = voice.phase === 'preparing-speech' || voice.phase === 'speaking'||duplex.speaking||duplex.pendingPlayback;
+  const stopVoice = useCallback(() => { inputOwner.current = null;browserTranscript.current='';if(browserAutoStop.current)clearTimeout(browserAutoStop.current);browserAutoStop.current=null;stopAll();disconnectDuplex();setPlayingMessage(null); }, [stopAll,disconnectDuplex]);
+  useEffect(()=>{onMediaStopReady?.(stopVoice);return()=>onMediaStopReady?.(null);},[onMediaStopReady,stopVoice]);
 
   useEffect(() => {
-    voiceContext.current = { sessionId, active: session?.status === 'active', mode: interactionMode, busy };
-  }, [sessionId, session?.status, interactionMode, busy]);
+    voiceContext.current = { sessionId, active: session?.status === 'active', mode: interactionMode, busy,transport:voiceTransport };
+    saveVoiceTurn.current=async turn=>{
+      const context=voiceContext.current;
+      if(context.sessionId!==turn.sessionId||!context.active||context.mode!=='voice')return;
+      await mutate('training_reply',{sessionId:turn.sessionId,text:turn.text,voiceTurnId:turn.id});
+    };
+  }, [sessionId, session?.status, interactionMode, busy,voiceTransport,mutate]);
+  useEffect(()=>{
+    const abort=new AbortController();
+    void fetch('/api/training-voice',{credentials:'same-origin',cache:'no-store',signal:abort.signal}).then(async response=>{const data=await response.json() as {configured?:boolean;error?:string};if(!response.ok)throw new Error(data.error||'无法检查语音服务配置');setGatewayConfigured(data.configured===true);}).catch(cause=>{if(!abort.signal.aborted){setGatewayConfigured(false);setGatewayError(cause instanceof Error?cause.message:'无法检查语音服务配置');}});
+    return()=>abort.abort();
+  },[]);
   useEffect(() => {
-    const invalidatePendingPlayback = () => { if (document.hidden) playbackGeneration.current += 1; };
+    const invalidatePendingPlayback = () => { if (document.hidden) {playbackGeneration.current += 1;inputOwner.current=null;browserTranscript.current='';if(browserAutoStop.current)clearTimeout(browserAutoStop.current);browserAutoStop.current=null;} };
     document.addEventListener('visibilitychange', invalidatePendingPlayback);
     return () => document.removeEventListener('visibilitychange', invalidatePendingPlayback);
   }, []);
   // Media belongs to the selected conversation. Cleanup also invalidates late recognition results.
-  useEffect(() => () => { inputOwner.current = null; stopAll(); }, [sessionId, session?.status, interactionMode, stopAll]);
+  useEffect(() => () => {queueRef.current?.reset();stopVoice();}, [sessionId, session?.status, interactionMode,voiceTransport,stopVoice]);
+  // Browser compatibility mode waits for a pause, then stops recognition so its last
+  // final result can arrive. No editable draft or manual send is involved.
+  useEffect(()=>{
+    if(interactionMode!=='voice'||voiceTransport!=='browser'||!inputOwner.current)return;
+    if(voice.phase==='idle'){
+      const text=browserTranscript.current.trim();browserTranscript.current='';const owner=inputOwner.current;inputOwner.current=null;
+      if(text&&!document.hidden){try{queueRef.current?.enqueue({id:`browser:${crypto.randomUUID()}`,sessionId:owner,text});}catch(cause){setUnaddedTranscript(text);setGatewayError(cause instanceof Error?cause.message:'语音未能发送');}}
+      return;
+    }
+    if(voice.phase!=='listening')return;
+    if(browserAutoStop.current)clearTimeout(browserAutoStop.current);
+    if(browserTranscript.current||voice.interimTranscript)browserAutoStop.current=setTimeout(()=>stopListening(),1400);
+    return()=>{if(browserAutoStop.current)clearTimeout(browserAutoStop.current);browserAutoStop.current=null;};
+  },[interactionMode,voiceTransport,voice.phase,voice.interimTranscript,stopListening,browserRevision]);
+  useEffect(()=>{if(voiceQueue.failed){inputOwner.current=null;browserTranscript.current='';stopAll();disconnectDuplex();}},[voiceQueue.failed,stopAll,disconnectDuplex]);
   const lastMessage = session?.messages.at(-1);
   const lastMessageIndex = (session?.messages.length ?? 0) - 1;
   useEffect(() => {
-    if (document.hidden || interactionMode !== 'voice' || !autoSpeak || !voice.ready || !voice.outputSupported || busy || capturing || !sessionId || session?.status !== 'active' || lastMessage?.role !== 'assistant') return;
+    const duplexMode=voiceTransport==='duplex';
+    if (document.hidden || interactionMode !== 'voice' || (!duplexMode&&!autoSpeak) || (duplexMode?duplexPhase!=='connected'||duplexInputActive||!!duplexPartial:!voice.ready||!voice.outputSupported||capturing) || busy || voiceQueue.pending>0 || !sessionId || session?.status !== 'active' || lastMessage?.role !== 'assistant') return;
     const key = `${sessionId}:${lastMessageIndex}:${lastMessage.content}`;
     if (autoSpokenMessages.current.has(key)) return;
     // Defer until the current effect has settled; Strict Mode cleanup must not consume playback.
     const generation = playbackGeneration.current;
     const timer = window.setTimeout(() => {
       const context = voiceContext.current;
-      if (generation !== playbackGeneration.current || document.hidden || context.sessionId !== sessionId || context.mode !== 'voice' || !context.active || context.busy || inputOwner.current) return;
+      if (generation !== playbackGeneration.current || document.hidden || context.sessionId !== sessionId || context.mode !== 'voice' || !context.active || context.busy || (!duplexMode&&inputOwner.current)) return;
       autoSpokenMessages.current.add(key);
       setPlayingMessage(key);
-      speak(lastMessage.content);
+      if(duplexMode)speakDuplex(lastMessage.content,crypto.randomUUID());else speak(lastMessage.content);
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [interactionMode, autoSpeak, voice.ready, voice.outputSupported, busy, capturing, sessionId, session?.status, lastMessage?.role, lastMessage?.content, lastMessageIndex, speak]);
+  }, [interactionMode,voiceTransport,duplexPhase,duplexInputActive,duplexPartial,speakDuplex,voiceQueue.pending, autoSpeak, voice.ready, voice.outputSupported, busy, capturing, sessionId, session?.status, lastMessage?.role, lastMessage?.content, lastMessageIndex, speak]);
   useEffect(() => {
     const container = chatRef.current;
     if (container && pinned.current && Date.now() - lastScroll.current > 150) container.scrollTop = container.scrollHeight;
   }, [session?.messages.length, sessionId]);
 
-  const changeMode = (mode: TrainingInteractionMode) => { if (mode !== interactionMode) { stopVoice(); setInteractionMode(mode); } };
-  const chooseSession = (id: string | null) => { stopVoice(); setSessionId(id); setDraft(''); setUnaddedTranscript(''); pinned.current = true; };
+  const changeMode = (mode: TrainingInteractionMode) => { if(voiceQueue.pending){notify('请先等待语音保存完成，失败时可直接重试。');return;}if (mode !== interactionMode) { stopVoice(); setInteractionMode(mode); } };
+  const chooseSession = (id: string | null) => {if(voiceQueue.pending){notify('请先等待语音保存完成，失败时可直接重试。');return;} stopVoice(); setSessionId(id); setDraft(''); setUnaddedTranscript(''); pinned.current = true; };
   const start = async () => {
     stopVoice();
     const result = await perform('training_start', { scenario });
@@ -129,13 +169,13 @@ export function TrainingView({ state, mutate, notify }: ViewProps) {
   };
   const sendReply = async (event?: FormEvent) => {
     event?.preventDefault();
-    if (!session || session.status !== 'active' || !reply.trim() || busy || capturing) return;
+    if (!session || session.status !== 'active' || !reply.trim() || busy || capturing || voiceQueue.pending>0) return;
     stopVoice();
     const result = await perform('training_reply', { sessionId: session.id, text: reply.trim() });
     if (result) setDraft('');
   };
   const finish = async () => {
-    if (!session || session.status !== 'active') return;
+    if (!session || session.status !== 'active'||voiceQueue.pending>0) return;
     stopVoice();
     const result = await perform('training_finish', { sessionId: session.id });
     if (result) notify('本次带练已完成，复盘已保存。');
@@ -144,11 +184,20 @@ export function TrainingView({ state, mutate, notify }: ViewProps) {
     if (!session || session.status !== 'active' || interactionMode !== 'voice' || busy || capturing || !voice.ready || !voice.inputSupported) return;
     if (lastMessage?.role === 'assistant') autoSpokenMessages.current.add(`${session.id}:${lastMessageIndex}:${lastMessage.content}`);
     inputOwner.current = session.id;
+    browserTranscript.current='';
     setPlayingMessage(null);
     voice.startListening();
   };
-  const cancelListening = () => { inputOwner.current = null; voice.cancelListening(); };
+  const cancelListening = () => { inputOwner.current = null;browserTranscript.current=''; voice.cancelListening(); };
+  const changeTransport=(transport:'duplex'|'browser')=>{if(voiceQueue.pending){notify('请先等待语音保存完成，失败时可直接重试。');return;}if(transport!==voiceTransport){stopVoice();setVoiceTransport(transport);setGatewayError('');}};
+  const connectDuplex=()=>{if(session?.status==='active'){setGatewayError('');if(lastMessage?.role==='assistant')autoSpokenMessages.current.delete(`${session.id}:${lastMessageIndex}:${lastMessage.content}`);void duplex.connect(session.id);}};
   const playCustomer = (text: string, key: string) => {
+    if(interactionMode==='voice'&&voiceTransport==='duplex'){
+      if(duplex.phase!=='connected'||duplex.inputActive)return;
+      if((duplex.speaking||duplex.pendingPlayback)&&playingMessage===key){duplex.interrupt();setPlayingMessage(null);}
+      else{setPlayingMessage(key);duplex.speak(text,crypto.randomUUID());}
+      return;
+    }
     if (capturing || !voice.ready || !voice.outputSupported) return;
     if (speechActive && playingMessage === key) { voice.stopSpeaking(); setPlayingMessage(null); }
     else { setPlayingMessage(key); voice.speak(text); }
@@ -161,7 +210,8 @@ export function TrainingView({ state, mutate, notify }: ViewProps) {
       <main className="studio-training-main">
         <div className="training-interaction-bar"><div><strong>选择你的练习方式</strong><p>{interactionMode === 'voice' ? '听客户说，再把你的回应说出来。' : '留一点思考时间，把回应写得更清楚。'}</p></div><div className="training-mode-switch" role="group" aria-label="带练方式"><button type="button" aria-pressed={interactionMode === 'text'} onClick={() => changeMode('text')}><MessageSquare size={15} />文字带练</button><button type="button" aria-pressed={interactionMode === 'voice'} onClick={() => changeMode('voice')}><Mic size={15} />语音带练</button></div></div>
         {interactionMode === 'text' && voice.error && <div className="training-voice-error training-voice-text-error" role="alert"><Info size={16} /><div><p>{voice.error}</p><span>文字回应仍可正常发送，也可稍后重新播放客户语音。</span></div><button type="button" className="studio-icon-button" onClick={voice.clearError} aria-label="关闭语音提示"><X size={15} /></button></div>}
-        {interactionMode === 'voice' && <TrainingVoiceControls voice={voice} customer={session?.customer} hasSession={Boolean(session)} active={session?.status === 'active'} busy={busy} autoSpeak={autoSpeak} onAutoSpeakChange={enabled => { setAutoSpeak(enabled); if (!enabled) voice.stopSpeaking(); }} onStartListening={startListening} onCancelListening={cancelListening} onUseText={() => changeMode('text')} />}
+        {interactionMode === 'voice' && <><div className="training-transport-switch" role="group" aria-label="语音连接方式"><button type="button" aria-pressed={voiceTransport==='duplex'} onClick={()=>changeTransport('duplex')}>全双工 · 自部署服务</button><button type="button" aria-pressed={voiceTransport==='browser'} onClick={()=>changeTransport('browser')}>浏览器语音 · 兼容模式</button></div>{voiceTransport==='duplex'?<DuplexVoiceControls voice={duplex} configured={gatewayConfigured} configurationError={gatewayError} customer={session?.customer} active={session?.status==='active'} pending={voiceQueue.pending} onConnect={connectDuplex} onUseBrowser={()=>changeTransport('browser')}/>:<TrainingVoiceControls voice={voice} customer={session?.customer} hasSession={Boolean(session)} active={session?.status === 'active'} busy={busy||voiceQueue.pending>0} autoSpeak={autoSpeak} onAutoSpeakChange={enabled => { setAutoSpeak(enabled); if (!enabled) voice.stopSpeaking(); }} onStartListening={startListening} onCancelListening={cancelListening} onUseText={() => changeMode('text')} />}</>}
+        {voiceQueue.failed&&<div className="training-voice-error" role="alert"><Info size={16}/><div><p>语音暂未保存：{voiceQueue.error}</p><p>「{voiceQueue.failed.text}」</p><button type="button" onClick={()=>queueRef.current?.retry()}>直接重试保存</button><button type="button" style={{marginLeft:16}} onClick={()=>queueRef.current?.reset()}>舍弃全部待保存语音</button></div></div>}
         {!session ? <>
           <div className="studio-section-label">选择这次想练习的场景</div>
           <div className="studio-scenario-grid">{SCENARIOS.map(item => <button key={item.name} type="button" className={`studio-scenario${scenario === item.name ? ' studio-scenario-selected' : ''}`} onClick={() => { stopVoice(); setScenario(item.name); }} aria-pressed={scenario === item.name}><div className="studio-scenario-top"><span className="studio-icon-clay">{item.icon}</span><span>{item.tag}</span>{scenario === item.name && <Check size={17} />}</div><h3>{item.name}</h3><p>{item.detail}</p><small>{item.duration}</small></button>)}</div>
@@ -173,13 +223,14 @@ export function TrainingView({ state, mutate, notify }: ViewProps) {
             {session.messages.map((message, index) => {
               const key = `${session.id}:${index}:${message.content}`;
               const playing = speechActive && playingMessage === key;
-              return <div className={`studio-training-message studio-training-${message.role}`} key={`${session.id}-${index}`}><span>{message.role === 'user' ? '我的回应' : session.customer}</span><p>{message.content}</p>{message.role === 'assistant' && <button type="button" className="training-message-play" disabled={!voice.ready || !voice.outputSupported || capturing} onClick={() => playCustomer(message.content, key)} aria-label={playing ? '停止客户语音' : '播放客户语音'} title={!voice.ready ? '正在检查语音播放能力' : !voice.outputSupported ? '此浏览器不支持客户语音播放' : undefined}>{playing ? <Square size={12} /> : <Volume2 size={13} />}{playing ? '停止播报' : '播放客户语音'}</button>}</div>;
+              const unavailable=interactionMode==='voice'&&voiceTransport==='duplex'?duplex.phase!=='connected'||duplex.inputActive:!voice.ready||!voice.outputSupported||capturing;
+              return <div className={`studio-training-message studio-training-${message.role}`} key={`${session.id}-${index}`}><span>{message.role === 'user' ? '我的回应' : session.customer}</span><p>{message.content}</p>{message.role === 'assistant' && <button type="button" className="training-message-play" disabled={unavailable} onClick={() => playCustomer(message.content, key)} aria-label={playing ? '停止客户语音' : '播放客户语音'} title={unavailable?'请连接语音服务，或切换兼容模式播放':undefined}>{playing ? <Square size={12} /> : <Volume2 size={13} />}{playing ? '停止播报' : '播放客户语音'}</button>}</div>;
             })}
             {busy && session.status === 'active' && <div className="studio-training-thinking"><Loader2 size={15} className="studio-spin" /> 正在处理本轮练习…</div>}
           </div>
           {session.status === 'active' ? <div className="studio-training-bottom">
-            {unaddedTranscript && <div className="training-transcript-overflow" role="alert"><Info size={15} /><div><strong>回应已达 4,000 字，部分识别内容尚未加入。</strong><details><summary>查看未加入的 {unaddedTranscript.length.toLocaleString('zh-CN')} 字，可选中复制</summary><p>{unaddedTranscript}</p></details><button type="button" onClick={() => setUnaddedTranscript('')}>我已处理，收起提示</button></div></div>}
-            <form className="studio-reply-composer" onSubmit={sendReply}><label className="studio-sr-only" htmlFor="training-reply">输入你的回应</label><textarea id="training-reply" rows={3} value={reply} onChange={event => setDraft(event.target.value)} placeholder={interactionMode === 'voice' ? '识别文字会加入这里，检查或修改后再发送…' : '试着回应客户的顾虑…'} maxLength={4000} onKeyDown={event => { if (event.nativeEvent.isComposing || event.keyCode === 229) return; if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void sendReply(); } }} /><div><span>{capturing ? '识别完成后，可编辑并发送' : 'Enter 发送 · Shift + Enter 换行'}<span className="training-draft-count">{reply.length.toLocaleString('zh-CN')} / 4,000</span></span><button type="submit" className="studio-send" disabled={busy || capturing || !reply.trim()} aria-label="发送回应"><BusyIcon busy={busy}><ArrowUp size={18} /></BusyIcon></button></div></form><div className="studio-training-footer"><span>{session.messages.filter(message => message.role === 'user').length} 轮回应 · 可随时结束并复盘</span><button className="studio-btn studio-btn-secondary" disabled={busy} onClick={finish}><CheckCheck size={15} />结束并复盘</button></div></div> : <div className="studio-feedback"><div className="studio-score"><div><span className="studio-eyebrow">本次练习复盘</span><h3>从证据中找到下一次的进步</h3><p>规则演示评分，仅依据本次对话文本，不代表真实销售能力测评。</p></div><div className="studio-score-value">{session.score ?? '—'}<small>/ 100</small></div></div>{session.feedback?.map(item => <div className="studio-feedback-item" key={item.label}><div><strong>{item.label}</strong><span>{item.score} 分</span></div><p><b>对话依据</b>{item.evidence}</p><p><b>下次试试</b>{item.suggestion}</p></div>)}</div>}
+            {unaddedTranscript && <div className="training-transcript-overflow" role="alert"><Info size={15} /><div><strong>这段语音暂未发送，请缩短表述或等待队列保存。</strong><details><summary>查看未发送的 {unaddedTranscript.length.toLocaleString('zh-CN')} 字，可选中复制</summary><p>{unaddedTranscript}</p></details><button type="button" onClick={() => setUnaddedTranscript('')}>收起提示</button></div></div>}
+            {interactionMode==='text'?<form className="studio-reply-composer" onSubmit={sendReply}><label className="studio-sr-only" htmlFor="training-reply">输入你的回应</label><textarea id="training-reply" rows={3} value={reply} onChange={event => setDraft(event.target.value)} placeholder="试着回应客户的顾虑…" maxLength={4000} onKeyDown={event => { if (event.nativeEvent.isComposing || event.keyCode === 229) return; if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void sendReply(); } }} /><div><span>Enter 发送 · Shift + Enter 换行<span className="training-draft-count">{reply.length.toLocaleString('zh-CN')} / 4,000</span></span><button type="submit" className="studio-send" disabled={busy || capturing || !reply.trim()} aria-label="发送回应"><BusyIcon busy={busy}><ArrowUp size={18} /></BusyIcon></button></div></form>:<div className="training-auto-submit"><Mic size={17}/><span>{voiceQueue.pending?`${voiceQueue.pending} 段语音正在自动保存…`:'语音识别完成后直接进入对话，无需修改或点击发送。'}</span></div>}<div className="studio-training-footer"><span>{session.messages.filter(message => message.role === 'user').length} 轮回应 · 可随时结束并复盘</span><button className="studio-btn studio-btn-secondary" disabled={busy||voiceQueue.pending>0} onClick={finish}><CheckCheck size={15} />结束并复盘</button></div></div> : <div className="studio-feedback"><div className="studio-score"><div><span className="studio-eyebrow">本次练习复盘</span><h3>从证据中找到下一次的进步</h3><p>规则演示评分，仅依据本次对话文本，不代表真实销售能力测评。</p></div><div className="studio-score-value">{session.score ?? '—'}<small>/ 100</small></div></div>{session.feedback?.map(item => <div className="studio-feedback-item" key={item.label}><div><strong>{item.label}</strong><span>{item.score} 分</span></div><p><b>对话依据</b>{item.evidence}</p><p><b>下次试试</b>{item.suggestion}</p></div>)}</div>}
         </div>}
       </main>
       <aside className="studio-training-aside"><div className="studio-aside-heading"><History size={17} /><h2>我的练习记录</h2><span>{history.length}</span></div>{history.length ? <div className="studio-history-list">{history.map(item => <button className={`studio-history-item${sessionId === item.id ? ' studio-history-active' : ''}`} key={item.id} disabled={busy} onClick={() => chooseSession(item.id)}><div><strong>{item.scenario}</strong><span className="studio-history-score">{item.status === 'completed' ? `${item.score ?? '—'} 分` : '进行中'}</span></div><small>{dateLabel(item.createdAt)} · {item.messages.filter(message => message.role === 'user').length} 轮</small></button>)}</div> : <Empty icon={<History size={26} />} title="练习从这里开始" detail="完成一次带练，你的对话和复盘会保存在这里。" />}<div className="studio-side-note"><CircleHelp size={17} /><p>示例客户由系统扮演。请勿输入真实客户隐私或未经授权的商务信息。</p></div></aside>

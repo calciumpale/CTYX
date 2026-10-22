@@ -1,0 +1,15 @@
+.env
+.env.*
+__pycache__
+*.pyc
+models
+checkpoints
+.venv
+venv
+.pytest_cache
+.ruff_cache
+.git
+*.pcm
+*.wav
+*.log
+test_*.py

@@ -5,5 +5,7 @@ declare namespace Cloudflare {
     MODEL_API_KEY?: string;
     MODEL_BASE_URL?: string;
     MODEL_NAME?: string;
+    VOICE_GATEWAY_URL?: string;
+    VOICE_GATEWAY_SECRET?: string;
   }
 }

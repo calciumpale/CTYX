@@ -28,9 +28,9 @@ export function TrainingVoiceControls({ voice, customer, hasSession, active, bus
       : voice.phase === 'requesting'
         ? { title: '正在请求麦克风权限', detail: '请在浏览器弹出的提示中选择允许，也可以取消识别。' }
         : voice.phase === 'listening'
-          ? { title: '正在识别你的回应', detail: '自然说话，完成后点「说完了」。识别文字可以继续修改。' }
+          ? { title: '正在识别你的回应', detail: '自然说话，停顿后自动发送。也可点「结束本句」立即提交。' }
           : voice.phase === 'stopping'
-            ? { title: '正在整理识别结果', detail: '请稍等，识别完成的文字会加入下方输入框。' }
+            ? { title: '正在整理识别结果', detail: '请稍等，识别完成后将直接进入对话。' }
             : voice.phase === 'preparing-speech'
               ? { title: '正在准备客户语音', detail: '你也可以直接阅读对话，或开始说话来回应客户。' }
               : voice.phase === 'speaking'
@@ -41,20 +41,20 @@ export function TrainingVoiceControls({ voice, customer, hasSession, active, bus
                     ? { title: '回听这一次练习', detail: '点击每条客户对话下的播放按钮，重新听听当时的沟通。' }
                     : !voice.inputSupported
                       ? { title: '用文字回应，也能听见客户', detail: '此浏览器不支持语音识别。你仍可输入文字，继续这次带练。' }
-                      : { title: '轮到你说', detail: '说出你的回应，检查识别文字后点击发送。' };
+                      : { title: '轮到你说', detail: '说出你的回应，识别完成后自动发送给客户。' };
   const StatusIcon = voice.phase === 'speaking' || voice.phase === 'preparing-speech' ? Volume2 : capturing ? Mic : Headphones;
   const animated = voice.phase !== 'idle' || busy;
 
   return <section className="training-voice-panel" aria-label="语音带练控制">
-    <div className="training-voice-topline"><span className="training-voice-eyebrow">VOICE PRACTICE</span><span className="training-voice-browser"><span />浏览器语音</span></div>
+    <div className="training-voice-topline"><span className="training-voice-eyebrow">VOICE PRACTICE</span><span className="training-voice-browser"><span />兼容模式 · 轮流对话</span></div>
     <div className="training-voice-stage">
       <div className={`training-voice-orb${animated ? ' training-voice-orb-active' : ''}${capturing ? ' training-voice-orb-listening' : ''}`} aria-hidden="true"><span /><div>{busy || voice.phase === 'requesting' || voice.phase === 'stopping' ? <Loader2 size={25} className="studio-spin" /> : <StatusIcon size={26} />}</div></div>
       <div className="training-voice-status" role="status" aria-live="polite" aria-atomic="true"><span>{customer ? `模拟客户 · ${customer}` : '把练习，变成一次自然的交谈'}</span><h2>{status.title}</h2><p>{status.detail}</p></div>
       <div className="training-voice-actions">
-        {capturing ? <><button type="button" className="studio-btn training-voice-mic" disabled={voice.phase !== 'listening'} onClick={voice.stopListening}>{voice.phase === 'listening' ? <Square size={14} /> : <Loader2 size={15} className="studio-spin" />}{voice.phase === 'listening' ? '说完了' : voice.phase === 'requesting' ? '等待授权…' : '正在识别…'}</button><button type="button" className="studio-btn studio-btn-ghost" onClick={onCancelListening}><X size={14} />取消识别</button></> : active && <button type="button" className="studio-btn training-voice-mic" disabled={!voice.ready || !voice.inputSupported || busy} onClick={onStartListening}>{voice.ready && !voice.inputSupported ? <MicOff size={16} /> : <Mic size={16} />}{voice.ready && !voice.inputSupported ? '语音识别不可用' : '开始说话'}</button>}
+        {capturing ? <><button type="button" className="studio-btn training-voice-mic" disabled={voice.phase !== 'listening'} onClick={voice.stopListening}>{voice.phase === 'listening' ? <Square size={14} /> : <Loader2 size={15} className="studio-spin" />}{voice.phase === 'listening' ? '结束本句' : voice.phase === 'requesting' ? '等待授权…' : '正在识别…'}</button><button type="button" className="studio-btn studio-btn-ghost" onClick={onCancelListening}><X size={14} />取消识别</button></> : active && <button type="button" className="studio-btn training-voice-mic" disabled={!voice.ready || !voice.inputSupported || busy} onClick={onStartListening}>{voice.ready && !voice.inputSupported ? <MicOff size={16} /> : <Mic size={16} />}{voice.ready && !voice.inputSupported ? '语音识别不可用' : '开始说话'}</button>}
       </div>
     </div>
-    {(capturing || voice.interimTranscript) && <div className="training-voice-transcript" role="status" aria-live="polite"><span><span />实时识别 · 尚未加入回应</span><p>{voice.interimTranscript || (voice.phase === 'requesting' ? '等待麦克风权限…' : voice.phase === 'stopping' ? '正在确认最后一句…' : '正在听，请开始说话…')}</p></div>}
+    {(capturing || voice.interimTranscript) && <div className="training-voice-transcript" role="status" aria-live="polite"><span><span />实时识别 · 完成后自动发送</span><p>{voice.interimTranscript || (voice.phase === 'requesting' ? '等待麦克风权限…' : voice.phase === 'stopping' ? '正在确认最后一句…' : '正在听，请开始说话…')}</p></div>}
     <div className="training-voice-preferences">
       <label className="training-voice-select"><span>客户音色</span><select aria-label="客户中文音色" disabled={!voice.ready || !voice.outputSupported} value={selectedVoice} onChange={event => voice.setVoice(event.target.value)}><option value="">浏览器默认中文音色</option>{chineseVoices.map(item => <option key={item.id} value={item.id}>{item.name} · {item.lang}{item.local ? ' · 本机' : ''}</option>)}</select></label>
       <label className="training-voice-rate"><span>语速 <output>{voice.rate.toFixed(2)}×</output></span><input type="range" aria-label="客户播报语速" aria-valuetext={`${voice.rate.toFixed(2)} 倍速`} min="0.75" max="1.25" step="0.05" value={voice.rate} disabled={!voice.ready || !voice.outputSupported} onChange={event => voice.setRate(Number(event.target.value))} /></label>

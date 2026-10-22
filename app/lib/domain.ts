@@ -274,8 +274,10 @@ export async function executeAction(original:WorkbenchState,role:Role,action:str
     }
     case 'training_reply': {
       session=find(state.trainingSessions,payload.sessionId,'训练');owned(state,session.id,role);if(session.status!=='active')fail('本次训练已经结束，请开始新的训练',409);
+      const voiceTurnId=payload.voiceTurnId===undefined?undefined:text(payload.voiceTurnId,'语音轮次标识',128);
+      if(voiceTurnId&&session.voiceTurnIds?.includes(voiceTurnId)){message='此轮语音已保存';break;}
       if(session.messages.length>=41)fail('本次训练已达到20轮，请结束并查看反馈');
-      const answer=text(payload.text,'练习回答',4000);session.messages.push({role:'user',content:answer});session.messages.push({role:'assistant',content:customerReply(session,answer)});message='客户已回应';break;
+      const answer=text(payload.text,'练习回答',4000);session.messages.push({role:'user',content:answer});session.messages.push({role:'assistant',content:customerReply(session,answer)});if(voiceTurnId)session.voiceTurnIds=[...(session.voiceTurnIds??[]),voiceTurnId];message='客户已回应';break;
     }
     case 'training_finish': {
       session=find(state.trainingSessions,payload.sessionId,'训练');owned(state,session.id,role);if(session.status!=='active')fail('本次训练已经结束',409);

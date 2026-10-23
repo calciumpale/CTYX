@@ -1,4 +1,5 @@
 import { DomainError } from './domain.ts';
+import { requestModelText } from './model-client.ts';
 
 export interface ConnectionCommand {
   action:'save'|'test'|'remove';kind:'model';version:number;
@@ -78,16 +79,8 @@ export async function readConnectionBody(request:Request):Promise<unknown> {
   try{return JSON.parse(new TextDecoder().decode(bytes));}catch{throw new DomainError('API 配置参数格式不正确');}
 }
 export async function testModelConnection(model:EffectiveModel,request:ConnectionFetch=fetch):Promise<{ok:true;detail:string;latencyMs:number}> {
-  const controller=new AbortController();const start=Date.now();const timeout=setTimeout(()=>controller.abort(),12000);
-  try {
-    const response=await request(model.url,{method:'POST',redirect:'manual',headers:{Authorization:`Bearer ${model.key}`,'Content-Type':'application/json'},signal:controller.signal,body:JSON.stringify({model:model.name,max_tokens:16,messages:[{role:'user',content:'Reply with OK.'}]})});
-    if(!response.ok)throw new DomainError(`模型连接测试失败（HTTP ${response.status}），请检查地址、模型名称和密钥`,502);
-    // Provider output is never echoed: an upstream error can contain credentials.
-    const data=await response.json() as {choices?:{message?:{content?:unknown}}[]};
-    if(typeof data?.choices?.[0]?.message?.content!=='string'||!data.choices[0].message.content.trim())throw new DomainError('模型未返回有效文本，请检查接口是否兼容 Chat Completions',502);
-    return {ok:true,detail:'已收到模型有效回复，连接测试通过',latencyMs:Math.max(0,Date.now()-start)};
-  }catch(error){
-    if(error instanceof DomainError)throw error;
-    throw new DomainError(controller.signal.aborted?'模型连接测试超时，请稍后重试':'模型连接测试失败，请检查地址、模型名称和密钥',502);
-  }finally{clearTimeout(timeout);}
+  const start=Date.now();
+  await requestModelText(model,[{role:'user',content:'Reply with OK.'}],{request,purpose:'test'});
+  // Provider content is never echoed by the synthetic connection test.
+  return {ok:true,detail:'已收到模型有效回复，连接测试通过',latencyMs:Math.max(0,Date.now()-start)};
 }

@@ -34,15 +34,41 @@ test('writes enforce same-origin and the streamed body ceiling',async()=>{
 });
 test('model tests send only a synthetic prompt, reject redirects, and redact provider bodies and exceptions',async()=>{
   const config={key:'sk-private-test',url:'https://api.example.com/v1/chat/completions',name:'example-model'};
+  let sentBody:Record<string,unknown>={};
   const result=await testModelConnection(config,async(url,options)=>{
     assert.equal(url,config.url);assert.equal(options?.redirect,'manual');
     assert.equal(new Headers(options?.headers).get('Authorization'),'Bearer sk-private-test');
-    const body=JSON.parse(String(options?.body));assert.equal(body.max_tokens,16);assert.equal(body.model,'example-model');assert.equal(body.messages.length,1);
+    sentBody=JSON.parse(String(options?.body));
     return Response.json({choices:[{message:{content:'ok'}}]});
   });
+  assert.equal(sentBody.max_tokens,256);assert.equal(sentBody.model,'example-model');assert.equal((sentBody.messages as unknown[]).length,1);
   assert.equal(result.ok,true);assert.ok(!JSON.stringify(result).includes(config.key));
   for(const response of [new Response(config.key,{status:401}),new Response(config.key,{status:302,headers:{location:'https://attacker.example'}}),Response.json({error:config.key}),new Response(`{"choices":${config.key}`)]){
     await assert.rejects(testModelConnection(config,async()=>response),(error:unknown)=>error instanceof Error&&!error.message.includes(config.key));
   }
   await assert.rejects(testModelConnection(config,async()=>{throw new Error(`leaked ${config.key}`);}),(error:unknown)=>error instanceof Error&&!error.message.includes(config.key));
+});
+test('connection tests disable default DeepSeek thinking and budget enough tokens for a visible answer',async()=>{
+  const config={key:'sk-private-test',url:'https://api.deepseek.com/chat/completions',name:'deepseek-v4-pro'};
+  let sentBody:Record<string,unknown>={};
+  const result=await testModelConnection(config,async(_url,options)=>{
+    sentBody=JSON.parse(String(options.body));
+    return Response.json({choices:[{finish_reason:'stop',message:{role:'assistant',content:'OK'}}]});
+  });
+  assert.deepEqual(sentBody.thinking,{type:'disabled'});assert.equal(sentBody.max_tokens,256);
+  assert.equal(result.ok,true);
+});
+test('connection tests accept standard text content parts',async()=>{
+  const result=await testModelConnection({key:'synthetic-key',url:'https://api.example.com/v1/chat/completions',name:'generic'},async()=>Response.json({choices:[{finish_reason:'stop',message:{role:'assistant',content:[{type:'text',text:'OK'}]}}]}));
+  assert.equal(result.ok,true);
+});
+test('connection tests explain exhausted reasoning output and reject partial truncated answers',async()=>{
+  const config={key:'synthetic-key',url:'https://api.deepseek.com/chat/completions',name:'deepseek-reasoner'};
+  for(const content of ['', 'partial answer']){
+    await assert.rejects(testModelConnection(config,async()=>Response.json({choices:[{finish_reason:'length',message:{role:'assistant',reasoning_content:'private reasoning',content}}]})),(error:unknown)=>error instanceof Error&&/额度|截断/.test(error.message)&&!error.message.includes('private reasoning'));
+  }
+});
+test('connection tests distinguish thinking without a final answer from generic empty content',async()=>{
+  const config={key:'synthetic-key',url:'https://api.deepseek.com/chat/completions',name:'deepseek-reasoner'};
+  await assert.rejects(testModelConnection(config,async()=>Response.json({choices:[{finish_reason:'stop',message:{role:'assistant',reasoning_content:'private reasoning',content:null}}]})),(error:unknown)=>error instanceof Error&&/思考|推理/.test(error.message)&&!error.message.includes('private reasoning'));
 });

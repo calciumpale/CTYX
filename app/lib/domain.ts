@@ -9,7 +9,7 @@ export class DomainError extends Error {
 interface WorkflowFrame {knowledgeIds:string[];answerIds:string[];targets?:string[];}
 interface WorkflowCheckpoint {workflow:Workflow;role:Role;deal?:Deal;deals:Deal[];knowledge:Record<string,Knowledge>;answers:Record<string,string>;frames:Record<string,WorkflowFrame>;order:string[];cursor:number;}
 type StoredState=WorkbenchState & {_access?:Record<string,string>;_workflowRuns?:Record<string,WorkflowCheckpoint>};
-export interface GenerationInput {query:string;agentId:AgentId;deal?:Deal;deals:Deal[];knowledge:Knowledge[];instruction?:string;previous?:string;}
+export interface GenerationInput {query:string;agentId:AgentId;deal?:Deal;deals:Deal[];knowledge:Knowledge[];instruction?:string;previous?:string;history?:{query:string;answer:string}[];purpose?:'chat'|'workflow';}
 export interface GenerationOutput {answer:string;mode:'demo'|'live';}
 export interface ActionContext {now?:string;generate?:(input:GenerationInput)=>Promise<GenerationOutput>;trustedRecording?:FollowupRecording;}
 const agentIds=new Set(AGENTS.map(item=>item.id));
@@ -166,8 +166,12 @@ function retrieve(state:WorkbenchState,query:string):Knowledge[] {
   return rankedKnowledge(publishedKnowledge(state),query);
 }
 function rankedKnowledge(entries:Knowledge[],query:string):Knowledge[] {
-  const terms=new Set(query.match(/[\p{Script=Han}]{2}|[A-Za-z0-9]{2,}/gu)??[]);
-  return entries.map(item=>({item,score:(query.includes(item.title)?100:0)+[...terms].filter(term=>`${item.title}${item.content}`.includes(term)).length})).sort((a,b)=>b.score-a.score).slice(0,4).map(item=>item.item);
+  const terms=new Set(query.match(/[A-Za-z0-9]{2,}/g)??[]);
+  for(const segment of query.match(/[\p{Script=Han}]+/gu)??[]) {
+    const characters=Array.from(segment);
+    for(let index=0;index<characters.length-1;index++)terms.add(characters.slice(index,index+2).join(''));
+  }
+  return entries.map(item=>({item,score:(query.includes(item.title)?100:0)+[...terms].filter(term=>`${item.title}${item.content}`.includes(term)).length})).filter(entry=>entry.score>0).sort((a,b)=>b.score-a.score).slice(0,4).map(item=>item.item);
 }
 function chooseDeal(state:WorkbenchState,role:Role,query:string,dealId?:unknown):Deal|undefined {
   if(role==='sales'&&state.deals.some(deal=>deal.ownerId!=='sales-1'&&query.includes(deal.name))) fail('当前销售体验视角无权访问问题中提及的客户',403);
@@ -176,8 +180,36 @@ function chooseDeal(state:WorkbenchState,role:Role,query:string,dealId?:unknown)
   return matched?visibleDeal(state,role,matched.id):undefined;
 }
 const agentName=(id:AgentId)=>AGENTS.find(item=>item.id===id)!.name;
+function conversationRuns(state:StoredState,role:Role,value:unknown):Run[] {
+  if(value===undefined)return [];
+  if(!Array.isArray(value)||value.length>6||value.some(id=>typeof id!=='string'||!id.trim()||id.length>100)||new Set(value).size!==value.length)fail('对话历史格式不正确，最多引用6条运行记录');
+  const visible=projectState(state,role).runs;
+  return value.map(id=>{
+    const existing=find(state.runs,id,'对话记录');
+    const run=visible.find(item=>item.id===existing.id);
+    if(!run)fail('当前视角无权访问这条对话记录',403);
+    if(run.workflowId)fail('对话历史只能引用主对话记录');
+    return run;
+  });
+}
+function boundedConversation(runs:Run[]):NonNullable<GenerationInput['history']> {
+  const history:NonNullable<GenerationInput['history']>=[];let remaining=20000;
+  for(const run of [...runs].reverse()) {
+    const turn={query:run.query.slice(0,6000),answer:run.answer.slice(0,4000)};
+    const size=turn.query.length+turn.answer.length;if(size>remaining)break;
+    history.unshift(turn);remaining-=size;
+  }
+  return history;
+}
+function isFollowup(query:string):boolean {
+  if(/^(?:请)?(?:换(?:一?个)?话题|新(?:的)?问题|另(?:外)?(?:一?个)?问题|另外问|重新开始)/.test(query))return false;
+  return /他们|她们|它们|该客户|这个客户|这家|那家|对方|上面|上述|刚才|之前的|前面的/.test(query)
+    || /^(?:请|麻烦|帮我)?(?:继续|接着|再(?:简短|短|详细|展开|补充|解释|改|写|整理|说明)|还有呢|[他她它](?:的|有|需|预|要|说|会|能|是|呢))/.test(query)
+    || /^(?:那|那么|还有)(?:预算|需求|风险|时间|价格|租金|免租|合同|决策人|下一步|呢|？|\?)/.test(query);
+}
 export function demoGenerate(input:GenerationInput):GenerationOutput {
   const {agentId,deal,query,deals,knowledge,instruction}=input;
+  if(input.purpose==='chat'&&!deal&&!deals.length&&!knowledge.length)return {answer:'演示生成 · 未调用外部模型\n\n当前是本地规则演示，无法生成此问题的通用回答。请在设置中配置模型连接后重试，也可以先选择示例客户体验销售任务。',mode:'demo'};
   const name=deal?.name??'当前商机';const facts=deal?`${name}目前处于${deal.stage}阶段，已记录的需求是${deal.needs.join('、')}。`:'以下只使用当前体验视角可见的合成示例资料。';
   let answer='';
   if(agentId==='insight') answer=`${facts}\n\n客户洞察：${deal?.summary??'先确认搬迁或拓店动因、空间用途、预算与交付时间，再与使用者及签约决策人核对优先条件。'}\n\n待核实的问题：${deal?`与${deal.contact}确认谁对预算和签约负责；${deal.risks.join('；')}。`:'谁提出需求、谁批准预算、谁有否决权？当前有哪些备选园区，最晚何时完成决策？'}\n\n建议下一步：${deal?.nextAction??'组织一次包含需求人与决策人的30分钟沟通，形成已确认事实和待核实事项清单。'}`;
@@ -192,26 +224,34 @@ export function demoGenerate(input:GenerationInput):GenerationOutput {
   if(knowledge.length) answer+=`\n\n依据资料：${knowledge.map(item=>item.title).join('、')}。`;
   return {answer:`演示生成 · 未调用外部模型\n\n${answer}`,mode:'demo'};
 }
-async function buildRun(state:StoredState,role:Role,query:string,context:ActionContext,now:string,options:{agentId?:unknown;dealId?:unknown}={}):Promise<Run> {
+async function buildRun(state:StoredState,role:Role,query:string,context:ActionContext,now:string,options:{agentId?:unknown;dealId?:unknown;conversationRunIds?:unknown}={}):Promise<Run> {
   const started=Date.now();const steps:TraceStep[]=[];const citations:Run['citations']=[];const usedAgents:AgentId[]=[];let mode:Run['mode']='demo';const answers:string[]=[];
-  const deal=chooseDeal(state,role,query,options.dealId);const visibleDeals=role==='sales'?state.deals.filter(item=>item.ownerId==='sales-1'):state.deals;
+  const priorRuns=conversationRuns(state,role,options.conversationRunIds);const history=boundedConversation(priorRuns);const latest=priorRuns.at(-1);
+  const directDeal=chooseDeal(state,role,query,options.dealId);const followup=!!latest&&!directDeal&&isFollowup(query);
+  const deal=directDeal??(followup?chooseDeal(state,role,latest!.query,latest!.dealId):undefined);
+  if(options.agentId!==undefined&&!agentIds.has(options.agentId as AgentId))fail('请选择五位领域专家之一');
+  const explicitIntent=/培训|练习|带练|扮演|陪练|风险|合同|免租|审批|合规|资质|违约|授权|优先|预测|健康|本周|商机|漏斗|推进|拜访|方案|策略|开场|话术|谈判/.test(query);
+  const inheritedRoute=followup&&!explicitIntent?latest!.agentIds.filter(id=>agentIds.has(id)):[];
+  const routed=options.agentId?[options.agentId as AgentId]:inheritedRoute.length?inheritedRoute:routeAgents(query);
+  const retrievalQuery=followup?`${latest!.query}\n${query}`:query;
+  const portfolio=routed.includes('opportunity')&&/商机|漏斗|客户|团队|招商|销售|跟进/.test(retrievalQuery);
+  const visibleDeals=role==='sales'?state.deals.filter(item=>item.ownerId==='sales-1'):state.deals;
+  const scopedDeals=deal?[deal]:portfolio?visibleDeals:[];
   let knowledge:Knowledge[]=[];
   const step=(title:string,detail:string,status:TraceStep['status']='success',agent?:AgentId,duration=0)=>steps.push({id:uid('step'),title,detail,status,agent,duration});
-  const getKnowledge=()=> {knowledge=retrieve(state,query);for(const item of knowledge) if(!citations.some(entry=>entry.id===item.id))citations.push({id:item.id,title:item.title,excerpt:item.content.slice(0,240)});return knowledge;};
+  const getKnowledge=()=> {knowledge=retrieve(state,retrievalQuery);for(const item of knowledge) if(!citations.some(entry=>entry.id===item.id))citations.push({id:item.id,title:item.title,excerpt:item.content.slice(0,240)});return knowledge;};
   const generate=async (agentId:AgentId,instruction?:string,previous=answers.join('\n\n'))=> {
-    const tick=Date.now();const input:GenerationInput={query,agentId,deal,deals:visibleDeals,knowledge,instruction,previous};
+    const tick=Date.now();const input:GenerationInput={query,agentId,deal,deals:scopedDeals,knowledge,instruction,previous,history,purpose:'chat'};
     const output=context.generate?await context.generate(input):demoGenerate(input);
     if(output.mode==='live')mode='live';usedAgents.push(agentId);answers.push(`${agentName(agentId)}\n${output.answer}`);
     step(`${agentName(agentId)}生成`,`${output.mode==='demo'?'本地规则演示，未请求外部模型':'服务端外部模型返回'}；使用${knowledge.length}条生效资料${deal?`；客户：${deal.name}`:''}${instruction?`；节点指令：${instruction}`:''}`, 'success',agentId,Date.now()-tick);
     return `${agentName(agentId)}\n${output.answer}`;
   };
-    if(options.agentId!==undefined&&!agentIds.has(options.agentId as AgentId))fail('请选择五位领域专家之一');
-    const routed=options.agentId?[options.agentId as AgentId]:routeAgents(query);
-    step('主 Agent 识别意图',`${role==='manager'?'销售管理者':'销售'}主 Agent ${options.agentId?'按指定专家':'按问题关键词路由'}至${routed.map(agentName).join('、')}。`);
+    step('主 Agent 识别意图',`${role==='manager'?'销售管理者':'销售'}主 Agent ${options.agentId?'按指定专家':inheritedRoute.length?'沿用当前对话专家':'按问题关键词路由'}至${routed.map(agentName).join('、')}。`);
     getKnowledge();step('检索生效知识',`检索当前空间的${knowledge.length}条生效资料；未读取候选或退回Skill。`);
     for(const agentId of routed)await generate(agentId);
     step('核对建议边界','保留待核实事项；健康度为规则分值；未自动承诺商务条件或修改商机。');
-  return {id:uid('run'),query,answer:answers.join('\n\n────────\n\n'),agentIds:[...new Set(usedAgents)],steps,citations,mode,createdAt:now,duration:Date.now()-started};
+  return {id:uid('run'),query,answer:answers.join('\n\n────────\n\n'),agentIds:[...new Set(usedAgents)],steps,citations,mode,createdAt:now,duration:Date.now()-started,...(deal?{dealId:deal.id}:{})};
 }
 
 const clip=(value:string,max=3000)=>value.length>max?`${value.slice(0,max)}\n（内容较长，已截取）`:value;
@@ -250,7 +290,10 @@ async function executeWorkflow(state:StoredState,run:Run,checkpoint:WorkflowChec
       if(node.type==='knowledge') {
         const available=publishedKnowledge(state);const selected=node.knowledgeIds;
         if(selected?.some(id=>!available.some(item=>item.id===id)))fail('所选知识不存在或尚未发布，请重新选择生效资料');
-        const entries=rankedKnowledge(selected===undefined?available:available.filter(item=>selected.includes(item.id)),run.query);
+        const candidates=selected===undefined?available:available.filter(item=>selected.includes(item.id));
+        const ranked=rankedKnowledge(candidates,run.query);
+        // Explicit bindings remain available even when the current query has no keyword match.
+        const entries=selected===undefined?ranked:[...ranked,...candidates.filter(item=>!ranked.includes(item))].slice(0,4);
         for(const entry of entries) {
           checkpoint.knowledge[entry.id]={...entry,content:clip(entry.content,6000)};
           if(!run.citations.some(item=>item.id===entry.id))run.citations.push({id:entry.id,title:entry.title,excerpt:entry.content.slice(0,240)});
@@ -260,7 +303,7 @@ async function executeWorkflow(state:StoredState,run:Run,checkpoint:WorkflowChec
       }
       if(node.type==='agent') {
         const knowledge=frame.knowledgeIds.map(id=>own(checkpoint.knowledge,id)).filter((item):item is Knowledge=>!!item);
-        const generation:GenerationInput={query:run.query,agentId:node.agentId!,deal:checkpoint.deal,deals:checkpoint.deals,knowledge,instruction:node.instruction,previous};
+        const generation:GenerationInput={query:run.query,agentId:node.agentId!,deal:checkpoint.deal,deals:checkpoint.deals,knowledge,instruction:node.instruction,previous,purpose:'workflow'};
         const output=context.generate?await context.generate(generation):demoGenerate(generation);
         if(typeof output.answer!=='string'||!output.answer.trim())fail('专家未返回有效文本，请检查模型连接后重试',502);
         checkpoint.answers[node.id]=`${agentName(node.agentId!)}\n${clip(output.answer.trim(),6000)}`;
@@ -370,7 +413,7 @@ export async function executeAction(original:WorkbenchState,role:Role,action:str
       activity(state,role,'应用已发布',`${workflow.name} · v${workflow.version}`,'workflow',now);message='已发布，销售视角现在可以使用此版本';break;
     }
     case 'chat': {
-      const query=text(payload.query,'问题',6000);run=await buildRun(state,role,query,context,now,{agentId:payload.agentId,dealId:payload.dealId});state.runs.unshift(run);mark(state,run.id,role);activity(state,role,'专家协作已完成',`${run.agentIds.map(agentName).join('、')} · ${run.mode==='demo'?'演示生成':'外部模型生成'}`,'run',now);message=run.mode==='demo'?'已完成演示生成，未调用外部模型':'已完成服务端模型生成';break;
+      const query=text(payload.query,'问题',6000);run=await buildRun(state,role,query,context,now,{agentId:payload.agentId,dealId:payload.dealId,conversationRunIds:payload.conversationRunIds});state.runs.unshift(run);mark(state,run.id,role);activity(state,role,'专家协作已完成',`${run.agentIds.map(agentName).join('、')} · ${run.mode==='demo'?'演示生成':'外部模型生成'}`,'run',now);message=run.mode==='demo'?'已完成演示生成，未调用外部模型':'已完成服务端模型生成';break;
     }
     case 'workflow_run': {
       if(payload.mode!==undefined&&payload.mode!=='draft'&&payload.mode!=='published')fail('运行模式不正确');

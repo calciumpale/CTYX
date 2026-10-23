@@ -2,27 +2,29 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { assertRevision, DomainError, executeAction, projectState, validateWorkflow } from '../app/lib/domain.ts';
 import { createSeed } from '../app/lib/seed.ts';
+import { defaultTrainingProfile } from '../app/lib/training-profile.ts';
 import type { Workflow } from '../app/lib/types.ts';
 
 const context = { now: '2026-10-23T08:00:00.000Z' };
+const trainingStart = (scenario:string) => ({scenario,profile:defaultTrainingProfile(scenario),confirmed:true});
 const rejectsStatus = (status: number) => (error: unknown) => error instanceof DomainError && error.status === status;
 const flow = (): Workflow => ({id:'test',name:'测试',description:'',status:'draft',version:1,updatedAt:context.now,nodes:[{id:'s',type:'start',label:'开始',x:0,y:0},{id:'a',type:'agent',agentId:'risk',label:'风控',x:1,y:0},{id:'o',type:'output',label:'输出',x:2,y:0}],edges:[{from:'s',to:'a'},{from:'a',to:'o'}]});
 
 test('a retried automatic voice turn is saved once and remains ownership protected', async () => {
-  const started = await executeAction(createSeed(context.now), 'sales', 'training_start', {scenario:'首访剧本'}, context);
+  const started = await executeAction(createSeed(context.now), 'sales', 'training_start', trainingStart('首访剧本'), context);
   const payload = {sessionId:started.session!.id,text:'我们先确认面积和交付时间。',voiceTurnId:'voice:test-turn-1'};
   const first = await executeAction(started.state, 'sales', 'training_reply', payload, context);
   const retry = await executeAction(first.state, 'sales', 'training_reply', payload, context);
   assert.equal(retry.session!.messages.length, 3);
-  const privateSession=await executeAction(first.state,'manager','training_start',{scenario:'首访剧本'},context);
+  const privateSession=await executeAction(first.state,'manager','training_start',trainingStart('首访剧本'),context);
   await assert.rejects(executeAction(privateSession.state,'sales','training_reply',{...payload,sessionId:privateSession.session!.id},context), rejectsStatus(403));
 });
 
 test('training openings match the selected first-visit and competitor scenarios', async () => {
   const state = createSeed(context.now);
-  const firstVisit = await executeAction(state, 'sales', 'training_start', { scenario: '首访剧本' }, context);
+  const firstVisit = await executeAction(state, 'sales', 'training_start', trainingStart('首访剧本'), context);
   assert.match(firstVisit.session!.messages[0].content, /办公地点|面积/);
-  const competitor = await executeAction(state, 'sales', 'training_start', { scenario: '竞品比较' }, context);
+  const competitor = await executeAction(state, 'sales', 'training_start', trainingStart('竞品比较'), context);
   assert.match(competitor.session!.messages[0].content, /比较|报价/);
 });
 
@@ -94,7 +96,7 @@ test('draft saves cannot retain published status and sales cannot execute drafts
 
 test('training is multi-turn, scores observed answers and rejects replies after finish', async () => {
   const state=createSeed(context.now);
-  const started=await executeAction(state,'sales','training_start',{scenario:'免租期谈判'},context);
+  const started=await executeAction(state,'sales','training_start',trainingStart('免租期谈判'),context);
   const replied=await executeAction(started.state,'sales','training_reply',{sessionId:started.session!.id,text:'理解您的顾虑，预计什么时候开业？我整理装修期和预算，明天下午一起确认；免租政策还需要审批。'},context);
   assert.equal(replied.session!.messages.length,3);
   const finished=await executeAction(replied.state,'sales','training_finish',{sessionId:replied.session!.id},context);

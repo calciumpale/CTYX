@@ -1,5 +1,8 @@
 import { AGENTS, STAGES } from './types.ts';
 import type { AgentId, ApiResult, Deal, FlowNode, FollowupRecording, Knowledge, PublishedWorkflow, Role, Run, Skill, TraceStep, TrainingSession, WorkbenchState, Workflow } from './types.ts';
+import { defaultTrainingProfile, validateTrainingProfile } from './training-profile.ts';
+import { demoTrainingGenerate } from './training-dialogue.ts';
+import type { TrainingGenerationInput } from './training-dialogue.ts';
 
 export class DomainError extends Error {
   status:number;
@@ -11,7 +14,7 @@ interface WorkflowCheckpoint {workflow:Workflow;role:Role;deal?:Deal;deals:Deal[
 type StoredState=WorkbenchState & {_access?:Record<string,string>;_workflowRuns?:Record<string,WorkflowCheckpoint>};
 export interface GenerationInput {query:string;agentId:AgentId;deal?:Deal;deals:Deal[];knowledge:Knowledge[];instruction?:string;previous?:string;history?:{query:string;answer:string}[];purpose?:'chat'|'workflow';}
 export interface GenerationOutput {answer:string;mode:'demo'|'live';}
-export interface ActionContext {now?:string;generate?:(input:GenerationInput)=>Promise<GenerationOutput>;trustedRecording?:FollowupRecording;}
+export interface ActionContext {now?:string;generate?:(input:GenerationInput)=>Promise<GenerationOutput>;trainingGenerate?:(input:TrainingGenerationInput)=>Promise<GenerationOutput>;trustedRecording?:FollowupRecording;}
 const agentIds=new Set(AGENTS.map(item=>item.id));
 const nodeTypes=new Set(['start','intent','knowledge','agent','review','output']);
 const managerActions=new Set(['skill_review','knowledge_add','workflow_save','workflow_publish','workflow_review']);
@@ -354,14 +357,10 @@ function trainingFeedback(session:TrainingSession):NonNullable<TrainingSession['
   ];
   return rubric.map(item=>{const matched=replies.find(reply=>item.patterns.some(pattern=>pattern.test(reply)));const joined=replies.join('\n');let score=item.patterns.filter(pattern=>pattern.test(joined)).length*5;if(item.label==='合规边界'&&/我保证|肯定能批|直接给您|不用审批/.test(joined))score=0;return {label:item.label,score,evidence:matched?`规则演示依据：“${matched.slice(0,160)}”${score===0?'；检测到越权保证表达。':''}`:'本次尚无符合该维度关键词的回答，规则无法确认。',suggestion:item.suggestion};});
 }
-function customerReply(session:TrainingSession,answer:string):string {
-  const turns=session.messages.filter(item=>item.role==='user').length;
-  if(/培训|演练/.test(session.scenario)&&turns>5)return '（演示客户）我们已聊了几个关键点，请帮我总结已确认条件、待核实事项和下一步安排。';
-  if(/我保证|肯定能批|不用审批|直接给您/.test(answer))return '（演示客户）这个优惠您能直接决定吗？请把正式审批条件和书面确认时间说清楚。';
-  if(/预算|成本|装修|开业/.test(answer)&&turns===1)return '（演示客户）我们预计两个月后开业，装修大约需要45天。预算比较紧，我担心交付延期还要承担租金，你们有什么可比较的方案？';
-  if(/审批|授权/.test(answer))return '（演示客户）我理解需要审批。那您能在什么时间给我明确答复？在审批前，我们可以先核实哪些条件？';
-  if(/明天|周|下午|时间|确认/.test(answer))return '（演示客户）可以，我希望下次看到具体的费用和交付清单。请说清谁来提供、哪些条件还需要确认。';
-  return turns%2===0?'（演示客户）我还需要和合伙人比较总成本。除了价格，您说的交付与配套价值有什么依据？':'（演示客户）您先别急着给方案。我最担心的是装修和开业排期，您还需要了解哪些情况？';
+async function trainingResponse(input:TrainingGenerationInput,context:ActionContext):Promise<GenerationOutput> {
+  const generated=context.trainingGenerate?await context.trainingGenerate(structuredClone(input)):demoTrainingGenerate(input);
+  if(!generated||typeof generated.answer!=='string'||!generated.answer.trim()||generated.answer.length>2000||!['live','demo'].includes(generated.mode))fail('客户回复格式或长度异常，请重试',502);
+  return {...generated,answer:generated.answer.trim()};
 }
 
 /** Returns an unfiltered canonical state; only projectState may be sent to a client. */
@@ -436,14 +435,24 @@ export async function executeAction(original:WorkbenchState,role:Role,action:str
       activity(state,role,'应用运行已审核',`${run.query.slice(0,100)} · ${note}`,'workflow',now);break;
     }
     case 'training_start': {
-      const scenario=text(payload.scenario,'训练场景',1000);session={id:uid('training'),scenario,customer:'园区招商客户 · 演示扮演',messages:[{role:'assistant',content:`（演示客户）${/决策|需求|首次|首访|拜访/.test(scenario)?'我们在考虑换办公地点，但团队对面积和交付时间还没达成一致。您想先了解什么？':/竞品|比较/.test(scenario)?'我们也在比较隔壁园区的报价，租金看起来比这里低。您能说清两边的费用和交付条件有什么区别吗？':'我对这里有兴趣，但别的园区给的条件更优惠。装修还需要时间，你们能直接给60天免租吗？'}`}],status:'active',createdAt:now};state.trainingSessions.unshift(session);mark(state,session.id,role);message='演示训练已开始，结束后按实际回答进行规则评分';break;
+      if(payload.confirmed!==true)fail('请先确认客户画像后再开始训练');
+      const scenario=text(payload.scenario,'训练场景',1000);
+      let profile;try {profile=validateTrainingProfile(payload.profile);}catch(error){fail(error instanceof TypeError?error.message:'客户画像格式不正确');}
+      const opening=await trainingResponse({scenario,profile,messages:[]},context);
+      session={id:uid('training'),scenario,profile,mode:opening.mode,customer:`${profile.name} · ${profile.role}`,messages:[{role:'assistant',content:opening.answer}],status:'active',createdAt:now};
+      state.trainingSessions.unshift(session);mark(state,session.id,role);message=opening.mode==='live'?'客户对练已开始':'演示对练已开始';break;
     }
     case 'training_reply': {
       session=find(state.trainingSessions,payload.sessionId,'训练');owned(state,session.id,role);if(session.status!=='active')fail('本次训练已经结束，请开始新的训练',409);
       const voiceTurnId=payload.voiceTurnId===undefined?undefined:text(payload.voiceTurnId,'语音轮次标识',128);
       if(voiceTurnId&&session.voiceTurnIds?.includes(voiceTurnId)){message='此轮语音已保存';break;}
       if(session.messages.length>=41)fail('本次训练已达到20轮，请结束并查看反馈');
-      const answer=text(payload.text,'练习回答',4000);session.messages.push({role:'user',content:answer});session.messages.push({role:'assistant',content:customerReply(session,answer)});if(voiceTurnId)session.voiceTurnIds=[...(session.voiceTurnIds??[]),voiceTurnId];message='客户已回应';break;
+      const answer=text(payload.text,'练习回答',4000);
+      const profile=session.profile??defaultTrainingProfile(session.scenario);
+      const messages:TrainingSession['messages']=[...session.messages,{role:'user',content:answer}];
+      const response=await trainingResponse({scenario:session.scenario,profile,messages},context);
+      session.mode=response.mode;session.messages=[...messages,{role:'assistant',content:response.answer}];
+      if(voiceTurnId)session.voiceTurnIds=[...(session.voiceTurnIds??[]),voiceTurnId];message='客户已回应';break;
     }
     case 'training_finish': {
       session=find(state.trainingSessions,payload.sessionId,'训练');owned(state,session.id,role);if(session.status!=='active')fail('本次训练已经结束',409);

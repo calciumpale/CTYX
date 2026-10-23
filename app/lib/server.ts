@@ -5,6 +5,8 @@ import { createSeed } from './seed.ts';
 import { readEffectiveModel } from './connection-store.ts';
 import { requestModelText } from './model-client.ts';
 import { buildModelMessages } from './model-messages.ts';
+import { buildTrainingMessages, demoTrainingGenerate } from './training-dialogue.ts';
+import type { TrainingGenerationInput } from './training-dialogue.ts';
 import type { ApiResult, Role, WorkbenchState } from './types.ts';
 
 export const ROLE_COOKIE='ctai_experience_role';
@@ -52,13 +54,17 @@ async function generate(input:GenerationInput,model:{key:string;url:string;name:
   if(!model)return demoGenerate(input);
   return {answer:await requestModelText(model,buildModelMessages(input)),mode:'live'};
 }
+async function generateTraining(input:TrainingGenerationInput,model:{key:string;url:string;name:string}|null):Promise<GenerationOutput> {
+  if(!model)return demoTrainingGenerate(input);
+  return {answer:await requestModelText(model,buildTrainingMessages(input)),mode:'live'};
+}
 export async function readWorkbench(userId:string,role:Role,siteOrigin='https://production.invalid'):Promise<WorkbenchState> {
   return projectState(await loadWorkspace(userId,siteOrigin),role);
 }
 export async function mutateWorkbench(userId:string,role:Role,action:string,payload:Record<string,unknown>,revision:unknown,siteOrigin='https://production.invalid'):Promise<ApiResult> {
   const state=await loadWorkspace(userId,siteOrigin);assertRevision(state,revision);
   const model=await readEffectiveModel(userId,siteOrigin);
-  const result=await executeAction(state,role,action,payload,{generate:input=>generate(input,model)});
+  const result=await executeAction(state,role,action,payload,{generate:input=>generate(input,model),trainingGenerate:input=>generateTraining(input,model)});
   await saveWorkspace(userId,state.revision,result.state);
   return {...result,state:projectState(result.state,role)};
 }

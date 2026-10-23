@@ -134,6 +134,8 @@ uvicorn app:app --env-file .env --host 127.0.0.1 --port 8001 --workers 1 --ws-ma
 
 脚本从 `.env` 读取本地 secret 签发一次测试票据，以实时速度发送文件，要求真实 ASR 返回非空 final，将结果写到 ignored `models/asr-smoke.json`，不会打印票据或密钥。此验证不代替浏览器采集、声学回声消除或 TTS 验收。
 
+完整往返验证可运行 `.venv/bin/python smoke_roundtrip.py --wav ../outputs/qa/native-tts-sample-sid-58.wav`：使用与合成音频一致的咖啡店免租期画像并确认，创建并结束一条本地训练，检查打断、自动提交去重和客户原文播报。`--root` 指定本地 Worker（默认 `http://127.0.0.1:5173`）；`--gateway-url wss://<gateway>/ws --origin https://<workbench>` 可验证公网入口。票据始终由本地 Worker 签发，不读取密钥；`--origin` 只改变 WebSocket Origin。
+
 无权重、无网络单元/ASGI/WebSocket 测试：
 
 ```sh

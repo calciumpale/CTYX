@@ -16,8 +16,8 @@ import numpy as np
 import websockets
 
 
-async def main(wav_path, output_dir, run_id):
-    root = 'http://127.0.0.1:5173'
+async def main(wav_path, output_dir, run_id, root='http://127.0.0.1:5173', gateway_url=None, origin=None):
+    root = root.rstrip('/')
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
     async with httpx.AsyncClient(base_url=root, headers={'Cookie':'__sites_local_auth=1; ctai_experience_role=sales','Origin':root}, timeout=40,trust_env=False) as api:
@@ -26,7 +26,19 @@ async def main(wav_path, output_dir, run_id):
             response=await api.post('/api/workbench',json={'action':name,'payload':payload,'revision':state['revision']})
             response.raise_for_status()
             return response.json()
-        started=await action('training_start',{'scenario':'首访剧本 · 本地合成音频验证'})
+        # Synthetic rent-free negotiation facts match native-tts-sample-sid-58.wav.
+        started=await action('training_start',{
+            'scenario':'免租期谈判 · 合成音频验证',
+            'profile':{
+                'name':'合成客户陈总','industry':'精品咖啡','role':'联合创始人',
+                'need':'约100平方米临街商铺，便于外带并能满足装修要求',
+                'budget':'月租预算2万元以内，控制开业前总投入',
+                'timeline':'两个月后开业，装修预计45天',
+                'decisionMode':'与合伙人共同决策','communicationStyle':'谨慎细致',
+                'concern':'装修期间的租金支出，以及交付延期影响开业','difficulty':'进阶',
+            },
+            'confirmed':True,
+        })
         session=started['session']
         credential=await api.post('/api/training-voice',json={'sessionId':session['id']})
         credential.raise_for_status()
@@ -39,7 +51,7 @@ async def main(wav_path, output_dir, run_id):
         samples=np.interp(np.arange(int(len(samples)*16000/rate))*rate/16000,np.arange(len(samples)),samples).astype('<i2')
         pcm=samples.tobytes()+bytes(16000*2*2)
         measurements={'runId':run_id,'syntheticInput':str(wav_path),'microphoneUsed':False,'sessionId':session['id']}
-        async with websockets.connect(configuration['url'],origin=root,max_size=128*1024,proxy=None) as socket:
+        async with websockets.connect(gateway_url or configuration['url'],origin=origin or root,max_size=128*1024,proxy=None) as socket:
             await socket.send(json.dumps({'type':'session.start','token':configuration['token']}))
             ready=json.loads(await socket.recv())
             if ready.get('type')!='session.ready':
@@ -126,13 +138,16 @@ if __name__=='__main__':
     parser=argparse.ArgumentParser()
     parser.add_argument('--wav',required=True)
     parser.add_argument('--output-dir',default='../outputs/qa/local-voice')
+    parser.add_argument('--root',default='http://127.0.0.1:5173',help='Local Worker API base URL (synthetic dev sign-in)')
+    parser.add_argument('--gateway-url',help='Override the Worker-provided WebSocket URL; still obtain the ticket from the Worker')
+    parser.add_argument('--origin',help='WebSocket Origin override; API Origin remains --root')
     args=parser.parse_args()
     run_id=uuid.uuid4().hex
     report=Path(args.output_dir)/'roundtrip.json'
     report.parent.mkdir(parents=True,exist_ok=True)
     report.write_text(json.dumps({'runId':run_id,'result':'running','microphoneUsed':False}))
     try:
-        asyncio.run(main(args.wav,args.output_dir,run_id))
+        asyncio.run(main(args.wav,args.output_dir,run_id,args.root,args.gateway_url,args.origin))
     except BaseException as error:
         report.write_text(json.dumps({'runId':run_id,'result':'failed','errorType':type(error).__name__,'microphoneUsed':False}))
         raise

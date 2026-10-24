@@ -46,10 +46,10 @@ export function TrainingVoiceControls({ voice, customer, hasSession, active, bus
   const animated = voice.phase !== 'idle' || busy;
 
   return <section className="training-voice-panel" aria-label="语音带练控制">
-    <div className="training-voice-topline"><span className="training-voice-eyebrow">VOICE PRACTICE</span><span className="training-voice-browser"><span />兼容模式 · 轮流对话</span></div>
+    <div className="training-voice-topline"><span className="training-voice-browser"><span />兼容模式 · 轮流对话</span></div>
     <div className="training-voice-stage">
       <div className={`training-voice-orb${animated ? ' training-voice-orb-active' : ''}${capturing ? ' training-voice-orb-listening' : ''}`} aria-hidden="true"><span /><div>{busy || voice.phase === 'requesting' || voice.phase === 'stopping' ? <Loader2 size={25} className="studio-spin" /> : <StatusIcon size={26} />}</div></div>
-      <div className="training-voice-status" role="status" aria-live="polite" aria-atomic="true"><span>{customer ? `模拟客户 · ${customer}` : '把练习，变成一次自然的交谈'}</span><h2>{status.title}</h2><p>{status.detail}</p></div>
+      <div className="training-voice-status" role="status" aria-live="polite" aria-atomic="true"><span>{customer ? customer : '把练习，变成一次自然的交谈'}</span><h2>{status.title}</h2><p>{status.detail}</p></div>
       <div className="training-voice-actions">
         {capturing ? <><button type="button" className="studio-btn training-voice-mic" disabled={voice.phase !== 'listening'} onClick={voice.stopListening}>{voice.phase === 'listening' ? <Square size={14} /> : <Loader2 size={15} className="studio-spin" />}{voice.phase === 'listening' ? '结束本句' : voice.phase === 'requesting' ? '等待授权…' : '正在识别…'}</button><button type="button" className="studio-btn studio-btn-ghost" onClick={onCancelListening}><X size={14} />取消识别</button></> : active && <button type="button" className="studio-btn training-voice-mic" disabled={!voice.ready || !voice.inputSupported || busy} onClick={onStartListening}>{voice.ready && !voice.inputSupported ? <MicOff size={16} /> : <Mic size={16} />}{voice.ready && !voice.inputSupported ? '语音识别不可用' : '开始说话'}</button>}
       </div>

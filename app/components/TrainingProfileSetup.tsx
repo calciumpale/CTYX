@@ -37,8 +37,8 @@ function ProfileFacts({ profile }: { profile: TrainingProfile }) {
   </>;
 }
 
-export function TrainingSessionProfile({ profile, mode }: { profile?: TrainingProfile; mode?: 'demo' | 'live' }) {
-  if (!profile) return <div className="training-profile-legacy"><Info size={14} /><p>历史练习未记录客户画像{!mode ? '和对话模式' : ''}，可继续查看原有对话与复盘。</p></div>;
+export function TrainingSessionProfile({ profile }: { profile?: TrainingProfile; mode?: 'demo' | 'live' }) {
+  if (!profile) return <div className="training-profile-legacy"><p>本次练习未设置画像。</p></div>;
   return <details className="training-confirmed-profile">
     <summary><UserRound size={15} /><span><strong>{profile.name}</strong><span>{profile.industry} · {profile.role} · {profile.difficulty}</span></span><span className="training-profile-summary-action">已确认画像<ChevronDown size={14} /></span></summary>
     <div className="training-confirmed-profile-content"><ProfileFacts profile={profile} /></div>
@@ -94,7 +94,7 @@ export function TrainingProfileSetup({ scenario, voice, busy, error, modelConnec
       <li aria-current={reviewed ? 'step' : undefined}><span aria-hidden="true">2</span>确认并开始</li>
     </ol>
     {!reviewed ? <>
-      <div className="training-profile-heading"><h2 ref={editHeading} tabIndex={-1}>这次，你想和怎样的客户沟通？</h2><p>已填入「{scenario}」的模拟画像，你可以按练习目标修改。切换场景会载入对应示例。</p></div>
+      <div className="training-profile-heading"><h2 ref={editHeading} tabIndex={-1}>这次，你想和怎样的客户沟通？</h2><p>已按「{scenario}」填入客户画像，可按练习目标修改。切换场景会重新载入画像。</p></div>
       <form ref={formRef} onSubmit={event => event.preventDefault()} className="training-profile-form">
         <fieldset className="training-profile-fields training-profile-background" disabled={busy}>
           <legend>客户背景</legend>
@@ -119,9 +119,9 @@ export function TrainingProfileSetup({ scenario, voice, busy, error, modelConnec
         <div className="training-profile-actions"><p>下一步先核对画像，再开始对话。</p><button type="button" className="studio-btn studio-btn-primary" disabled={busy} onClick={preview}>预览客户画像<ArrowRight size={16} /></button></div>
       </form>
     </> : <>
-      <div className="training-profile-heading"><h2 ref={reviewHeading} tabIndex={-1}>确认这位模拟客户</h2><p>练习场景：{scenario}。系统将依据这份画像扮演客户，本次练习会保存已确认的版本。</p></div>
+      <div className="training-profile-heading"><h2 ref={reviewHeading} tabIndex={-1}>确认客户画像</h2><p>练习场景：{scenario}。系统将依据这份画像扮演客户，本次练习会保存已确认的版本。</p></div>
       <div className="training-profile-preview"><ProfileFacts profile={reviewed} /></div>
-      <div className="training-profile-ready"><Check size={16} /><p>{modelConnected ? '使用已配置的模型，结合画像和对话回应。' : '当前未连接模型，将使用本地规则模拟客户。'}{voice ? '确认后可连接语音，麦克风将由你开启。' : '确认后即可开始文字对话。'}</p></div>
+      <div className="training-profile-ready"><Check size={16} /><p>{modelConnected ? '使用已配置模型生成客户回应。' : '使用本地规则生成客户回应。'}{voice ? '确认后可连接语音，麦克风将由你开启。' : '确认后即可开始文字对话。'}</p></div>
       {error && <div className="training-profile-error" role="alert"><Info size={16} /><div><p>{error}</p><span>画像已保留，可重试开始或返回修改。</span></div></div>}
       <div className="training-profile-actions training-profile-confirm-actions"><button type="button" className="studio-btn studio-btn-ghost" disabled={busy} onClick={backToEdit}><ArrowLeft size={15} />返回修改</button><button type="button" className="studio-btn studio-btn-primary" disabled={busy} onClick={() => void confirm()}>{busy ? <Loader2 size={16} className="studio-spin" /> : voice ? <Mic size={16} /> : <Check size={16} />}{busy ? '正在准备客户…' : `确认画像，开始${voice ? '语音' : ''}带练`}</button></div>
     </>}

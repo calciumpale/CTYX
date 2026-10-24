@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { ArrowRight, BookOpen, Check, ChevronDown, CircleAlert, Clock3, FileText, Loader2, Play, ShieldCheck, X } from 'lucide-react';
 import type { Run, Workflow } from '../lib/types';
 import { AnswerContent } from './AnswerContent';
+import { modelDisplayName } from './CoreViews';
 
 function readable(value: unknown): string {
   if (value === undefined || value === null || value === '') return '无';
@@ -21,7 +22,7 @@ export function BuilderDebugger({ workflow, run, stale, query, onQuery, onRun, o
 }) {
   const paused = run?.status === 'paused';
   return <div className="builder-debug-content">
-    <div className="builder-debug-model"><span className={`builder-dot${(reviewOnly ? run?.mode === 'live' : connected) ? ' builder-dot-live' : ''}`} /><span>{reviewOnly ? `已保存运行 · ${run?.mode === 'live' ? '模型生成' : '规则演示'}` : connected ? modelName : '规则演示 · 未调用外部模型'}</span></div>
+    <div className="builder-debug-model"><span className={`builder-dot${(reviewOnly ? run?.mode === 'live' : connected) ? ' builder-dot-live' : ''}`} /><span>{reviewOnly ? '已保存运行' : connected ? `${modelDisplayName(modelName)} · 已配置` : '未配置模型'}</span></div>
     {!reviewOnly && <form className="builder-debug-form" onSubmit={event => { event.preventDefault(); void onRun(); }}>
       <label className="builder-field">任务输入<textarea rows={4} maxLength={5000} value={query} disabled={busy} onChange={event => onQuery(event.target.value)} placeholder="输入希望应用完成的客户分析、拜访准备或商务审查任务…" /></label>
       <div className="builder-debug-submit"><span>{manager ? '直接测试当前配置，无需先保存' : '运行团队已发布版本'}</span><button className="builder-button builder-primary" disabled={busy || !query.trim()}>{busy ? <Loader2 size={14} className="builder-spin" /> : <Play size={14} />}{busy ? '处理中…' : run ? '重新运行' : manager ? '试运行' : '开始运行'}</button></div>
@@ -31,7 +32,7 @@ export function BuilderDebugger({ workflow, run, stale, query, onQuery, onRun, o
     {!run && !busy && <div className="builder-debug-empty"><Play size={24} /><strong>让配置跑一次</strong><p>输入任务后，查看执行路径、每一步输入输出和引用依据。</p></div>}
     {run && <>
       {stale && <div className="builder-inline-note builder-stale" role="status"><CircleAlert size={16} /><p>对应上一次测试。当前配置已修改，请重新试运行后发布。</p></div>}
-      <div className={`builder-run-summary${paused ? ' builder-run-paused' : ''}`}><div>{paused ? <ShieldCheck size={16} /> : run.status === 'failed' || run.status === 'rejected' ? <CircleAlert size={16} /> : <Check size={16} />}<strong>{statusName(run.status)}</strong><span>{run.mode === 'live' ? '模型生成' : '规则演示'}</span></div><small><Clock3 size={12} />{run.duration < 1000 ? `${Math.round(run.duration)} ms` : `${(run.duration / 1000).toFixed(1)} s`}{run.workflowVersion !== undefined && ` · v${run.workflowVersion}`}{run.workflowSource && ` · ${run.workflowSource === 'draft' ? '草稿配置' : '发布版本'}`}</small></div>
+      <div className={`builder-run-summary${paused ? ' builder-run-paused' : ''}`}><div>{paused ? <ShieldCheck size={16} /> : run.status === 'failed' || run.status === 'rejected' ? <CircleAlert size={16} /> : <Check size={16} />}<strong>{statusName(run.status)}</strong><span>{run.mode === 'live' ? '模型生成' : '本地生成'}</span></div><small><Clock3 size={12} />{run.duration < 1000 ? `${Math.round(run.duration)} ms` : `${(run.duration / 1000).toFixed(1)} s`}{run.workflowVersion !== undefined && ` · v${run.workflowVersion}`}{run.workflowSource && ` · ${run.workflowSource === 'draft' ? '草稿配置' : '发布版本'}`}</small></div>
       {paused && <section className="builder-review-panel"><div className="builder-panel-title"><ShieldCheck size={17} /><h3>{workflow.nodes.find(node => node.id === run.awaitingNodeId)?.label ?? '人工确认'}</h3></div>{run.awaitingNodeId ? <><p>请核对下方结果与引用依据。通过后才会继续执行后续节点。</p>{manager ? <ReviewForm key={`${run.id}-${run.awaitingNodeId}`} busy={busy} onReview={onReview} /> : <p className="builder-help">已提交销售管理者确认，请等待管理者处理此运行。</p>}</> : <p className="builder-help">旧版暂停记录无法继续，请重新运行。</p>}</section>}
       {run.review && <div className="builder-reviewed-note"><strong>{run.review.reviewer} · {run.review.decision === 'approve' ? '已确认' : '已拒绝'}</strong><p>{run.review.note}</p></div>}
       <section className="builder-debug-result"><h3>任务结果</h3><AnswerContent text={run.answer || '本次运行尚未产生最终输出。'} compact /></section>

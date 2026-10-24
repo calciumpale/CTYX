@@ -1,9 +1,9 @@
 'use client';
 
-import { AnswerContent } from './AnswerContent';
+import { modelDisplayName } from './CoreViews';
 
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
-import { ArrowUp, BookOpen, Bot, Check, CheckCheck, ChevronRight, CircleHelp, Clock3, Code2, Database, FileText, GitBranch, GraduationCap, History, Info, Layers, Loader2, MessageSquare, Mic, Plus, RotateCcw, Search, Send, ShieldCheck, Sparkles, Square, Upload, Volume2, X } from 'lucide-react';
+import { ArrowUp, BookOpen, Check, CheckCheck, ChevronRight, CircleHelp, Code2, Database, FileText, GitBranch, GraduationCap, History, Info, Layers, Loader2, MessageSquare, Mic, Plus, RotateCcw, Search, Send, ShieldCheck, Sparkles, Square, Upload, Volume2, X } from 'lucide-react';
 import './studio.css';
 import './training-voice.css';
 import { TrainingVoiceControls } from './TrainingVoiceControls';
@@ -14,11 +14,10 @@ import { DuplexVoiceControls } from './DuplexVoiceControls';
 import { useTrainingVoice } from '../lib/use-training-voice';
 import { useDuplexVoice } from '../lib/use-duplex-voice';
 import { createVoiceTurnQueue, type VoiceTurn, type VoiceQueueSnapshot } from '../lib/voice-turn-queue';
-import { AGENTS, type ApiResult, type Mutate, type Run, type Skill, type ViewProps } from '../lib/types';
+import { type ApiResult, type Mutate, type Skill, type ViewProps } from '../lib/types';
 
+const customerLabel = (value: string) => value.replace(/\s*·\s*演示扮演\s*$/u, '').replace(/（体验[^）]*）/gu, '').trim();
 const dateLabel = (value: string) => new Date(value).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-const durationLabel = (duration: number) => duration < 1000 ? `${Math.round(duration)} ms` : `${(duration / 1000).toFixed(1)} s`;
-const agentName = (id: string) => AGENTS.find(agent => agent.id === id)?.name ?? id;
 
 function useMutation(mutate: Mutate) {
   const [busy, setBusy] = useState(false);
@@ -42,11 +41,11 @@ function Notice({ children, error = false }: { children: ReactNode; error?: bool
 function Empty({ icon, title, detail }: { icon: ReactNode; title: string; detail: string }) {
   return <div className="studio-empty">{icon}<h3>{title}</h3><p>{detail}</p></div>;
 }
-function PageHeading({ eyebrow, title, description, children }: { eyebrow: string; title: string; description: string; children?: ReactNode }) {
-  return <header className="studio-heading"><div><span className="studio-eyebrow">{eyebrow}</span><h1>{title}</h1><p>{description}</p></div>{children && <div className="studio-heading-action">{children}</div>}</header>;
+function PageHeading({ title, description, children }: { eyebrow?: string; title: string; description: string; children?: ReactNode }) {
+  return <header className="studio-heading"><div><h1>{title}</h1><p>{description}</p></div>{children && <div className="studio-heading-action">{children}</div>}</header>;
 }
 function BusyIcon({ busy, children }: { busy: boolean; children: ReactNode }) { return busy ? <Loader2 size={16} className="studio-spin" /> : children; }
-function ModeTag({ mode, configured = false }: { mode: 'demo' | 'live'; configured?: boolean }) { return <span className={`studio-tag${mode === 'live' ? ' studio-tag-live' : ''}`}><span className="studio-status-dot" />{mode === 'demo' ? '规则演示' : configured ? '接口已配置' : '模型生成'}</span>; }
+function ModeTag({ mode, configured = false }: { mode: 'demo' | 'live'; configured?: boolean }) { return <span className={`studio-tag${mode === 'live' ? ' studio-tag-live' : ''}`}><span className="studio-status-dot" />{mode === 'demo' ? '本地生成' : configured ? '接口已配置' : '模型生成'}</span>; }
 
 const SCENARIOS = [
   { name: '免租期异议', icon: <ShieldCheck size={22} />, tag: '商务谈判', detail: '客户要求延长免租期，练习澄清诉求、交换条件与授权边界。', duration: '建议 3–5 轮' },
@@ -208,36 +207,36 @@ export function TrainingView({ state, mutate, notify,onPendingChange,onMediaStop
   };
 
   return <section className="studio-view studio-training-view">
-    <header className="studio-heading training-page-heading"><div><h1>下一次沟通，先练习一次</h1><p>先确认客户画像，再和模拟客户练习一场真实的沟通。</p></div><div className="studio-heading-action"><span className="studio-example"><GraduationCap size={15} />{session ? session.mode === 'live' ? '模型客户对话' : session.mode === 'demo' ? '规则模拟带练' : '历史练习 · 模式未记录' : state.model.connected ? '模型接口已配置' : '规则模拟 · 未连接模型'}</span></div></header>
+    <header className="studio-heading training-page-heading"><div><h1>下一次沟通，先练习一次</h1><p>先确认客户画像，再和模拟客户练习一场真实的沟通。</p></div></header>
     {error && session && <Notice error>{error}</Notice>}
     <div className="studio-training-layout">
       <main className="studio-training-main">
         <div className="training-interaction-bar"><div><strong>选择你的练习方式</strong><p>{interactionMode === 'voice' ? '听客户说，再把你的回应说出来。' : '留一点思考时间，把回应写得更清楚。'}</p></div><div className="training-mode-switch" role="group" aria-label="带练方式"><button type="button" disabled={busy} aria-pressed={interactionMode === 'text'} onClick={() => changeMode('text')}><MessageSquare size={15} />文字带练</button><button type="button" disabled={busy} aria-pressed={interactionMode === 'voice'} onClick={() => changeMode('voice')}><Mic size={15} />语音带练</button></div></div>
         {interactionMode === 'text' && voice.error && <div className="training-voice-error training-voice-text-error" role="alert"><Info size={16} /><div><p>{voice.error}</p><span>文字回应仍可正常发送，也可稍后重新播放客户语音。</span></div><button type="button" className="studio-icon-button" onClick={voice.clearError} aria-label="关闭语音提示"><X size={15} /></button></div>}
-        {interactionMode === 'voice' && session && <><div className="training-transport-switch" role="group" aria-label="语音连接方式"><button type="button" aria-pressed={voiceTransport==='duplex'} onClick={()=>changeTransport('duplex')}>全双工 · 自部署服务</button><button type="button" aria-pressed={voiceTransport==='browser'} onClick={()=>changeTransport('browser')}>浏览器语音 · 兼容模式</button></div>{voiceTransport==='duplex'?<DuplexVoiceControls voice={duplex} configured={gatewayConfigured} configurationError={gatewayError} customer={session?.customer} active={session?.status==='active'} pending={voiceQueue.pending} onConnect={connectDuplex} onUseBrowser={()=>changeTransport('browser')}/>:<TrainingVoiceControls voice={voice} customer={session?.customer} hasSession={Boolean(session)} active={session?.status === 'active'} busy={busy||voiceQueue.pending>0} autoSpeak={autoSpeak} onAutoSpeakChange={enabled => { setAutoSpeak(enabled); if (!enabled) voice.stopSpeaking(); }} onStartListening={startListening} onCancelListening={cancelListening} onUseText={() => changeMode('text')} />}</>}
+        {interactionMode === 'voice' && session && <><div className="training-transport-switch" role="group" aria-label="语音连接方式"><button type="button" aria-pressed={voiceTransport==='duplex'} onClick={()=>changeTransport('duplex')}>全双工 · 自部署服务</button><button type="button" aria-pressed={voiceTransport==='browser'} onClick={()=>changeTransport('browser')}>浏览器语音 · 兼容模式</button></div>{voiceTransport==='duplex'?<DuplexVoiceControls voice={duplex} configured={gatewayConfigured} configurationError={gatewayError} customer={session ? customerLabel(session.customer) : undefined} active={session?.status==='active'} pending={voiceQueue.pending} onConnect={connectDuplex} onUseBrowser={()=>changeTransport('browser')}/>:<TrainingVoiceControls voice={voice} customer={session ? customerLabel(session.customer) : undefined} hasSession={Boolean(session)} active={session?.status === 'active'} busy={busy||voiceQueue.pending>0} autoSpeak={autoSpeak} onAutoSpeakChange={enabled => { setAutoSpeak(enabled); if (!enabled) voice.stopSpeaking(); }} onStartListening={startListening} onCancelListening={cancelListening} onUseText={() => changeMode('text')} />}</>}
         {voiceQueue.failed&&<div className="training-voice-error" role="alert"><Info size={16}/><div><p>语音暂未保存：{voiceQueue.error}</p><p>「{voiceQueue.failed.text}」</p><button type="button" onClick={()=>queueRef.current?.retry()}>直接重试保存</button><button type="button" style={{marginLeft:16}} onClick={()=>queueRef.current?.reset()}>舍弃全部待保存语音</button></div></div>}
         {!session ? <>
           <div className="studio-section-label">选择这次想练习的场景</div>
           <div className="studio-scenario-grid">{SCENARIOS.map(item => <button key={item.name} type="button" disabled={busy} className={`studio-scenario${scenario === item.name ? ' studio-scenario-selected' : ''}`} onClick={() => { stopVoice(); setScenario(item.name); setError(''); }} aria-pressed={scenario === item.name}><div className="studio-scenario-top"><span className="studio-icon-clay">{item.icon}</span><span>{item.tag}</span>{scenario === item.name && <Check size={17} />}</div><h3>{item.name}</h3><p>{item.detail}</p><small>{item.duration}</small></button>)}</div>
           <TrainingProfileSetup key={scenario} scenario={scenario} voice={interactionMode === 'voice'} busy={busy} error={error} modelConnected={state.model.connected} onEdit={() => setError('')} onConfirm={start} />
         </> : <div className="studio-session-panel">
-          <div className="studio-session-head"><div className="studio-row"><span className="studio-icon-clay"><GraduationCap size={22} /></span><div><h2>{session.scenario}</h2><p>{session.customer} · {session.status === 'active' ? '客户角色对话' : '已完成的练习'}</p></div></div><button type="button" className="studio-btn studio-btn-ghost" disabled={busy} onClick={() => chooseSession(null)}>新建练习<ChevronRight size={15} /></button></div>
+          <div className="studio-session-head"><div className="studio-row"><span className="studio-icon-clay"><GraduationCap size={22} /></span><div><h2>{session.scenario}</h2><p>{customerLabel(session.customer)} · {session.status === 'active' ? '客户角色对话' : '已完成的练习'}</p></div></div><button type="button" className="studio-btn studio-btn-ghost" disabled={busy} onClick={() => chooseSession(null)}>新建练习<ChevronRight size={15} /></button></div>
           <TrainingSessionProfile key={session.id} profile={session.profile} mode={session.mode} />
           <div className="studio-training-chat" ref={chatRef} onScroll={event => { const target = event.currentTarget; pinned.current = target.scrollHeight - target.scrollTop - target.clientHeight < 48; lastScroll.current = Date.now(); }} aria-live="polite" aria-relevant="additions text">
             {session.messages.map((message, index) => {
               const key = `${session.id}:${index}:${message.content}`;
               const playing = speechActive && playingMessage === key;
               const unavailable=interactionMode==='voice'&&voiceTransport==='duplex'?duplex.phase!=='connected'||duplex.inputActive:!voice.ready||!voice.outputSupported||capturing;
-              return <div className={`studio-training-message studio-training-${message.role}`} key={`${session.id}-${index}`}><span>{message.role === 'user' ? '我的回应' : session.customer}</span><p>{message.content}</p>{message.role === 'assistant' && <button type="button" className="training-message-play" disabled={unavailable} onClick={() => playCustomer(message.content, key)} aria-label={playing ? '停止客户语音' : '播放客户语音'} title={unavailable?'请连接语音服务，或切换兼容模式播放':undefined}>{playing ? <Square size={12} /> : <Volume2 size={13} />}{playing ? '停止播报' : '播放客户语音'}</button>}</div>;
+              return <div className={`studio-training-message studio-training-${message.role}`} key={`${session.id}-${index}`}><span>{message.role === 'user' ? '我的回应' : customerLabel(session.customer)}</span><p>{message.role === 'assistant' ? message.content.replace(/^\s*[（(]\s*演示客户\s*[）)]\s*[:：]?\s*/u, '') : message.content}</p>{message.role === 'assistant' && <button type="button" className="training-message-play" disabled={unavailable} onClick={() => playCustomer(message.content, key)} aria-label={playing ? '停止客户语音' : '播放客户语音'} title={unavailable?'请连接语音服务，或切换兼容模式播放':undefined}>{playing ? <Square size={12} /> : <Volume2 size={13} />}{playing ? '停止播报' : '播放客户语音'}</button>}</div>;
             })}
             {busy && session.status === 'active' && <div className="studio-training-thinking"><Loader2 size={15} className="studio-spin" /> 正在处理本轮练习…</div>}
           </div>
           {session.status === 'active' ? <div className="studio-training-bottom">
             {unaddedTranscript && <div className="training-transcript-overflow" role="alert"><Info size={15} /><div><strong>这段语音暂未发送，请缩短表述或等待队列保存。</strong><details><summary>查看未发送的 {unaddedTranscript.length.toLocaleString('zh-CN')} 字，可选中复制</summary><p>{unaddedTranscript}</p></details><button type="button" onClick={() => setUnaddedTranscript('')}>收起提示</button></div></div>}
-            {interactionMode==='text'?<form className="studio-reply-composer" onSubmit={sendReply}><label className="studio-sr-only" htmlFor="training-reply">输入你的回应</label><textarea id="training-reply" rows={3} value={reply} onChange={event => setDraft(event.target.value)} placeholder="试着回应客户的顾虑…" maxLength={4000} onKeyDown={event => { if (event.nativeEvent.isComposing || event.keyCode === 229) return; if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void sendReply(); } }} /><div><span>Enter 发送 · Shift + Enter 换行<span className="training-draft-count">{reply.length.toLocaleString('zh-CN')} / 4,000</span></span><button type="submit" className="studio-send" disabled={busy || capturing || !reply.trim()} aria-label="发送回应"><BusyIcon busy={busy}><ArrowUp size={18} /></BusyIcon></button></div></form>:<div className="training-auto-submit"><Mic size={17}/><span>{voiceQueue.pending?`${voiceQueue.pending} 段语音正在自动保存…`:'语音识别完成后直接进入对话，无需修改或点击发送。'}</span></div>}<div className="studio-training-footer"><span>{session.messages.filter(message => message.role === 'user').length} 轮回应 · 可随时结束并复盘</span><button className="studio-btn studio-btn-secondary" disabled={busy||voiceQueue.pending>0} onClick={finish}><CheckCheck size={15} />结束并复盘</button></div></div> : <div className="studio-feedback"><div className="studio-score"><div><span className="studio-eyebrow">本次练习复盘</span><h3>从证据中找到下一次的进步</h3><p>规则演示评分，仅依据本次对话文本，不代表真实销售能力测评。</p></div><div className="studio-score-value">{session.score ?? '—'}<small>/ 100</small></div></div>{session.feedback?.map(item => <div className="studio-feedback-item" key={item.label}><div><strong>{item.label}</strong><span>{item.score} 分</span></div><p><b>对话依据</b>{item.evidence}</p><p><b>下次试试</b>{item.suggestion}</p></div>)}</div>}
+            {interactionMode==='text'?<form className="studio-reply-composer" onSubmit={sendReply}><label className="studio-sr-only" htmlFor="training-reply">输入你的回应</label><textarea id="training-reply" rows={3} value={reply} onChange={event => setDraft(event.target.value)} placeholder="试着回应客户的顾虑…" maxLength={4000} onKeyDown={event => { if (event.nativeEvent.isComposing || event.keyCode === 229) return; if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void sendReply(); } }} /><div><span>Enter 发送 · Shift + Enter 换行<span className="training-draft-count">{reply.length.toLocaleString('zh-CN')} / 4,000</span></span><button type="submit" className="studio-send" disabled={busy || capturing || !reply.trim()} aria-label="发送回应"><BusyIcon busy={busy}><ArrowUp size={18} /></BusyIcon></button></div></form>:<div className="training-auto-submit"><Mic size={17}/><span>{voiceQueue.pending?`${voiceQueue.pending} 段语音正在自动保存…`:'语音识别完成后直接进入对话，无需修改或点击发送。'}</span></div>}<div className="studio-training-footer"><span>{session.messages.filter(message => message.role === 'user').length} 轮回应 · 可随时结束并复盘</span><button className="studio-btn studio-btn-secondary" disabled={busy||voiceQueue.pending>0} onClick={finish}><CheckCheck size={15} />结束并复盘</button></div></div> : <div className="studio-feedback"><div className="studio-score"><div><span className="studio-eyebrow">本次练习复盘</span><h3>从证据中找到下一次的进步</h3><p>评分依据本次对话表现，帮助定位下一次练习的重点。</p></div><div className="studio-score-value">{session.score ?? '—'}<small>/ 100</small></div></div>{session.feedback?.map(item => <div className="studio-feedback-item" key={item.label}><div><strong>{item.label}</strong><span>{item.score} 分</span></div><p><b>对话依据</b>{item.evidence}</p><p><b>下次试试</b>{item.suggestion}</p></div>)}</div>}
         </div>}
       </main>
-      <aside className="studio-training-aside"><div className="studio-aside-heading"><History size={17} /><h2>我的练习记录</h2><span>{history.length}</span></div>{history.length ? <div className="studio-history-list">{history.map(item => <button type="button" className={`studio-history-item${sessionId === item.id ? ' studio-history-active' : ''}`} key={item.id} disabled={busy} onClick={() => chooseSession(item.id)}><div><strong>{item.scenario}</strong><span className="studio-history-score">{item.status === 'completed' ? `${item.score ?? '—'} 分` : '进行中'}</span></div><small className="training-history-customer">{item.profile ? `${item.profile.name} · ${item.profile.difficulty}` : '历史画像未记录'}</small><small>{dateLabel(item.createdAt)} · {item.messages.filter(message => message.role === 'user').length} 轮</small></button>)}</div> : <Empty icon={<History size={26} />} title="练习从这里开始" detail="完成一次带练，你的对话和复盘会保存在这里。" />}<div className="studio-side-note"><CircleHelp size={17} /><p>示例客户由系统扮演。请勿输入真实客户隐私或未经授权的商务信息。</p></div></aside>
+      <aside className="studio-training-aside"><div className="studio-aside-heading"><History size={17} /><h2>我的练习记录</h2><span>{history.length}</span></div>{history.length ? <div className="studio-history-list">{history.map(item => <button type="button" className={`studio-history-item${sessionId === item.id ? ' studio-history-active' : ''}`} key={item.id} disabled={busy} onClick={() => chooseSession(item.id)}><div><strong>{item.scenario}</strong><span className="studio-history-score">{item.status === 'completed' ? `${item.score ?? '—'} 分` : '进行中'}</span></div>{item.profile && <small className="training-history-customer">{item.profile.name} · {item.profile.difficulty}</small>}<small>{dateLabel(item.createdAt)} · {item.messages.filter(message => message.role === 'user').length} 轮</small></button>)}</div> : <Empty icon={<History size={26} />} title="练习从这里开始" detail="完成一次带练，你的对话和复盘会保存在这里。" />}<div className="studio-side-note"><CircleHelp size={17} /><p>客户由培训 Agent 扮演，练习对话和复盘会自动保存。</p></div></aside>
     </div>
   </section>;
 }
@@ -311,35 +310,7 @@ export function KnowledgeView({ state, mutate, notify }: ViewProps) {
 
 export { BuilderStudio as StudioView } from './BuilderStudio';
 
-function RunDetail({ run, compact = false }: { run: Run; compact?: boolean }) {
-  return <article className={`studio-run-detail${compact ? ' studio-run-compact' : ''}`}><div className="studio-detail-kicker"><ModeTag mode={run.mode} />{run.status && <span className="studio-tag">{run.status === 'completed' ? '执行完成' : run.status === 'paused' ? '等待人工确认' : run.status === 'rejected' ? '已拒绝继续' : '执行失败'}</span>}<span><Clock3 size={13} />{durationLabel(run.duration)} · {dateLabel(run.createdAt)}</span></div><h2>{run.query}</h2><div className="studio-run-experts">{run.agentIds.map(id => <span key={id}><Bot size={13} />{agentName(id)}</span>)}{run.workflowId && <span><GitBranch size={13} />工作流执行</span>}</div><div className="studio-run-answer"><span className="studio-section-label">任务结果</span><AnswerContent text={run.answer} /></div><div className="studio-run-section"><h3><GitBranch size={16} />执行轨迹<span>{run.steps.length} 步</span></h3><ol className="studio-trace">{run.steps.map((step, index) => <li key={step.id} className={`studio-trace-${step.status}`}><span className="studio-trace-marker">{step.status === 'success' ? <Check size={12} /> : step.status === 'error' ? <X size={12} /> : <Info size={12} />}</span><div><div className="studio-trace-heading"><strong>{index + 1}. {step.title}</strong><small>{durationLabel(step.duration)}</small></div>{step.agent && <span className="studio-trace-agent">{agentName(step.agent)}</span>}<p>{step.detail}</p></div></li>)}</ol></div><div className="studio-run-section"><h3><BookOpen size={16} />引用依据<span>{run.citations.length} 条</span></h3>{run.citations.length ? run.citations.map(citation => <div className="studio-citation" key={citation.id}><strong><FileText size={15} />{citation.title}</strong><p>{citation.excerpt}</p><small>引用编号：{citation.id}</small></div>) : <p className="studio-muted">本次运行没有引用知识条目。请结合执行轨迹核对结论依据。</p>}</div><div className="studio-run-id">运行编号 {run.id}</div></article>;
-}
-
-export function RunsView({ state, mutate, notify }: ViewProps) {
-  const { busy, error, perform } = useMutation(mutate);
-  const [search, setSearch] = useState('');
-  const [mode, setMode] = useState('all');
-  const [selectedId, setSelectedId] = useState(state.runs[0]?.id ?? '');
-  const query = search.trim().toLowerCase();
-  const runs = [...state.runs].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).filter(run => (mode === 'all' || mode === run.mode) && `${run.query} ${run.answer} ${run.agentIds.map(agentName).join(' ')} ${run.id}`.toLowerCase().includes(query));
-  const selected = runs.find(run => run.id === selectedId) ?? runs[0];
-  const existingCandidate = selected && state.skills.find(skill => skill.source.includes(selected.id));
-  const extractCandidate = async () => {
-    if (!selected || busy) return;
-    const run = selected;
-    const result = await perform('skill_candidate', {
-      title: `${run.query.slice(0, 36)} · 方法草稿`,
-      description: '依据本次运行的任务、执行轨迹与引用整理的方法草稿。需要管理者核对原始事实、适用条件和授权边界。',
-      scenario: `适用于类似任务：“${run.query.slice(0, 1800)}”。复用前核实客户、业务阶段、关键事实和现行政策。`,
-      steps: run.steps.length ? run.steps.slice(0, 12).map(step => `复用“${step.title}”：${step.detail}`.slice(0, 1900)) : ['澄清任务目标与待核实事实', '核对生效知识及业务授权边界', '形成建议并与实际反馈逐项验证'],
-      boundaries: ['当前工作空间使用示例数据；示例结果不构成真实客户反馈、成交或转化证据。', '本次运行输出属于方法草稿，需管理者核对原始依据后人工审核。', '不得承诺未经审批的优惠、交付或商务条件；复用时重新核对生效知识。'],
-      evidence: `证据性质：本工作空间为示例数据；以下运行结果不是成交或转化证据。仅保留任务和执行输出供人工审核。\n运行编号：${run.id}\n运行模式：${run.mode === 'demo' ? '规则演示' : '模型生成'}\n\n原始任务：${run.query.slice(0, 1100)}\n\n原始结果片段：${run.answer.slice(0, 3200)}\n\n引用来源：${run.citations.map(item => item.title).join('；').slice(0, 250)}`.slice(0, 5000),
-      source: `运行记录 ${run.id} · ${dateLabel(run.createdAt)} · ${run.mode === 'demo' ? '规则演示' : '模型生成'}`,
-    });
-    if (result) notify('已提炼为候选 Skill，待管理者本人核对证据与边界后审核。');
-  };
-  return <section className="studio-view"><PageHeading eyebrow="EVERY STEP, IN CONTEXT" title="每次协作，都有迹可循" description="回看任务结果、调用专家与引用来源，了解建议从何而来。"><span className="studio-example"><History size={15} />{state.runs.length} 次已保存运行</span></PageHeading>{error && <Notice error>{error}</Notice>}<div className="studio-filterbar"><label className="studio-search"><Search size={17} /><input value={search} onChange={event => setSearch(event.target.value)} placeholder="搜索任务、结果、专家或运行编号" aria-label="搜索运行记录" />{search && <button className="studio-icon-button" onClick={() => setSearch('')} aria-label="清空搜索"><X size={15} /></button>}</label><label className="studio-category"><span className="studio-sr-only">筛选运行模式</span><select value={mode} onChange={event => setMode(event.target.value)}><option value="all">全部模式</option><option value="demo">规则演示</option><option value="live">模型生成</option></select></label><span className="studio-result-count">{runs.length} 条记录</span></div><div className="studio-runs-layout"><div className="studio-run-list">{runs.length ? runs.map(run => <button key={run.id} className={`studio-run-item${selected?.id === run.id ? ' studio-run-item-active' : ''}`} onClick={() => setSelectedId(run.id)}><div><span className="studio-run-list-icon">{run.workflowId ? <GitBranch size={17} /> : <MessageSquare size={17} />}</span><span>{dateLabel(run.createdAt)}</span><span className="studio-run-mode">{run.mode === 'demo' ? '演示' : '模型'}</span></div><h3>{run.query}</h3><p>{run.agentIds.map(agentName).join(' · ') || '工作流执行'}</p><small>{run.steps.length} 个执行步骤 · {durationLabel(run.duration)}<ChevronRight size={15} /></small></button>) : <Empty icon={<History size={30} />} title={query ? '没有找到匹配的运行' : '协作记录从下一次任务开始'} detail={query ? '换一个关键词，或切换运行模式。' : '发起专家任务或运行工作流后，完整过程会出现在这里。'} />}</div><div className="studio-run-content">{selected ? <><div className="studio-run-extract"><p><Sparkles size={15} />将本次方法整理为草稿，由管理者核实后发布。</p><button className="studio-btn studio-btn-secondary" onClick={extractCandidate} disabled={busy || !!existingCandidate}><BusyIcon busy={busy}><Plus size={15} /></BusyIcon>{existingCandidate ? '已提炼经验' : '提炼为候选 Skill'}</button></div><RunDetail run={selected} /></> : <Empty icon={<GitBranch size={32} />} title="看见每一步的依据" detail="选择一条运行记录，查看完整结果与执行轨迹。" />}</div></div></section>;
-}
+export { RunsView } from './RunHistoryView';
 
 export function SettingsView({ state,onConnectionChanged }: ViewProps & {onConnectionChanged?:()=>Promise<void>}) {
   return <section className="studio-view studio-settings-view">
@@ -348,17 +319,16 @@ export function SettingsView({ state,onConnectionChanged }: ViewProps & {onConne
     </PageHeading>
     <ApiConnectionSettings onSaved={onConnectionChanged}/>
     <section className="studio-settings-card">
-      <div className="studio-settings-card-title"><span className="studio-icon-clay"><ShieldCheck size={23}/></span><div><h2>当前体验身份</h2><p>私有工作空间内的角色体验</p></div><span className="studio-tag">{state.role==='manager'?'销售管理者':'销售人员'}</span></div>
-      <div className="studio-identity"><div className="studio-profile-avatar">{state.viewer.name.slice(0,1)}</div><div><strong>{state.viewer.name}</strong><span>{state.viewer.team}</span></div></div>
-      <div className="studio-role-grid"><div className={state.role==='sales'?'studio-role-active':''}><h3><MessageSquare size={17}/>销售人员</h3><p>管理自己名下的客户和商机，获得五位专家协助，开展带练并提交经验。</p></div><div className={state.role==='manager'?'studio-role-active':''}><h3><ShieldCheck size={17}/>销售管理者</h3><p>查看体验团队商机，审核候选 Skill，导入知识并搭建、测试和发布工作流。</p></div></div>
-      <Notice>角色切换仅用于体验业务权限；当前未接入企业 SSO、真实组织或 CRM 账户。</Notice>
+      <div className="studio-settings-card-title"><span className="studio-icon-clay"><ShieldCheck size={23}/></span><div><h2>当前角色</h2><p>管理当前业务视角与工作范围</p></div><span className="studio-tag">{state.role==='manager'?'销售管理者':'销售人员'}</span></div>
+      <div className="studio-identity"><div className="studio-profile-avatar">{state.viewer.name.slice(0,1)}</div><div><strong>{state.viewer.name}</strong><span>{state.viewer.team.replace(/（体验[^）]*）/gu, '').trim()}</span></div></div>
+      <div className="studio-role-grid"><div className={state.role==='sales'?'studio-role-active':''}><h3><MessageSquare size={17}/>销售人员</h3><p>管理自己名下的客户和商机，获得五位专家协助，开展带练并提交经验。</p></div><div className={state.role==='manager'?'studio-role-active':''}><h3><ShieldCheck size={17}/>销售管理者</h3><p>查看团队商机，审核候选 Skill，导入知识并搭建、测试和发布工作流。</p></div></div>
     </section>
     <section className="studio-settings-card">
       <div className="studio-settings-card-title"><span className="studio-icon-clay"><Database size={23}/></span><div><h2>数据与执行</h2><p>当前账号独立保存的工作空间</p></div><ModeTag mode={state.model.connected?'live':'demo'} configured/></div>
-      <div className="studio-setting-line"><span>当前模型</span><strong>{state.model.connected?state.model.name:'未启用外部模型 · 规则演示'}</strong></div>
-      <div className="studio-setting-line"><span>当前数据版本</span><strong>Revision {state.revision}</strong></div>
+      <div className="studio-setting-line"><span>当前模型</span><strong>{state.model.connected?modelDisplayName(state.model.name):'未配置大模型 API'}</strong></div>
+      <div className="studio-setting-line"><span>数据版本</span><strong>{state.revision}</strong></div>
       <div className="studio-setting-line"><span>持久化范围</span><strong>商机、知识、Skill、工作流、带练与运行记录</strong></div>
-      <p className="studio-setting-description">初始化客户和案例均为合成示例，尚未连接企业真实数据。启用 API 后，工作台和工作流专家任务使用该模型；当前带练场景与复盘仍采用已标明的规则演示。</p>
+      <details className="studio-setting-description"><summary>数据与集成说明</summary><p>初始客户与案例为预置示例数据。当前工作空间独立保存，企业 SSO、组织架构与 CRM 尚未接入。配置的模型用于专家任务、工作流和客户带练；练习评分根据对话记录生成。</p></details>
     </section>
   </section>;
 }

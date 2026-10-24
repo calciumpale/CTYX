@@ -38,3 +38,17 @@ export const workbenchApprovalParticipants=sqliteTable('workbench_approval_parti
 export const workbenchApprovalTemplates=sqliteTable('workbench_approval_templates',{
   id:text('id').primaryKey(),ownerId:text('owner_id').notNull(),version:integer('version').notNull(),updatedAt:text('updated_at').notNull(),dataJson:text('data_json').notNull(),
 },table=>[index('workbench_approval_template_owner').on(table.ownerId,table.updatedAt)]);
+
+/** Immutable real manual-project changes; scoped to the authenticated workspace owner. */
+export const workbenchSalesEvents=sqliteTable('workbench_sales_events',{
+  userId:text('user_id').notNull(),id:text('id').notNull(),projectId:text('project_id').notNull(),kind:text('kind').notNull(),ownerId:text('owner_id').notNull(),occurredAt:text('occurred_at').notNull(),dataJson:text('data_json').notNull(),
+},table=>[primaryKey({columns:[table.userId,table.id]}),index('workbench_sales_event_day').on(table.userId,table.occurredAt,table.id)]);
+
+export const workbenchSalesCoverage=sqliteTable('workbench_sales_coverage',{
+  userId:text('user_id').primaryKey(),startedAt:text('started_at').notNull(),
+});
+
+/** Date-scoped report snapshots and CAS leases live outside the bounded workspace JSON. */
+export const workbenchSalesReports=sqliteTable('workbench_sales_reports',{
+  userId:text('user_id').notNull(),reportDate:text('report_date').notNull(),status:text('status').notNull(),version:integer('version').notNull(),leaseToken:text('lease_token'),leaseUntil:text('lease_until'),updatedAt:text('updated_at').notNull(),dataJson:text('data_json').notNull(),
+},table=>[primaryKey({columns:[table.userId,table.reportDate]}),index('workbench_sales_report_updated').on(table.userId,table.updatedAt)]);

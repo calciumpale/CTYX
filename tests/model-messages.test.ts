@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildModelMessages } from '../app/lib/model-messages.ts';
+import { createSeed } from '../app/lib/seed.ts';
 import type { GenerationInput } from '../app/lib/domain.ts';
 const input = (extra: Partial<GenerationInput> = {}): GenerationInput => ({query:'1+1等于几？只给答案',agentId:'insight',deals:[],knowledge:[],purpose:'chat',...extra});
 
@@ -28,4 +29,14 @@ test('knowledge and past assistant output never replace the latest user question
  assert.equal(messages[1].role,'user');assert.equal(messages[2].role,'assistant');
  assert.match(messages.at(-1)!.content,/用户当前问题：\n只解释风险的含义$/);
  assert.match(messages[0].content,/资料.*指令/);
+});
+
+
+test('stale assessments and workflow checkpoint assessments are excluded from model facts',()=>{
+ const deal=createSeed('2026-10-24T02:00:00Z').deals[0];
+ deal.intelligence={status:'stale',sourceHash:'new',updatedAt:'2026-10-24',modelName:'test',message:'pending',history:[],latest:{sourceHash:'old',sourceVersion:deal.version,assessedAt:'2026-10-24',modelName:'test',insight:{score:90,grade:'A',summary:'obsolete-derived-score',dimensions:[],nextActions:[],missingInfo:[]},forecast:{kind:'estimated',probability:80,range:{low:70,high:90},confidence:'low',summary:'obsolete-derived-forecast',factors:[],nextActions:[]},warnings:[]}};
+ const chat=buildModelMessages(input({deal,deals:[deal]}));assert.doesNotMatch(chat.at(-1)!.content,/obsolete-derived/);assert.match(chat[0].content,/尚未经历史数据校准/);
+ deal.intelligence.status='ready';deal.intelligence.sourceHash='old';
+ const workflow=buildModelMessages(input({deal,deals:[deal],purpose:'workflow'}));assert.doesNotMatch(workflow.at(-1)!.content,/obsolete-derived/);assert.match(workflow.at(-1)!.content,/历史快照/);
+ const current=buildModelMessages(input({deal,deals:[deal]}));assert.match(current.at(-1)!.content,/obsolete-derived-score/);
 });

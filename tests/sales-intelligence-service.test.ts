@@ -1,0 +1,38 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { createSeed } from '../app/lib/seed.ts';
+import { processSalesIntelligence } from '../app/lib/sales-intelligence-service.ts';
+import { salesFingerprint, salesIntelligenceCurrent, salesIntelligenceIsCurrent } from '../app/lib/sales-intelligence.ts';
+import type { SalesIntelligence } from '../app/lib/sales-intelligence-types.ts';
+import type { WorkbenchState } from '../app/lib/types.ts';
+
+const now='2026-10-24T10:00:00.000Z';
+function workspace(){const s=createSeed(now);s.deals=[{...s.deals[0],dataOrigin:'manual',summary:'客户已确认采购需求，并且预算已经批准，希望本月和决策人讨论合同，周五进行沟通。',needs:[],notes:[],customerProfile:undefined}];return s;}
+const prior=(hash:string,version:number):SalesIntelligence=>({status:'ready',sourceHash:hash,updatedAt:now,modelName:'test-model',message:'已评估',history:[],latest:{sourceHash:hash,sourceVersion:version,assessedAt:now,modelName:'test-model',insight:{score:80,grade:'A',summary:'采购需求已确认',dimensions:[],nextActions:[],missingInfo:[]},forecast:{kind:'estimated',probability:60,range:{low:40,high:80},confidence:'medium',summary:'需核实签约安排',factors:[],nextActions:[]},warnings:[]}});
+function memory(initial=workspace()) {let current=structuredClone(initial);const saved:WorkbenchState[]=[];return {get:()=>structuredClone(current),edit:(fn:(s:WorkbenchState)=>void)=>{fn(current);current.revision++;},saved,deps:{load:async()=>structuredClone(current),save:async(_user:string,revision:number,next:WorkbenchState)=>{if(revision!==current.revision)throw Object.assign(new Error('conflict'),{status:409});current=structuredClone(next);saved.push(structuredClone(next));},now:()=>now}};}
+function modelReply(){const evidence=[{refId:'project:summary',quote:'客户已确认采购需求，并且预算已经批准，希望本月和决策人讨论合同，周五进行沟通。'}];return JSON.stringify({insight:{summary:'采购计划有明确跟进',dimensions:[['need',25],['budget',20],['decision',15],['timeline',10],['engagement',10]].map(([key,score])=>({key,score,reason:'用户记录中说明采购安排',evidence})),nextActions:[{action:'周五核实决策人与合同签署安排',reason:'将采购安排推进至可验证承诺',evidence}],missingInfo:['待确认签署时间']},forecast:{probability:60,range:{low:40,high:80},confidence:'medium',summary:'存在采购计划，签署仍需确认',factors:[{direction:'positive',reason:'客户已确认采购安排',evidence}],nextActions:[{action:'与客户共同确定签署节点',reason:'解决签署时间未知',evidence}]}});}
+
+test('missing model records waiting_config after preserving saved business records and earlier result',async()=>{
+  const s=workspace();s.deals[0].intelligence=prior('old-source',s.deals[0].version-1);const m=memory(s);const out=await processSalesIntelligence('user','deal-1','https://site.example',m.deps);assert.equal(out.deals[0].summary,s.deals[0].summary);assert.equal(out.deals[0].intelligence?.status,'waiting_config');assert.equal(out.deals[0].intelligence?.latest?.sourceHash,'old-source');assert.notEqual(out.deals[0].intelligence?.sourceHash,'old-source');assert.equal(salesIntelligenceIsCurrent(out.deals[0]),false);assert.equal(out.deals[0].version,s.deals[0].version);
+});
+test('processing is persisted before provider work and accepted analysis stays current',async()=>{
+  const m=memory();const out=await processSalesIntelligence('user','deal-1','https://site.example',{...m.deps,model:{name:'test-model'},generate:async()=>{assert.equal(m.get().deals[0].intelligence?.status,'processing');return modelReply();}});assert.equal(out.deals[0].intelligence?.status,'ready');assert.equal(out.deals[0].intelligence?.latest?.insight.grade,'A');assert.equal(await salesIntelligenceCurrent(out.deals[0],[]),true);assert.equal(out.deals[0].version,1);assert.ok(out.deals[0].intelligence?.history.length);
+});
+test('provider failure keeps prior result explicitly stale and never rolls back a followup',async()=>{
+  const s=workspace();s.deals[0].intelligence=prior('old-source',0);s.deals[0].notes.push({id:'saved-note',text:'刚刚保存的客户跟进',author:'林晓',date:now});const m=memory(s);const out=await processSalesIntelligence('user','deal-1','https://site.example',{...m.deps,model:{name:'test-model'},generate:async()=>{throw new Error('secret-token-provider-body');}});assert.equal(out.deals[0].notes[0].text,'刚刚保存的客户跟进');assert.equal(out.deals[0].intelligence?.status,'failed');assert.equal(out.deals[0].intelligence?.latest?.sourceHash,'old-source');assert.equal(salesIntelligenceIsCurrent(out.deals[0]),false);assert.ok(!JSON.stringify(out.deals[0].intelligence).includes('secret-token'));
+});
+test('a followup saved during a model call prevents the old result from being installed as current',async()=>{
+  const m=memory();const out=await processSalesIntelligence('user','deal-1','https://site.example',{...m.deps,model:{name:'test-model'},generate:async()=>{m.edit(s=>{s.deals[0].notes.unshift({id:'newer',text:'客户明确拒绝采购，暂无采购计划',author:'林晓',date:now});s.deals[0].version++;});return modelReply();}});assert.equal(out.deals[0].notes[0].id,'newer');assert.equal(out.deals[0].intelligence?.status,'stale');assert.equal(out.deals[0].intelligence?.latest,undefined);assert.equal(out.deals[0].intelligence?.sourceHash,await salesFingerprint(out.deals[0],[]));
+});
+test('a newer successful attempt cannot be overwritten by an older completion or failure',async()=>{
+  const m=memory();let resolveOld:(value:string)=>void=()=>{};const old=processSalesIntelligence('user','deal-1','https://site.example',{...m.deps,model:{name:'test-model'},generate:()=>new Promise(resolve=>{resolveOld=resolve;})});
+  while(m.get().deals[0].intelligence?.status!=='processing')await new Promise(r=>setTimeout(r,0));
+  m.edit(s=>{s.deals[0].summary+='客户再次确认周五会议。';s.deals[0].version++;});
+  const newer=await processSalesIntelligence('user','deal-1','https://site.example',{...m.deps,model:{name:'new-model'},generate:async()=>modelReply()});resolveOld(modelReply());await old;assert.equal(m.get().deals[0].intelligence?.latest?.sourceHash,newer.deals[0].intelligence?.latest?.sourceHash);assert.equal(m.get().deals[0].intelligence?.modelName,'new-model');assert.equal(salesIntelligenceIsCurrent(m.get().deals[0]),true);
+});
+test('same source skips paid regeneration and synchronizes business version after cosmetic edits',async()=>{
+  const s=workspace();s.deals[0].intelligence=prior(await salesFingerprint(s.deals[0],[]),s.deals[0].version);s.deals[0].cardColor='#123456';s.deals[0].version++;const m=memory(s);let calls=0;const out=await processSalesIntelligence('user','deal-1','https://site.example',{...m.deps,model:{name:'test-model'},generate:async()=>{calls++;return modelReply();}});assert.equal(calls,0);assert.equal(salesIntelligenceIsCurrent(out.deals[0]),true);assert.equal(out.deals[0].intelligence?.latest?.sourceVersion,2);
+});
+test('conflicting workspace writes are retried without duplicating provider work and history remains bounded',async()=>{
+  const s=workspace();s.deals[0].intelligence=prior('old',0);s.deals[0].intelligence.history=Array.from({length:5},(_,i)=>({sourceHash:`h-${i}`,assessedAt:now,modelName:'old',score:30,grade:'B',probability:30,forecastKind:'estimated',summary:'较早评估'}));const m=memory(s);let conflicts=0,calls=0;const deps={...m.deps,save:async(user:string,revision:number,next:WorkbenchState)=>{if(conflicts++<2){m.edit(s=>s.activities.unshift({id:`activity-${conflicts}`,title:'其他更新',detail:'已保存',date:now,type:'test'}));throw Object.assign(new Error('conflict'),{status:409});}return m.deps.save(user,revision,next);},model:{name:'test-model'},generate:async()=>{calls++;return modelReply();}};const out=await processSalesIntelligence('user','deal-1','https://site.example',deps);assert.equal(out.deals[0].intelligence?.status,'ready');assert.equal(calls,1);assert.ok(out.activities.some(a=>a.title==='其他更新'));assert.equal(out.deals[0].intelligence?.history.length,5);
+});

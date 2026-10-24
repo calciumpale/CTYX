@@ -1,3 +1,5 @@
+import {validateIntakeExtraction} from './project-intake.ts';
+import type {IntakeExtraction} from './project-intake-types.ts';
 import type {ProjectApprovalContext} from './approval-agent-context.ts';
 import { handleContractAction } from './contract-domain.ts';
 import type { ContractAnalysis,ContractDocument } from './contract-types.ts';
@@ -19,7 +21,7 @@ interface WorkflowCheckpoint {workflow:Workflow;role:Role;deal?:Deal;deals:Deal[
 type StoredState=WorkbenchState & {_access?:Record<string,string>;_workflowRuns?:Record<string,WorkflowCheckpoint>};
 export interface GenerationInput {query:string;agentId:AgentId;projectApprovals?:ProjectApprovalContext[];deal?:Deal;deals:Deal[];knowledge:Knowledge[];instruction?:string;previous?:string;history?:{query:string;answer:string}[];contractReviews?:{title:string;reviewedAt?:string;analysis:ContractAnalysis}[];purpose?:'chat'|'workflow';}
 export interface GenerationOutput {answer:string;mode:'demo'|'live';}
-export interface ActionContext {now?:string;generate?:(input:GenerationInput)=>Promise<GenerationOutput>;trainingGenerate?:(input:TrainingGenerationInput)=>Promise<GenerationOutput>;enrichCompany?:(deal:Deal)=>Promise<CompanyProfile>;trustedRecording?:FollowupRecording;reviewContract?:(document:ContractDocument,deal:Deal)=>Promise<ContractAnalysis>;contractModelName?:string;approveTalkTrack?:(track:TalkTrack)=>Promise<void>;retrieveTalkTracks?:(query:string)=>Promise<TalkTrack[]>;}
+export interface ActionContext {extractIntake?:(text:string)=>Promise<IntakeExtraction>;now?:string;generate?:(input:GenerationInput)=>Promise<GenerationOutput>;trainingGenerate?:(input:TrainingGenerationInput)=>Promise<GenerationOutput>;enrichCompany?:(deal:Deal)=>Promise<CompanyProfile>;trustedRecording?:FollowupRecording;reviewContract?:(document:ContractDocument,deal:Deal)=>Promise<ContractAnalysis>;contractModelName?:string;approveTalkTrack?:(track:TalkTrack)=>Promise<void>;retrieveTalkTracks?:(query:string)=>Promise<TalkTrack[]>;}
 const agentIds=new Set(AGENTS.map(item=>item.id));
 const nodeTypes=new Set(['start','intent','knowledge','agent','review','output']);
 const managerActions=new Set(['skill_review','knowledge_add','workflow_save','workflow_publish','workflow_review']);
@@ -486,6 +488,27 @@ export async function executeAction(original:WorkbenchState,role:Role,action:str
   if(managerActions.has(action)&&role!=='manager')fail('此操作需要销售管理者体验视角',403);
   if(!payload||typeof payload!=='object'||Array.isArray(payload))fail('请求参数格式不正确');
   let run:Run|undefined;let session:TrainingSession|undefined;let dealId:string|undefined;let message='已保存';
+  if(action==='deal_intake'){
+    onlyFields(payload,new Set(['requestId','text','inputMode','forceNew']));
+    const requestId=text(payload.requestId,'录入标识',36);if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(requestId))fail('录入标识无效');
+    text(payload.text,'客户描述',6000);const rawText=payload.text as string;if(payload.inputMode!=='text'&&payload.inputMode!=='speech')fail('请选择文字或语音录入');
+    if(payload.forceNew!==undefined&&typeof payload.forceNew!=='boolean')fail('请确认是否另建项目');
+    if(state.deals.some(d=>d.notes.some(n=>n.intakeRequestId===requestId)))fail('该条录入已记入跟进，请开始新的录入',409);
+    const replay=state.deals.find(d=>d.intake?.requestId===requestId);
+    if(replay){visibleDeal(state,role,replay.id);if(replay.intake?.rawText!==rawText||replay.intake.inputMode!==payload.inputMode)fail('该录入已提交，请重新开始一条录入',409);return {state,dealId:replay.id,message:'该客户记录已保存'};}
+    if(!context.extractIntake)fail('请先在设置中配置并启用大模型 API，再使用智能录入',503);
+    let extracted:IntakeExtraction;try{extracted=validateIntakeExtraction(await context.extractIntake(rawText),rawText);}catch(error){if(error instanceof DomainError)throw error;fail('客户描述未能可靠识别，请补充企业名称与需求后重试',502);}
+    if(extracted.status==='needs_info')return {state,intake:{status:'needs_info',question:extracted.question||'请补充客户企业名称。',draft:extracted},message:'请补充必要信息'};
+    const normalize=(v:string)=>v.toLowerCase().replace(/[\s·・,，。;；:：()（）]/g,'');
+    const name=text(extracted.fields.name,'企业名称',200),projectName=text(extracted.fields.projectName||`${name} · 新商机`,'项目名称',200);
+    const matches=state.deals.filter(d=>d.dataOrigin==='manual'&&(role!=='sales'||d.ownerId==='sales-1')&&normalize(d.name)===normalize(name)&&(projectName===`${name} · 新商机`||normalize(d.projectName||d.name)===normalize(projectName)));
+    if(matches.length&&payload.forceNew!==true)return {state,intake:{status:'duplicate',question:'已有相似项目，要记为跟进，还是另建项目？',draft:extracted,existing:matches.slice(0,5).map(d=>({id:d.id,name:d.name,projectName:d.projectName||d.name}))},message:'找到已有项目，请选择录入方式'};
+    const fields={...extracted.fields};delete fields.stage;
+    if(fields.website){try{fields.website=publicUrl(/^https?:\/\//i.test(fields.website)?fields.website:`https://${fields.website}`);}catch{delete fields.website;}}
+    const owner=assignedOwner(state,role,undefined);
+    const deal:Deal={id:uid('deal'),name,projectName,contact:'',position:'',industry:'',...owner,stage:'线索',amount:0,health:0,priority:'medium',lastContact:now.slice(0,10),nextAction:'',summary:'',needs:[],risks:[],notes:[{id:uid('note'),text:rawText,author:actor,date:now}],version:1,avatar:Array.from(name)[0],createdAt:now,dataOrigin:'manual',...projectChanges(fields),intake:{requestId,rawText,inputMode:payload.inputMode,capturedAt:now}};
+    state.deals.unshift(deal);state.revision++;activity(state,role,'客户已智能录入',`${projectName} · 已保留沟通原话`,'deal',now);return {state,dealId:deal.id,message:'客户已录入，正在更新洞察与预测'};
+  }
   const contractStarted=Date.now();
   const contractResult=await handleContractAction(state,role,action,payload,{now,review:context.reviewContract,modelName:context.contractModelName});
   if(contractResult){
@@ -496,6 +519,15 @@ export async function executeAction(original:WorkbenchState,role:Role,action:str
   const talkMessage=await handleTalkAction(state,role,action,payload,now,context.approveTalkTrack);
   if(talkMessage){state.revision++;activity(state,role,'实战话术与项目信息已更新',talkMessage,'talktrack',now);return {state,message:talkMessage};}
   switch(action) {
+    case 'deal_intake_followup': {
+      onlyFields(payload,new Set(['dealId','requestId','text','inputMode']));const deal=visibleDeal(state,role,payload.dealId);
+      const requestId=text(payload.requestId,'录入标识',36);if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(requestId))fail('录入标识无效');
+      text(payload.text,'跟进原话',6000);const rawText=payload.text as string;if(payload.inputMode!=='text'&&payload.inputMode!=='speech')fail('请选择文字或语音录入');
+      if(state.deals.some(d=>d.intake?.requestId===requestId||d.id!==deal.id&&d.notes.some(n=>n.intakeRequestId===requestId)))fail('该条录入已保存到其他记录，请开始新的跟进',409);
+      const saved=deal.notes.find(n=>n.intakeRequestId===requestId);if(saved){if(saved.text!==rawText||saved.inputMode!==payload.inputMode)fail('该条录入已保存，请开始新的跟进',409);return {state,dealId:deal.id,message:'该条跟进已保存'};}
+      deal.notes.unshift({id:uid('note'),text:rawText,author:actor,date:now,intakeRequestId:requestId,inputMode:payload.inputMode});deal.version++;deal.lastContact=now.slice(0,10);dealId=deal.id;activity(state,role,`${deal.name}新增跟进`,rawText.slice(0,100),'deal',now);message='沟通原话已记入项目跟进';break;
+    }
+    case 'deal_assess': {const deal=visibleDeal(state,role,payload.dealId);onlyFields(payload,new Set(['dealId','version']));checkVersion(deal.version,payload.version);dealId=deal.id;message='项目已提交重新评估';break;}
     case 'deal_create': {
       onlyFields(payload,new Set([...projectFields,'ownerId']));
       const name=text(payload.name,'企业名称',200);const projectName=text(payload.projectName,'项目名称',200);
@@ -525,7 +557,7 @@ export async function executeAction(original:WorkbenchState,role:Role,action:str
       const deal=visibleDeal(state,role,payload.dealId);
       if(Object.prototype.hasOwnProperty.call(payload,'recording'))fail('请通过录音上传入口添加附件');
       const recording=context.trustedRecording;
-      const value=recording?optional(payload.text,5000):text(payload.text,'跟进备注',5000);
+      const value=recording?optional(payload.text,5000):text(payload.text,'跟进备注',6000);
       deal.notes.unshift({id:uid('note'),text:value,author:actor,date:now,...(recording?{recording:{...recording}}:{})});deal.version++;deal.lastContact=now.slice(0,10);
       activity(state,role,`${deal.name}新增跟进`,value.slice(0,100)||(recording?`上传录音：${recording.name}`:''),'deal',now);break;
     }

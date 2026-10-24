@@ -4,6 +4,8 @@ import { DomainError, executeAction } from '../app/lib/domain.ts';
 import type { GenerationInput } from '../app/lib/domain.ts';
 import { createSeed } from '../app/lib/seed.ts';
 import type { Run, Workflow } from '../app/lib/types.ts';
+import { buildModelMessages } from '../app/lib/model-messages.ts';
+import type { SalesIntelligence } from '../app/lib/sales-intelligence-types.ts';
 
 const now='2026-10-23T08:00:00.000Z';
 const status=(expected:number)=>(error:unknown)=>error instanceof DomainError&&error.status===expected;
@@ -159,4 +161,28 @@ test('unconnected ordinary chat clearly requests a model connection instead of a
   assert.match(result.run!.answer,/未调用外部模型/);
   assert.match(result.run!.answer,/配置|连接/);
   assert.doesNotMatch(result.run!.answer,/客户洞察：|待核实的问题：/);
+});
+
+function previousAssessment(version:number):SalesIntelligence {
+  return {status:'ready',sourceHash:'prior-snapshot',updatedAt:now,modelName:'test',message:'已评估',history:[],latest:{sourceHash:'prior-snapshot',sourceVersion:version,assessedAt:now,modelName:'test',insight:{score:90,grade:'A',summary:'过时评估不得进入模型',dimensions:[],nextActions:[],missingInfo:[]},forecast:{kind:'estimated',probability:85,range:{low:70,high:95},confidence:'high',summary:'过时预测不得进入模型',factors:[],nextActions:[]},warnings:[]}};
+}
+
+test('chat strips an assessment invalidated by automatic company enrichment before model generation',async()=>{
+  const state=createSeed(now),deal=state.deals[0];deal.dataOrigin='manual';deal.intelligence=previousAssessment(deal.version);
+  let context='';
+  const result=await executeAction(state,'manager','chat',{dealId:deal.id,agentId:'insight',query:'分析当前项目需求'},{now,enrichCompany:async()=>({companyName:deal.name,summary:'检索暂无可确认的外部资料',facts:[],sources:[],provider:'web',status:'partial',warnings:[],updatedAt:now,modelUsed:false}),generate:async input=>{context=buildModelMessages(input).at(-1)!.content;return {answer:'按客户记录回答',mode:'live'};}});
+  assert.equal(result.state.deals[0].version,deal.version+1);
+  assert.ok(context.includes(deal.summary));
+  assert.doesNotMatch(context,/过时评估不得进入模型|过时预测不得进入模型/);
+});
+
+test('resumed workflows omit snapshot assessments even when the checkpoint version appears current',async()=>{
+  const state=createSeed(now),deal=state.deals[0];deal.dataOrigin='manual';deal.intelligence=previousAssessment(deal.version);
+  state.workflows=[{id:'snapshot-assessment',name:'暂停后的商机分析',description:'',status:'draft',version:1,updatedAt:now,nodes:[{id:'s',type:'start',label:'开始',x:0,y:0},{id:'r',type:'review',label:'人工确认',x:100,y:0},{id:'a',type:'agent',label:'商机预测',agentId:'opportunity',x:200,y:0},{id:'o',type:'output',label:'输出',x:300,y:0}],edges:[{from:'s',to:'r'},{from:'r',to:'a'},{from:'a',to:'o'}]}];
+  const paused=await executeAction(state,'manager','workflow_run',{workflowId:'snapshot-assessment',dealId:deal.id,query:'评估项目推进机会'},{now});
+  const changed=await executeAction(paused.state,'manager','deal_note',{dealId:deal.id,text:'客户明确拒绝采购，暂无采购计划'},{now});
+  let modelContext='';
+  await executeAction(changed.state,'manager','workflow_review',{runId:paused.run!.id,decision:'approve',note:'继续执行'},{now,generate:async input=>{assert.equal(input.deal?.version,deal.version);modelContext=buildModelMessages(input).map(m=>m.content).join('\n');return {answer:'依据历史快照处理',mode:'live'};}});
+  assert.doesNotMatch(modelContext,/过时评估不得进入模型|过时预测不得进入模型/);
+  assert.match(modelContext,/历史快照|运行时快照/);
 });

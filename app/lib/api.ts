@@ -10,13 +10,14 @@ export function useWorkbench() {
   // Keep role changes and writes in one order, including slow model requests.
   // A response from the previous role must never replace the new projection.
   const mutationQueue = useRef<Promise<void>>(Promise.resolve());
-  const accept = useCallback((next: WorkbenchState) => { stateRef.current = next; setState(next); setError(null); }, []);
+  const accept = useCallback((next: WorkbenchState) => { if(stateRef.current?.role===next.role&&stateRef.current.revision>next.revision)return;stateRef.current = next; setState(next); setError(null); }, []);
   const reload = useCallback(async () => {
+    const previous=stateRef.current;
     try {
       const response = await fetch('/api/workbench', { cache: 'no-store', credentials: 'same-origin' });
       const body = await response.json() as WorkbenchState & { error?: string };
       if (!response.ok) throw new Error(body.error || '工作台暂时未能加载，请重试');
-      accept(body as WorkbenchState);
+      if(stateRef.current===previous)accept(body as WorkbenchState);
     } catch (cause) { setError(cause instanceof Error ? cause.message : '网络连接失败，请重试'); throw cause; }
     finally { setLoading(false); }
   }, [accept]);

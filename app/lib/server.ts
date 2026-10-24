@@ -1,3 +1,8 @@
+import {extractProjectIntake} from './project-intake.ts';
+import {processSalesIntelligence} from './sales-intelligence-service.ts';
+import {persistSalesWorkspace} from './sales-report-store.ts';
+import {salesMutationEvents} from './sales-report-domain.ts';
+import type {SalesEvent} from './sales-report-types.ts';
 import {createApprovalStore} from './approval-store.ts';
 import {projectApprovalContext} from './approval-agent-context.ts';
 import {reviewContract} from './contract-review.ts';
@@ -43,7 +48,7 @@ export function requireUserId(request:Request):string {
   return id;
 }
 async function applyModelStatus(state:WorkbenchState,userId:string,siteOrigin:string):Promise<void> {
-  const model=await readEffectiveModel(userId,siteOrigin);
+  let model:Awaited<ReturnType<typeof readEffectiveModel>>=null;try{model=await readEffectiveModel(userId,siteOrigin);}catch{state.model={connected:false,name:'模型配置暂时不可用，请在设置中检查'};return;}
   state.model={connected:!!model,name:model?`${model.name} · 已配置，生成时验证`:'规则演示 · 未连接外部模型'};
 }
 export async function loadWorkspace(userId:string,siteOrigin='https://production.invalid'):Promise<WorkbenchState> {
@@ -58,11 +63,17 @@ export async function loadWorkspace(userId:string,siteOrigin='https://production
   const state=JSON.parse(row.state_json) as WorkbenchState;
   state.revision=row.revision;await applyModelStatus(state,userId,siteOrigin);return state;
 }
-export async function saveWorkspace(userId:string,expectedRevision:number,state:WorkbenchState):Promise<void> {
-  const json=JSON.stringify(state);if(new TextEncoder().encode(json).length>1800000)throw new DomainError('工作空间存储容量不足，请联系管理员扩容；本次新增内容未保存',413);
-  const result=await database().prepare('UPDATE workbench_workspaces SET state_json = ?, revision = ?, updated_at = ? WHERE user_id = ? AND revision = ?').bind(json,state.revision,new Date().toISOString(),userId,expectedRevision).run();
-  if(result.meta.changes!==1)throw new DomainError('工作空间已被另一请求更新，请刷新后重试；本次操作未保存',409);
+export async function saveWorkspace(userId:string,expectedRevision:number,state:WorkbenchState,events:SalesEvent[]=[]):Promise<void> {
+  await persistSalesWorkspace(database(),userId,expectedRevision,state,events);
 }
+/** Derived analysis follows the committed business write and cannot roll it back. */
+export async function refreshSalesProject(userId:string,dealId:string,siteOrigin:string,force=false):Promise<WorkbenchState>{
+  let model:Awaited<ReturnType<typeof readEffectiveModel>>=null;
+  try{model=await readEffectiveModel(userId,siteOrigin);}catch{/* Configuration failures must not discard saved customer facts. */}
+  try{return await processSalesIntelligence(userId,dealId,siteOrigin,{load:loadWorkspace,save:saveWorkspace,model,generate:model?messages=>requestModelText(model!,messages,{timeoutMs:60000}):undefined},{force});}
+  catch{return loadWorkspace(userId,siteOrigin);}
+}
+
 async function generate(input:GenerationInput,model:{key:string;url:string;name:string}|null):Promise<GenerationOutput> {
   if(!model)return demoGenerate(input);
   return {answer:await requestModelText(model,buildModelMessages(input)),mode:'live'};
@@ -76,15 +87,20 @@ export async function readWorkbench(userId:string,role:Role,siteOrigin='https://
 }
 export async function mutateWorkbench(userId:string,role:Role,action:string,payload:Record<string,unknown>,revision:unknown,siteOrigin='https://production.invalid'):Promise<ApiResult> {
   const state=await loadWorkspace(userId,siteOrigin);assertRevision(state,revision);
-  const model=await readEffectiveModel(userId,siteOrigin);
-  const result=await executeAction(state,role,action,payload,{contractModelName:model?.name,reviewContract:async(document,deal)=>{if(!model)throw new DomainError('请先在设置中配置并启用大模型 API，合同原文已保存',503);return reviewContract({...document,projectContext:JSON.stringify({projectName:deal.projectName??deal.name,company:deal.name,dataOrigin:deal.dataOrigin??'sample',userRecordedNeeds:deal.needs.slice(0,5).map(t=>t.slice(0,200)),userRecordedRisks:deal.risks.slice(0,5).map(t=>t.slice(0,200)),customerBudget:deal.customerProfile?.budget.slice(0,300),customerTimeline:deal.customerProfile?.timeline.slice(0,300)})},messages=>requestModelText(model,messages,{timeoutMs:60000}));},approveTalkTrack:async track=>{const embed=await effectiveEmbedding(userId);if(!embed)throw new DomainError('请在设置中配置并启用 Embedding API',503);const result=await requestEmbeddings(embed,[talkText(track)],{origin:siteOrigin});const index=createTalkIndex(database(),userId);const current=await index.all((state.talkTracks??[]).filter(t=>t.status==='candidate'||t.status==='published'),result.model);const activeIds=new Set((state.talkTracks??[]).filter(t=>t.status==='candidate'||t.status==='published').map(t=>t.id));if(current.some(v=>activeIds.has(v.id)&&v.id!==track.id&&v.model!==result.model))throw new DomainError('Embedding 模型已变更，请先重建索引',409);if(current.some(v=>v.id!==track.id&&v.model===result.model&&cosineSimilarity(v.vector,result.vectors[0])>=0.90))throw new DomainError('审核后的话术与现有条目高度相似，请调整或打回',409);const version=track.version+1;await index.upsert({...track,version,title:talkTitle(track.employeeName,track.topic,version)},result.vectors[0],result.model,'published');},retrieveTalkTracks:async query=>{const embed=await effectiveEmbedding(userId);if(!embed||!state.talkTracks?.some(t=>t.status==='published'))return [];const result=await requestEmbeddings(embed,[query],{origin:siteOrigin});return createTalkIndex(database(),userId).search(result.vectors[0],result.model,state.talkTracks);},generate:async input=>{if(input.deal&&['strategy','risk'].includes(input.agentId)){const page=await createApprovalStore(database()).list({id:userId,email:''},{scope:'mine',projectId:input.deal.id,limit:5});input.projectApprovals=await projectApprovalContext(page.records.map(item=>item.request),state,input.deal.id,userId);}return generate(input,model);},trainingGenerate:input=>generateTraining(input,model),enrichCompany:async deal=>{
+  let model:Awaited<ReturnType<typeof readEffectiveModel>>=null;try{model=await readEffectiveModel(userId,siteOrigin);}catch{/* Keep customer writes usable when model settings need repair. */}
+  const mutationAt=new Date().toISOString();
+  const result=await executeAction(state,role,action,payload,{now:mutationAt,extractIntake:model?text=>extractProjectIntake(text,messages=>requestModelText(model!,messages,{timeoutMs:60000})):undefined,contractModelName:model?.name,reviewContract:async(document,deal)=>{if(!model)throw new DomainError('请先在设置中配置并启用大模型 API，合同原文已保存',503);return reviewContract({...document,projectContext:JSON.stringify({projectName:deal.projectName??deal.name,company:deal.name,dataOrigin:deal.dataOrigin??'sample',userRecordedNeeds:deal.needs.slice(0,5).map(t=>t.slice(0,200)),userRecordedRisks:deal.risks.slice(0,5).map(t=>t.slice(0,200)),customerBudget:deal.customerProfile?.budget.slice(0,300),customerTimeline:deal.customerProfile?.timeline.slice(0,300)})},messages=>requestModelText(model,messages,{timeoutMs:60000}));},approveTalkTrack:async track=>{const embed=await effectiveEmbedding(userId);if(!embed)throw new DomainError('请在设置中配置并启用 Embedding API',503);const result=await requestEmbeddings(embed,[talkText(track)],{origin:siteOrigin});const index=createTalkIndex(database(),userId);const current=await index.all((state.talkTracks??[]).filter(t=>t.status==='candidate'||t.status==='published'),result.model);const activeIds=new Set((state.talkTracks??[]).filter(t=>t.status==='candidate'||t.status==='published').map(t=>t.id));if(current.some(v=>activeIds.has(v.id)&&v.id!==track.id&&v.model!==result.model))throw new DomainError('Embedding 模型已变更，请先重建索引',409);if(current.some(v=>v.id!==track.id&&v.model===result.model&&cosineSimilarity(v.vector,result.vectors[0])>=0.90))throw new DomainError('审核后的话术与现有条目高度相似，请调整或打回',409);const version=track.version+1;await index.upsert({...track,version,title:talkTitle(track.employeeName,track.topic,version)},result.vectors[0],result.model,'published');},retrieveTalkTracks:async query=>{const embed=await effectiveEmbedding(userId);if(!embed||!state.talkTracks?.some(t=>t.status==='published'))return [];const result=await requestEmbeddings(embed,[query],{origin:siteOrigin});return createTalkIndex(database(),userId).search(result.vectors[0],result.model,state.talkTracks);},generate:async input=>{if(input.deal&&['strategy','risk'].includes(input.agentId)){const page=await createApprovalStore(database()).list({id:userId,email:''},{scope:'mine',projectId:input.deal.id,limit:5});input.projectApprovals=await projectApprovalContext(page.records.map(item=>item.request),state,input.deal.id,userId);}return generate(input,model);},trainingGenerate:input=>generateTraining(input,model),enrichCompany:async deal=>{
     let qcc:Awaited<ReturnType<typeof readEffectiveCompanyConnection>>=null;let configurationIssue=false;
     try{qcc=await readEffectiveCompanyConnection(userId);}catch{configurationIssue=true;}
     const profile=await researchCompany(deal,{qcc,model});
     if(configurationIssue)profile.warnings.unshift('企查查配置暂时无法使用，已改用公开网络检索；请在设置中重新保存凭证。');
     return profile;
   }});
-  await saveWorkspace(userId,state.revision,result.state);
+  if(result.state.revision===state.revision)return {...result,state:projectState(await loadWorkspace(userId,siteOrigin),role)};
+  await saveWorkspace(userId,state.revision,result.state,salesMutationEvents(state,result.state,action,payload,mutationAt));
+  const targetDealId=result.dealId||result.run?.dealId||(typeof payload.dealId==='string'?payload.dealId:'');
+  const changedSalesData=['deal_create','deal_intake','deal_intake_followup','deal_note','deal_update','deal_enrich','deal_stage','deal_outcome','transcript_add','deal_assess'].includes(action)||(action==='chat'&&!!targetDealId&&result.state.deals.find(deal=>deal.id===targetDealId)?.version!==state.deals.find(deal=>deal.id===targetDealId)?.version);
+  if(targetDealId&&changedSalesData){const next=await refreshSalesProject(userId,targetDealId,siteOrigin,action==='deal_assess');result.state=next;}
   if(['deal_outcome','transcript_add','feedback_retry'].includes(action)){await processFeedback(userId,String(payload.dealId),siteOrigin);return {...result,state:await readWorkbench(userId,role,siteOrigin)};}
   return {...result,state:projectState(result.state,role)};
 }

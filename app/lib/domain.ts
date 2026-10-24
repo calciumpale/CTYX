@@ -1,3 +1,5 @@
+import { handleContractAction } from './contract-domain.ts';
+import type { ContractAnalysis,ContractDocument } from './contract-types.ts';
 import { approvedTracks, handleTalkAction, talkKnowledge } from './talktrack-domain.ts';
 import type { TalkTrack } from './talktrack-types.ts';
 import { AGENTS, STAGES } from './types.ts';
@@ -14,9 +16,9 @@ export class DomainError extends Error {
 interface WorkflowFrame {knowledgeIds:string[];answerIds:string[];targets?:string[];}
 interface WorkflowCheckpoint {workflow:Workflow;role:Role;deal?:Deal;deals:Deal[];knowledge:Record<string,Knowledge>;answers:Record<string,string>;frames:Record<string,WorkflowFrame>;order:string[];cursor:number;}
 type StoredState=WorkbenchState & {_access?:Record<string,string>;_workflowRuns?:Record<string,WorkflowCheckpoint>};
-export interface GenerationInput {query:string;agentId:AgentId;deal?:Deal;deals:Deal[];knowledge:Knowledge[];instruction?:string;previous?:string;history?:{query:string;answer:string}[];purpose?:'chat'|'workflow';}
+export interface GenerationInput {query:string;agentId:AgentId;deal?:Deal;deals:Deal[];knowledge:Knowledge[];instruction?:string;previous?:string;history?:{query:string;answer:string}[];contractReviews?:{title:string;reviewedAt?:string;analysis:ContractAnalysis}[];purpose?:'chat'|'workflow';}
 export interface GenerationOutput {answer:string;mode:'demo'|'live';}
-export interface ActionContext {now?:string;generate?:(input:GenerationInput)=>Promise<GenerationOutput>;trainingGenerate?:(input:TrainingGenerationInput)=>Promise<GenerationOutput>;enrichCompany?:(deal:Deal)=>Promise<CompanyProfile>;trustedRecording?:FollowupRecording;approveTalkTrack?:(track:TalkTrack)=>Promise<void>;retrieveTalkTracks?:(query:string)=>Promise<TalkTrack[]>;}
+export interface ActionContext {now?:string;generate?:(input:GenerationInput)=>Promise<GenerationOutput>;trainingGenerate?:(input:TrainingGenerationInput)=>Promise<GenerationOutput>;enrichCompany?:(deal:Deal)=>Promise<CompanyProfile>;trustedRecording?:FollowupRecording;reviewContract?:(document:ContractDocument,deal:Deal)=>Promise<ContractAnalysis>;contractModelName?:string;approveTalkTrack?:(track:TalkTrack)=>Promise<void>;retrieveTalkTracks?:(query:string)=>Promise<TalkTrack[]>;}
 const agentIds=new Set(AGENTS.map(item=>item.id));
 const nodeTypes=new Set(['start','intent','knowledge','agent','review','output']);
 const managerActions=new Set(['skill_review','knowledge_add','workflow_save','workflow_publish','workflow_review']);
@@ -144,6 +146,7 @@ export function projectState(state:WorkbenchState,role:Role):WorkbenchState {
   const result=structuredClone(state) as StoredState;
   if(role==='sales') {
     const ownIds=new Set(result.deals.filter(d=>d.ownerId==='sales-1').map(d=>d.id));
+    result.contracts=result.contracts?.filter(c=>ownIds.has(c.dealId));
     result.transcripts=result.transcripts?.filter(t=>ownIds.has(t.dealId));
     result.feedbackJobs=result.feedbackJobs?.filter(j=>ownIds.has(j.dealId));
     result.talkTracks=result.talkTracks?.filter(t=>t.status==='published'||ownIds.has(t.dealId));
@@ -347,7 +350,7 @@ async function buildRun(state:StoredState,role:Role,query:string,context:ActionC
   const step=(title:string,detail:string,status:TraceStep['status']='success',agent?:AgentId,duration=0)=>steps.push({id:uid('step'),title,detail,status,agent,duration});
   const getKnowledge=()=> {knowledge=[...tracks.map(talkKnowledge),...retrieve(state,retrievalQuery)];for(const item of knowledge) if(!citations.some(entry=>entry.id===item.id))citations.push({id:item.id,title:item.title,excerpt:item.content.slice(0,240)});return knowledge;};
   const generate=async (agentId:AgentId,instruction?:string,previous=answers.join('\n\n'))=> {
-    const tick=Date.now();const input:GenerationInput={query,agentId,deal,deals:scopedDeals,knowledge,instruction:[instruction,explicitTracks.length?'用户指定采用以下已审核话术的结构和表达方式：'+explicitTracks.map(t=>t.title).join('、')+'。根据当前客户资料改写占位符，不照搬来源项目事实。':undefined].filter(Boolean).join('\n'),previous,history,purpose:'chat'};
+    const tick=Date.now();const input:GenerationInput={query,agentId,deal,deals:scopedDeals,knowledge,instruction:[instruction,explicitTracks.length?'用户指定采用以下已审核话术的结构和表达方式：'+explicitTracks.map(t=>t.title).join('、')+'。根据当前客户资料改写占位符，不照搬来源项目事实。':undefined].filter(Boolean).join('\n'),previous,history,...(agentId==='risk'&&deal?{contractReviews:(state.contracts??[]).filter(c=>c.dealId===deal.id&&c.analysis).slice(0,5).map(c=>({title:c.title,reviewedAt:c.reviewedAt,analysis:c.analysis!}))}:{}),purpose:'chat'};
     const output=context.generate?await context.generate(input):demoGenerate(input);
     if(output.mode==='live')mode='live';usedAgents.push(agentId);answers.push(`${agentName(agentId)}\n${output.answer}`);
     step(`${agentName(agentId)}生成`,`${output.mode==='demo'?'本地规则演示，未请求外部模型':'服务端外部模型返回'}；使用${knowledge.length}条生效资料${deal?`；客户：${deal.name}`:''}${instruction?`；节点指令：${instruction}`:''}`, 'success',agentId,Date.now()-tick);
@@ -482,6 +485,13 @@ export async function executeAction(original:WorkbenchState,role:Role,action:str
   if(managerActions.has(action)&&role!=='manager')fail('此操作需要销售管理者体验视角',403);
   if(!payload||typeof payload!=='object'||Array.isArray(payload))fail('请求参数格式不正确');
   let run:Run|undefined;let session:TrainingSession|undefined;let dealId:string|undefined;let message='已保存';
+  const contractStarted=Date.now();
+  const contractResult=await handleContractAction(state,role,action,payload,{now,review:context.reviewContract,modelName:context.contractModelName});
+  if(contractResult){
+    const document=contractResult.reviewed;
+    if(document?.analysis){const a=document.analysis;const high=a.findings.filter(f=>f.level==='high').length;run={id:uid('run'),query:`合同初审：${document.title}`,answer:[`## ${document.title} · 合同初审`,a.summary,`审查范围：${a.coverage.characters}字，${a.coverage.clauses}个原文片段，${a.coverage.chunks}批。`,...a.findings.map((f,i)=>`### ${i+1}. ${f.title}（${{high:'高',medium:'中',low:'低'}[f.level]}风险）\n\n原文：${f.quote}\n\n风险原因：${f.reason}\n\n修改意见：${f.suggestion}\n\n建议文本：${f.replacement}`),...(a.missingItems.length?['### 待补充事项',...a.missingItems.map(m=>`- ${m.title}：${m.reason}；${m.suggestion}`)]:[]),...a.warnings].join('\n\n'),agentIds:['risk'],mode:'live',createdAt:now,dealId:document.dealId,status:'completed',duration:Date.now()-contractStarted,steps:[{id:uid('step'),title:'读取合同原文',detail:`已保存的项目合同 · v${document.version-1} · ${a.coverage.characters}字`,status:'success',agent:'risk',duration:0},{id:uid('step'),title:'商务风控 Agent 初审',detail:`完整提交${a.coverage.clauses}个片段、${a.coverage.chunks}批，发现${high}项高风险条款；原文锚点经服务端核验。`,status:'success',agent:'risk',duration:0}],citations:a.findings.map(f=>({id:`${document.id}-${f.id}`,title:f.title,excerpt:f.quote}))};state.runs.unshift(run);mark(state,run.id,role);}
+    trimRunHistory(state);state.revision++;activity(state,role,'合同初审与处理',contractResult.message,'contract',now);return {state,contractId:contractResult.id,message:contractResult.message,...(run?{run}:{})};
+  }
   const talkMessage=await handleTalkAction(state,role,action,payload,now,context.approveTalkTrack);
   if(talkMessage){state.revision++;activity(state,role,'实战话术与项目信息已更新',talkMessage,'talktrack',now);return {state,message:talkMessage};}
   switch(action) {

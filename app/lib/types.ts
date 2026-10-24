@@ -1,14 +1,15 @@
+import type { ContractDocument } from './contract-types.ts';
 import type { CallTranscript, TalkTrack, FeedbackJob, TalkTrackUsage, TalkTrackPolicy } from './talktrack-types.ts';
 import type { TrainingProfile } from './training-profile.ts';
 
 export type Role = 'sales' | 'manager';
-export type View = 'home' | 'deals' | 'training' | 'knowledge' | 'talktracks' | 'studio' | 'runs' | 'settings';
+export type View = 'home' | 'deals' | 'training' | 'knowledge' | 'talktracks' | 'contracts' | 'studio' | 'runs' | 'settings';
 export type AgentId = 'insight' | 'strategy' | 'opportunity' | 'risk' | 'coach';
 export const AGENTS: {id: AgentId; name: string; description: string; starter: string}[] = [
   {id:'insight',name:'客户洞察',description:'读懂客户，找到沟通的切入点',starter:'帮我梳理当前项目的客户需求和关键决策人'},
   {id:'strategy',name:'策略方案',description:'把客户需求，变成可执行方案',starter:'为当前项目准备一次拜访方案和开场话术'},
   {id:'opportunity',name:'商机预测',description:'找到值得推进的下一步',starter:'本周哪些商机最值得优先跟进？请说明依据'},
-  {id:'risk',name:'商务风控',description:'核对商务条件，把握授权边界',starter:'帮我核对当前项目的合同条件和商务授权边界'},
+  {id:'risk',name:'商务风控',description:'初审合同、标注风险条款并给出修改建议',starter:'帮我梳理当前项目的合同风险和需要修改的条款'},
   {id:'coach',name:'培训带练',description:'在真实沟通之前，先练习一次',starter:'陪我练习客户提出采购价格异议时如何回应'},
 ];
 export const STAGES = ['线索','商机','方案','合同','回款'] as const;
@@ -28,7 +29,7 @@ export interface TraceStep {id:string;title:string;agent?:AgentId;nodeId?:string
 export interface Run {id:string;query:string;answer:string;agentIds:AgentId[];steps:TraceStep[];citations:{id:string;title:string;excerpt:string}[];mode:'demo'|'live';createdAt:string;duration:number;dealId?:string;workflowId?:string;status?:'completed'|'paused'|'failed'|'rejected';workflowVersion?:number;workflowSource?:'draft'|'published';awaitingNodeId?:string;review?:{reviewer:string;decision:'approve'|'reject';note:string;date:string};}
 export interface TrainingSession {id:string;scenario:string;customer:string;profile?:TrainingProfile;mode?:'demo'|'live';messages:{role:'user'|'assistant';content:string}[];status:'active'|'completed';voiceTurnIds?:string[];score?:number;feedback?:{label:string;score:number;evidence:string;suggestion:string}[];createdAt:string;}
 export interface Activity {id:string;title:string;detail:string;date:string;type:string;}
-export interface WorkbenchState {transcripts?:CallTranscript[];talkTracks?:TalkTrack[];feedbackJobs?:FeedbackJob[];talkTrackUsages?:TalkTrackUsage[];talkTrackPolicy?:TalkTrackPolicy;revision:number;role:Role;viewer:{name:string;team:string;salesId:string};dataMode:'example';model:{connected:boolean;name:string};deals:Deal[];skills:Skill[];knowledge:Knowledge[];workflows:Workflow[];runs:Run[];trainingSessions:TrainingSession[];activities:Activity[];}
-export interface ApiResult {state:WorkbenchState;run?:Run;session?:TrainingSession;dealId?:string;message?:string;}
+export interface WorkbenchState {contracts?:ContractDocument[];transcripts?:CallTranscript[];talkTracks?:TalkTrack[];feedbackJobs?:FeedbackJob[];talkTrackUsages?:TalkTrackUsage[];talkTrackPolicy?:TalkTrackPolicy;revision:number;role:Role;viewer:{name:string;team:string;salesId:string};dataMode:'example';model:{connected:boolean;name:string};deals:Deal[];skills:Skill[];knowledge:Knowledge[];workflows:Workflow[];runs:Run[];trainingSessions:TrainingSession[];activities:Activity[];}
+export interface ApiResult {contractId?:string;state:WorkbenchState;run?:Run;session?:TrainingSession;dealId?:string;message?:string;}
 export type Mutate = (action:string,payload?:Record<string,unknown>) => Promise<ApiResult>;
 export interface ViewProps {state:WorkbenchState;mutate:Mutate;notify:(message:string)=>void;onAsk:(query:string,agentId?:AgentId,dealId?:string,talkTrackIds?:string[])=>void;}

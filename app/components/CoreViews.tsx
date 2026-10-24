@@ -21,6 +21,7 @@ export function Overlay({ children, title, onClose, className = '', wide = false
     const dialog = ref.current;
     const previous = document.activeElement as HTMLElement | null;
     if (!dialog?.open) dialog?.showModal();
+    dialog?.querySelector<HTMLButtonElement>('[data-dialog-initial-focus]')?.focus({preventScroll:true});
     const cancel = (e: Event) => { e.preventDefault(); closeRef.current(); };
     dialog?.addEventListener('cancel', cancel);
     return () => { dialog?.removeEventListener('cancel', cancel); dialog?.close(); previous?.focus(); };

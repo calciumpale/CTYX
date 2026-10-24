@@ -430,3 +430,20 @@ button.notification-item:hover { background: var(--cds-fill-ghost-hover); }
   .manager-summary > :last-child { padding-left: 17px; padding-right: 0; }
   .manager-summary strong { white-space: nowrap; font-size: clamp(22px, 6vw, 26px); }
 }
+
+
+/* Confirmation dialogs use their own content rhythm; full drawers keep their layout. */
+.confirmation-dialog { width: 480px; border-radius: 16px; }
+.confirmation-dialog .overlay-body { padding: 28px; }
+.confirmation-dialog .overlay-heading { padding: 0; border-bottom: 0; align-items: flex-start; gap: 16px; margin-bottom: 12px; }
+.confirmation-dialog .overlay-heading h2 { font-size: 18px; line-height: 1.5; font-weight: 550; padding-top: 1px; overflow-wrap: anywhere; }
+.confirmation-dialog .overlay-heading > .icon-button { width: 32px; height: 32px; min-width: 32px; flex-shrink: 0; margin: -3px -5px 0 0; }
+.confirmation-dialog .overlay-body > p { margin: 0; color: var(--cds-text-secondary); font-size: 14px; line-height: 1.85; overflow-wrap: anywhere; }
+.confirmation-dialog .contract-leave-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 12px; margin: 28px 0 0; }
+.confirmation-dialog .contract-leave-actions .button { min-height: 42px; padding: 10px 16px; font-size: 14px; line-height: 20px; }
+@media (max-width: 520px) {
+  .confirmation-dialog { max-width: calc(100vw - 32px); max-height: calc(100dvh - 40px); }
+  .confirmation-dialog .overlay-body { padding: 24px; }
+  .confirmation-dialog .contract-leave-actions { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; margin-top: 24px; }
+  .confirmation-dialog .contract-leave-actions .button { width: 100%; min-height: 44px; }
+}

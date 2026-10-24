@@ -5,7 +5,7 @@
 .project-workspace .page-description { font-size: 14px; }
 .project-page-header { align-items: flex-start; margin-bottom: 28px; }
 .project-page-header .page-title { margin-bottom: 7px; }
-.project-header-actions { display: flex; gap: 9px; flex-shrink: 0; padding-top: 4px; }
+.project-header-actions { display: flex; flex-wrap: wrap; gap: 9px; flex-shrink: 0; padding-top: 4px; }
 .project-header-actions .button, .project-detail-heading > .button { min-height: 40px; }
 .project-toolbar { display: flex; align-items: center; gap: 12px; margin: 25px 0 17px; }
 .project-search { display: flex; gap: 10px; align-items: center; min-width: 0; max-width: 440px; flex: 1; min-height: 42px; padding: 0 12px; border: 1px solid var(--cds-border); border-radius: var(--cds-radius-btn-md); color: var(--cds-text-secondary); background: var(--cds-surface-1); }
@@ -306,3 +306,16 @@
   .project-run-answer { padding: 21px 17px; }
   .project-empty { padding: 40px 20px; }
 }
+
+.project-approval-status h2 { display:flex;align-items:center;gap:8px; }
+.project-approval-status ul { padding:0;margin:0;list-style:none; }
+.project-approval-status li + li { border-top:1px solid var(--cds-border); }
+.project-approval-status li > button { display:flex;align-items:center;gap:12px;width:100%;padding:15px 0;text-align:left;background:transparent;border:0;color:var(--cds-text-primary); }
+.project-approval-status li > button > div { min-width:0;flex:1;display:grid;gap:5px; }
+.project-approval-status li strong { font-size:14px;font-weight:550;overflow-wrap:anywhere; }
+.project-approval-status li > button > div > span { font-size:13px;color:var(--cds-text-secondary);overflow-wrap:anywhere; }
+.project-approval-message { display:flex;align-items:center;flex-wrap:wrap;gap:9px;margin:0;font-size:14px;line-height:1.8;color:var(--cds-text-secondary); }
+.project-approval-badge { font-size:12px;padding:4px 9px;white-space:nowrap;border-radius:var(--cds-radius-btn-xs);background:var(--cds-surface-3); }
+.project-approval-approved { color:var(--cds-text-primary);font-weight:550; }
+.project-approval-status button:focus-visible { outline:2px solid var(--cds-clay);outline-offset:4px; }
+@media(max-width:600px) { .project-approval-status .project-section-heading { flex-wrap:wrap;gap:12px; } }

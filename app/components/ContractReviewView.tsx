@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useId, useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent, type ReactNode } from 'react';
-import { AlertCircle, ArrowLeft, Check, ChevronDown, Copy, FileCheck2, FileText, History, Loader2, Pencil, Plus, Save, Settings2, ShieldCheck, Upload, X } from 'lucide-react';
+import { AlertCircle, ArrowLeft, Check, ChevronDown, ClipboardCheck, Copy, FileCheck2, FileText, History, Loader2, Pencil, Plus, Save, Settings2, ShieldCheck, Upload, X } from 'lucide-react';
 import { CONTRACT_TYPES, type ContractDocument, type ContractFinding, type ContractFindingStatus, type ContractKind, type ContractParty, type ContractRiskLevel } from '../lib/contract-types';
 import { importContractFile } from '../lib/contract-import';
 import type { View, ViewProps } from '../lib/types';
@@ -9,7 +9,7 @@ import './studio.css';
 import './contract-review.css';
 
 type Draft = Pick<ContractDocument, 'dealId' | 'title' | 'text' | 'contractType' | 'ourParty' | 'focus' | 'sourceFormat' | 'fileName' | 'importWarnings'>;
-type Props = ViewProps & { initialDealId?: string | null; onNavigate?: (view: View, id?: string) => void; onBusyChange?: (busy: boolean) => void; onDirtyChange?: (dirty: boolean) => void };
+type Props = ViewProps & { initialDealId?: string | null; onApproval?: (contractId:string,dealId:string)=>void; onNavigate?: (view: View, id?: string) => void; onBusyChange?: (busy: boolean) => void; onDirtyChange?: (dirty: boolean) => void };
 const LEVEL_LABELS: Record<ContractRiskLevel, string> = { high: '高风险', medium: '中风险', low: '低风险' };
 const STATUS_LABELS: Record<ContractFindingStatus, string> = { open: '待处理', revised: '已修改', legal: '需法务确认' };
 const MAX_CHARACTERS = 80000;
@@ -37,7 +37,7 @@ function ReviewEmpty({ busy, modelConnected }: { busy: boolean; modelConnected: 
   return <div className="contract-review-empty" aria-live="polite">{busy ? <Loader2 size={28} className="studio-spin" /> : <ShieldCheck size={28} />}<h2>{busy ? '正在逐条核对合同' : '让风险与原文一一对应'}</h2><p>{busy ? '商务风控 Agent 正在分析权利义务、识别风险条款并准备修改建议。请保留此页面，较长合同需要更多时间。' : '导入或粘贴合同正文，确认我方立场后开始初审。风险条款会在原文标注，便于核对和修改。'}</p>{!busy && <ul><li>付款、验收与交付条件</li><li>违约责任、免责与权责失衡</li><li>保密、知识产权与争议解决</li><li>缺失条款与不明确的约定</li></ul>}{!busy && !modelConnected && <small>配置大模型 API 后即可开始初审，当前可先保存草稿。</small>}</div>;
 }
 
-export function ContractReviewView({ state, mutate, notify, initialDealId, onNavigate, onBusyChange, onDirtyChange }: Props) {
+export function ContractReviewView({ state, mutate, notify, initialDealId, onApproval, onNavigate, onBusyChange, onDirtyChange }: Props) {
   const prefix = useId();
   const [saved, setSaved] = useState<ContractDocument | null>(null);
   const [draft, setDraft] = useState<Draft>(() => emptyDraft(initialDealId || ''));
@@ -139,7 +139,7 @@ export function ContractReviewView({ state, mutate, notify, initialDealId, onNav
   const riskBadge = (level: ContractRiskLevel): ReactNode => <span className={`contract-risk-badge contract-risk-${level}`}>{LEVEL_LABELS[level]}</span>;
 
   return <div className="studio-view contract-review-view" aria-busy={isBusy}>
-    <header className="studio-heading contract-page-heading"><div><h1>合同初审</h1><p>由商务风控 Agent 核对合同，标注风险条款并给出修改意见。</p></div><div className="contract-header-actions"><button type="button" className="studio-btn studio-btn-secondary" aria-expanded={historyOpen} disabled={isBusy} onClick={() => setHistoryOpen(value => !value)}><History size={16} />审查历史<span>{documents.length}</span></button><button type="button" className="studio-btn studio-btn-primary" disabled={isBusy} onClick={() => openDocument('new')}><Plus size={16} />新建审查</button></div></header>
+    <header className="studio-heading contract-page-heading"><div><h1>合同初审</h1><p>由商务风控 Agent 核对合同，标注风险条款并给出修改意见。</p></div><div className="contract-header-actions">{current && onApproval && <button type="button" className="studio-btn studio-btn-secondary" disabled={isBusy || dirty} title={dirty ? '请先保存合同修改' : '将当前已保存的合同提交多级审批'} onClick={() => onApproval(current.id,current.dealId)}><ClipboardCheck size={16} />提交合同审批</button>}<button type="button" className="studio-btn studio-btn-secondary" aria-expanded={historyOpen} disabled={isBusy} onClick={() => setHistoryOpen(value => !value)}><History size={16} />审查历史<span>{documents.length}</span></button><button type="button" className="studio-btn studio-btn-primary" disabled={isBusy} onClick={() => openDocument('new')}><Plus size={16} />新建审查</button></div></header>
 
     {historyOpen && <section className="contract-history" aria-label="合同审查历史"><div className="contract-section-header"><h2>审查历史</h2><button type="button" className="studio-icon-button" aria-label="收起审查历史" onClick={() => setHistoryOpen(false)}><X size={16} /></button></div>{sortedDocuments.length ? <ul>{sortedDocuments.map(doc => { const project = state.deals.find(item => item.id === doc.dealId); return <li key={doc.id}><button type="button" className={current?.id === doc.id ? 'contract-history-active' : ''} disabled={isBusy} onClick={() => openDocument(doc)}><FileText size={18} /><span><strong>{doc.title}</strong><small>{project?.projectName || project?.name || '关联项目'} · {dateLabel(doc.updatedAt)}</small></span><span className="contract-document-status">{doc.analysis ? `${doc.analysis.findings.length} 处风险` : '草稿'}</span></button></li>; })}</ul> : <p>尚无审查记录。保存合同后，可在这里继续处理。</p>}</section>}
 

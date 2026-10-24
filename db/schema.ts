@@ -1,4 +1,4 @@
-import { integer, primaryKey, sqliteTable, text } from 'drizzle-orm/sqlite-core';
+import { index, integer, primaryKey, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
 
 /** One isolated, versioned JSON workspace per platform-authenticated user. */
 export const workbenchWorkspaces = sqliteTable('workbench_workspaces', {
@@ -25,3 +25,16 @@ export const workbenchApiConnections = sqliteTable('workbench_api_connections', 
 export const workbenchTalkVectors=sqliteTable('workbench_talk_vectors',{
   userId:text('user_id').notNull(),trackId:text('track_id').notNull(),contentHash:text('content_hash').notNull(),title:text('title').notNull(),vectorJson:text('vector_json').notNull(),model:text('model').notNull(),status:text('status').notNull(),metadataJson:text('metadata_json').notNull(),updatedAt:text('updated_at').notNull(),
 },table=>[primaryKey({columns:[table.userId,table.trackId,table.contentHash,table.model]})]);
+
+/** Immutable submissions and CAS state live independently of account workspace capacity. */
+export const workbenchApprovalRequests=sqliteTable('workbench_approval_requests',{
+  id:text('id').primaryKey(),ownerId:text('owner_id').notNull(),projectId:text('project_id').notNull(),kind:text('kind').notNull(),status:text('status').notNull(),version:integer('version').notNull(),currentApproverEmail:text('current_approver_email'),activeKey:text('active_key'),createdAt:text('created_at').notNull(),updatedAt:text('updated_at').notNull(),dataJson:text('data_json').notNull(),
+},table=>[uniqueIndex('workbench_approval_active_key').on(table.activeKey),index('workbench_approval_owner_created').on(table.ownerId,table.createdAt,table.id),index('workbench_approval_inbox').on(table.currentApproverEmail,table.status,table.createdAt,table.id)]);
+
+export const workbenchApprovalParticipants=sqliteTable('workbench_approval_participants',{
+  requestId:text('request_id').notNull().references(()=>workbenchApprovalRequests.id,{onDelete:'cascade'}),email:text('email').notNull(),
+},table=>[primaryKey({columns:[table.requestId,table.email]}),index('workbench_approval_participant_email').on(table.email,table.requestId)]);
+
+export const workbenchApprovalTemplates=sqliteTable('workbench_approval_templates',{
+  id:text('id').primaryKey(),ownerId:text('owner_id').notNull(),version:integer('version').notNull(),updatedAt:text('updated_at').notNull(),dataJson:text('data_json').notNull(),
+},table=>[index('workbench_approval_template_owner').on(table.ownerId,table.updatedAt)]);

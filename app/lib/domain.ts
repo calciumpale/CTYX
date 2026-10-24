@@ -1,3 +1,4 @@
+import type {ProjectApprovalContext} from './approval-agent-context.ts';
 import { handleContractAction } from './contract-domain.ts';
 import type { ContractAnalysis,ContractDocument } from './contract-types.ts';
 import { approvedTracks, handleTalkAction, talkKnowledge } from './talktrack-domain.ts';
@@ -16,7 +17,7 @@ export class DomainError extends Error {
 interface WorkflowFrame {knowledgeIds:string[];answerIds:string[];targets?:string[];}
 interface WorkflowCheckpoint {workflow:Workflow;role:Role;deal?:Deal;deals:Deal[];knowledge:Record<string,Knowledge>;answers:Record<string,string>;frames:Record<string,WorkflowFrame>;order:string[];cursor:number;}
 type StoredState=WorkbenchState & {_access?:Record<string,string>;_workflowRuns?:Record<string,WorkflowCheckpoint>};
-export interface GenerationInput {query:string;agentId:AgentId;deal?:Deal;deals:Deal[];knowledge:Knowledge[];instruction?:string;previous?:string;history?:{query:string;answer:string}[];contractReviews?:{title:string;reviewedAt?:string;analysis:ContractAnalysis}[];purpose?:'chat'|'workflow';}
+export interface GenerationInput {query:string;agentId:AgentId;projectApprovals?:ProjectApprovalContext[];deal?:Deal;deals:Deal[];knowledge:Knowledge[];instruction?:string;previous?:string;history?:{query:string;answer:string}[];contractReviews?:{title:string;reviewedAt?:string;analysis:ContractAnalysis}[];purpose?:'chat'|'workflow';}
 export interface GenerationOutput {answer:string;mode:'demo'|'live';}
 export interface ActionContext {now?:string;generate?:(input:GenerationInput)=>Promise<GenerationOutput>;trainingGenerate?:(input:TrainingGenerationInput)=>Promise<GenerationOutput>;enrichCompany?:(deal:Deal)=>Promise<CompanyProfile>;trustedRecording?:FollowupRecording;reviewContract?:(document:ContractDocument,deal:Deal)=>Promise<ContractAnalysis>;contractModelName?:string;approveTalkTrack?:(track:TalkTrack)=>Promise<void>;retrieveTalkTracks?:(query:string)=>Promise<TalkTrack[]>;}
 const agentIds=new Set(AGENTS.map(item=>item.id));

@@ -3,7 +3,7 @@ import type { CallTranscript, TalkTrack, FeedbackJob, TalkTrackUsage, TalkTrackP
 import type { TrainingProfile } from './training-profile.ts';
 
 export type Role = 'sales' | 'manager';
-export type View = 'home' | 'deals' | 'training' | 'knowledge' | 'talktracks' | 'contracts' | 'studio' | 'runs' | 'settings';
+export type View = 'home' | 'deals' | 'training' | 'knowledge' | 'talktracks' | 'contracts' | 'approvals' | 'studio' | 'runs' | 'settings';
 export type AgentId = 'insight' | 'strategy' | 'opportunity' | 'risk' | 'coach';
 export const AGENTS: {id: AgentId; name: string; description: string; starter: string}[] = [
   {id:'insight',name:'客户洞察',description:'读懂客户，找到沟通的切入点',starter:'帮我梳理当前项目的客户需求和关键决策人'},

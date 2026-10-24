@@ -15,6 +15,13 @@
       "when": 1792691987985,
       "tag": "0001_motionless_tana_nile",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1792811482140,
+      "tag": "0002_lowly_pet_avengers",
+      "breakpoints": true
     }
   ]
 }

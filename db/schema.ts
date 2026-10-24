@@ -20,3 +20,8 @@ export const workbenchApiConnections = sqliteTable('workbench_api_connections', 
   version:integer('version').notNull().default(1),
   updatedAt:text('updated_at').notNull(),
 },table=>[primaryKey({columns:[table.userId,table.kind]})]);
+
+/** Dense embeddings live outside the bounded workspace JSON. Candidates are private until reviewed. */
+export const workbenchTalkVectors=sqliteTable('workbench_talk_vectors',{
+  userId:text('user_id').notNull(),trackId:text('track_id').notNull(),contentHash:text('content_hash').notNull(),title:text('title').notNull(),vectorJson:text('vector_json').notNull(),model:text('model').notNull(),status:text('status').notNull(),metadataJson:text('metadata_json').notNull(),updatedAt:text('updated_at').notNull(),
+},table=>[primaryKey({columns:[table.userId,table.trackId,table.contentHash,table.model]})]);

@@ -1,3 +1,5 @@
+import { approvedTracks, handleTalkAction, talkKnowledge } from './talktrack-domain.ts';
+import type { TalkTrack } from './talktrack-types.ts';
 import { AGENTS, STAGES } from './types.ts';
 import type { AgentId, ApiResult, CompanyProfile, CustomerProfile, Deal, FlowNode, FollowupRecording, Knowledge, PublishedWorkflow, Role, Run, Skill, TraceStep, TrainingSession, WorkbenchState, Workflow } from './types.ts';
 import { defaultTrainingProfile, validateTrainingProfile } from './training-profile.ts';
@@ -14,7 +16,7 @@ interface WorkflowCheckpoint {workflow:Workflow;role:Role;deal?:Deal;deals:Deal[
 type StoredState=WorkbenchState & {_access?:Record<string,string>;_workflowRuns?:Record<string,WorkflowCheckpoint>};
 export interface GenerationInput {query:string;agentId:AgentId;deal?:Deal;deals:Deal[];knowledge:Knowledge[];instruction?:string;previous?:string;history?:{query:string;answer:string}[];purpose?:'chat'|'workflow';}
 export interface GenerationOutput {answer:string;mode:'demo'|'live';}
-export interface ActionContext {now?:string;generate?:(input:GenerationInput)=>Promise<GenerationOutput>;trainingGenerate?:(input:TrainingGenerationInput)=>Promise<GenerationOutput>;enrichCompany?:(deal:Deal)=>Promise<CompanyProfile>;trustedRecording?:FollowupRecording;}
+export interface ActionContext {now?:string;generate?:(input:GenerationInput)=>Promise<GenerationOutput>;trainingGenerate?:(input:TrainingGenerationInput)=>Promise<GenerationOutput>;enrichCompany?:(deal:Deal)=>Promise<CompanyProfile>;trustedRecording?:FollowupRecording;approveTalkTrack?:(track:TalkTrack)=>Promise<void>;retrieveTalkTracks?:(query:string)=>Promise<TalkTrack[]>;}
 const agentIds=new Set(AGENTS.map(item=>item.id));
 const nodeTypes=new Set(['start','intent','knowledge','agent','review','output']);
 const managerActions=new Set(['skill_review','knowledge_add','workflow_save','workflow_publish','workflow_review']);
@@ -30,7 +32,7 @@ function optional(value:unknown,max=4000):string {
   if(typeof value!=='string'||value.length>max) fail('文本格式或长度不正确');
   return value.trim();
 }
-const projectFields=new Set(['projectName','name','contact','position','industry','stage','amount','priority','nextAction','summary','needs','source','website','region','customerProfile']);
+const projectFields=new Set(['projectName','name','contact','position','industry','stage','amount','priority','nextAction','summary','needs','source','website','region','customerProfile','deadline','cardColor']);
 const profileFields=['decisionChain','goals','concerns','budget','timeline'] as const;
 function object(value:unknown):Record<string,unknown>|undefined {
   return value!==null&&typeof value==='object'&&!Array.isArray(value)?value as Record<string,unknown>:undefined;
@@ -63,6 +65,8 @@ function projectChanges(payload:Record<string,unknown>,previous?:Deal):Partial<D
   if(Object.hasOwn(payload,'priority')) {if(!['high','medium','low'].includes(payload.priority as string))fail('优先级不正确');changes.priority=payload.priority as Deal['priority'];}
   if(Object.hasOwn(payload,'amount')) {if(typeof payload.amount!=='number'||!Number.isFinite(payload.amount)||payload.amount<0||payload.amount>1e12)fail('项目金额须为0至1万亿元之间的有效数字');changes.amount=payload.amount;}
   if(Object.hasOwn(payload,'website')) {const website=optional(payload.website,2000);changes.website=website?publicUrl(website):'';}
+  if(Object.hasOwn(payload,'deadline')){const value=optional(payload.deadline,40);if(value&&(!/T.*(?:Z|[+-]\d\d:\d\d)$/.test(value)||!Number.isFinite(Date.parse(value))))fail('截止时间须包含时区');changes.deadline=value?new Date(value).toISOString():'';}
+  if(Object.hasOwn(payload,'cardColor')){const value=optional(payload.cardColor,7);if(value&&!/^#[0-9a-f]{6}$/i.test(value))fail('卡片颜色须为六位十六进制颜色');changes.cardColor=value;}
   if(Object.hasOwn(payload,'needs'))changes.needs=list(payload.needs,[]);
   if(Object.hasOwn(payload,'customerProfile'))changes.customerProfile=customerProfile(payload.customerProfile,previous?.customerProfile);
   return changes;
@@ -139,6 +143,11 @@ export function assertRevision(state:WorkbenchState,revision:unknown) {
 export function projectState(state:WorkbenchState,role:Role):WorkbenchState {
   const result=structuredClone(state) as StoredState;
   if(role==='sales') {
+    const ownIds=new Set(result.deals.filter(d=>d.ownerId==='sales-1').map(d=>d.id));
+    result.transcripts=result.transcripts?.filter(t=>ownIds.has(t.dealId));
+    result.feedbackJobs=result.feedbackJobs?.filter(j=>ownIds.has(j.dealId));
+    result.talkTracks=result.talkTracks?.filter(t=>t.status==='published'||ownIds.has(t.dealId));
+    result.talkTrackUsages=result.talkTrackUsages?.filter(u=>!u.dealId||ownIds.has(u.dealId));
     result.deals=result.deals.filter(item=>item.ownerId==='sales-1');
     result.workflows=result.workflows.filter(item=>item.published||item.status==='published').map(publishedView);
     result.skills=result.skills.filter(item=>item.status==='published'||ownerOf(result,item.id)==='sales-1'||(!result._access?.[item.id]&&item.author==='林晓'));
@@ -147,6 +156,7 @@ export function projectState(state:WorkbenchState,role:Role):WorkbenchState {
     result.trainingSessions=result.trainingSessions.filter(item=>ownerOf(result,item.id)==='sales-1');
     result.activities=result.activities.filter(item=>ownerOf(result,item.id)==='sales-1'||item.id==='activity-1');
   }
+  for(const job of result.feedbackJobs??[]){delete job.leaseToken;delete job.leaseUntil;}
   result.role=role;
   result.viewer={name:role==='sales'?'林晓':'周予安',team:'销售工作空间',salesId:'sales-1'};
   delete result._access;
@@ -317,7 +327,7 @@ export function demoGenerate(input:GenerationInput):GenerationOutput {
   if(knowledge.length) answer+=`\n\n参考资料：${knowledge.map(item=>item.title).join('、')}。资料的适用行业与授权范围须另行核对。`;
   return {answer:`本地生成 · 未调用外部模型\n\n${answer}`,mode:'demo'};
 }
-async function buildRun(state:StoredState,role:Role,query:string,context:ActionContext,now:string,options:{agentId?:unknown;dealId?:unknown;conversationRunIds?:unknown}={}):Promise<Run> {
+async function buildRun(state:StoredState,role:Role,query:string,context:ActionContext,now:string,options:{agentId?:unknown;dealId?:unknown;conversationRunIds?:unknown;talkTrackIds?:unknown}={}):Promise<Run> {
   const started=Date.now();const steps:TraceStep[]=[];const citations:Run['citations']=[];const usedAgents:AgentId[]=[];let mode:Run['mode']='demo';const answers:string[]=[];
   const priorRuns=conversationRuns(state,role,options.conversationRunIds);const history=boundedConversation(priorRuns);const latest=priorRuns.at(-1);
   const directDeal=chooseDeal(state,role,query,options.dealId);const followup=!!latest&&!directDeal&&isFollowup(query);
@@ -330,11 +340,14 @@ async function buildRun(state:StoredState,role:Role,query:string,context:ActionC
   const portfolio=routed.includes('opportunity')&&/商机|漏斗|客户|团队|招商|销售|跟进/.test(retrievalQuery);
   const visibleDeals=role==='sales'?state.deals.filter(item=>item.ownerId==='sales-1'):state.deals;
   const scopedDeals=deal?[deal]:portfolio?visibleDeals:[];
+  const explicitTracks=approvedTracks(state,options.talkTrackIds);
+  const semanticTracks=context.retrieveTalkTracks&&!explicitTracks.length&&routed.includes('strategy')?await context.retrieveTalkTracks(retrievalQuery):[];
+  const tracks=[...new Map([...explicitTracks,...semanticTracks].map(t=>[t.id,t])).values()].slice(0,5);
   let knowledge:Knowledge[]=[];
   const step=(title:string,detail:string,status:TraceStep['status']='success',agent?:AgentId,duration=0)=>steps.push({id:uid('step'),title,detail,status,agent,duration});
-  const getKnowledge=()=> {knowledge=retrieve(state,retrievalQuery);for(const item of knowledge) if(!citations.some(entry=>entry.id===item.id))citations.push({id:item.id,title:item.title,excerpt:item.content.slice(0,240)});return knowledge;};
+  const getKnowledge=()=> {knowledge=[...tracks.map(talkKnowledge),...retrieve(state,retrievalQuery)];for(const item of knowledge) if(!citations.some(entry=>entry.id===item.id))citations.push({id:item.id,title:item.title,excerpt:item.content.slice(0,240)});return knowledge;};
   const generate=async (agentId:AgentId,instruction?:string,previous=answers.join('\n\n'))=> {
-    const tick=Date.now();const input:GenerationInput={query,agentId,deal,deals:scopedDeals,knowledge,instruction,previous,history,purpose:'chat'};
+    const tick=Date.now();const input:GenerationInput={query,agentId,deal,deals:scopedDeals,knowledge,instruction:[instruction,explicitTracks.length?'用户指定采用以下已审核话术的结构和表达方式：'+explicitTracks.map(t=>t.title).join('、')+'。根据当前客户资料改写占位符，不照搬来源项目事实。':undefined].filter(Boolean).join('\n'),previous,history,purpose:'chat'};
     const output=context.generate?await context.generate(input):demoGenerate(input);
     if(output.mode==='live')mode='live';usedAgents.push(agentId);answers.push(`${agentName(agentId)}\n${output.answer}`);
     step(`${agentName(agentId)}生成`,`${output.mode==='demo'?'本地规则演示，未请求外部模型':'服务端外部模型返回'}；使用${knowledge.length}条生效资料${deal?`；客户：${deal.name}`:''}${instruction?`；节点指令：${instruction}`:''}`, 'success',agentId,Date.now()-tick);
@@ -469,6 +482,8 @@ export async function executeAction(original:WorkbenchState,role:Role,action:str
   if(managerActions.has(action)&&role!=='manager')fail('此操作需要销售管理者体验视角',403);
   if(!payload||typeof payload!=='object'||Array.isArray(payload))fail('请求参数格式不正确');
   let run:Run|undefined;let session:TrainingSession|undefined;let dealId:string|undefined;let message='已保存';
+  const talkMessage=await handleTalkAction(state,role,action,payload,now,context.approveTalkTrack);
+  if(talkMessage){state.revision++;activity(state,role,'实战话术与项目信息已更新',talkMessage,'talktrack',now);return {state,message:talkMessage};}
   switch(action) {
     case 'deal_create': {
       onlyFields(payload,new Set([...projectFields,'ownerId']));
@@ -537,7 +552,7 @@ export async function executeAction(original:WorkbenchState,role:Role,action:str
       activity(state,role,'应用已发布',`${workflow.name} · v${workflow.version}`,'workflow',now);message='已发布，销售视角现在可以使用此版本';break;
     }
     case 'chat': {
-      const query=text(payload.query,'问题',6000);run=await buildRun(state,role,query,context,now,{agentId:payload.agentId,dealId:payload.dealId,conversationRunIds:payload.conversationRunIds});state.runs.unshift(run);mark(state,run.id,role);activity(state,role,'专家协作已完成',`${run.agentIds.map(agentName).join('、')} · ${run.mode==='demo'?'演示生成':'外部模型生成'}`,'run',now);message=run.mode==='demo'?'已完成演示生成，未调用外部模型':'已完成服务端模型生成';break;
+      const query=text(payload.query,'问题',6000);run=await buildRun(state,role,query,context,now,{agentId:payload.agentId,dealId:payload.dealId,conversationRunIds:payload.conversationRunIds,talkTrackIds:payload.talkTrackIds});state.runs.unshift(run);for(const trackId of [...new Set(run.citations.filter(c=>state.talkTracks?.some(t=>t.id===c.id)).map(c=>c.id))]){(state.talkTrackUsages??=[]).unshift({trackId,runId:run.id,dealId:run.dealId,usedAt:now});}mark(state,run.id,role);activity(state,role,'专家协作已完成',`${run.agentIds.map(agentName).join('、')} · ${run.mode==='demo'?'演示生成':'外部模型生成'}`,'run',now);message=run.mode==='demo'?'已完成演示生成，未调用外部模型':'已完成服务端模型生成';break;
     }
     case 'workflow_run': {
       if(payload.mode!==undefined&&payload.mode!=='draft'&&payload.mode!=='published')fail('运行模式不正确');

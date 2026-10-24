@@ -1,5 +1,5 @@
 import { AGENTS, STAGES } from './types.ts';
-import type { AgentId, ApiResult, Deal, FlowNode, FollowupRecording, Knowledge, PublishedWorkflow, Role, Run, Skill, TraceStep, TrainingSession, WorkbenchState, Workflow } from './types.ts';
+import type { AgentId, ApiResult, CompanyProfile, CustomerProfile, Deal, FlowNode, FollowupRecording, Knowledge, PublishedWorkflow, Role, Run, Skill, TraceStep, TrainingSession, WorkbenchState, Workflow } from './types.ts';
 import { defaultTrainingProfile, validateTrainingProfile } from './training-profile.ts';
 import { demoTrainingGenerate } from './training-dialogue.ts';
 import type { TrainingGenerationInput } from './training-dialogue.ts';
@@ -14,7 +14,7 @@ interface WorkflowCheckpoint {workflow:Workflow;role:Role;deal?:Deal;deals:Deal[
 type StoredState=WorkbenchState & {_access?:Record<string,string>;_workflowRuns?:Record<string,WorkflowCheckpoint>};
 export interface GenerationInput {query:string;agentId:AgentId;deal?:Deal;deals:Deal[];knowledge:Knowledge[];instruction?:string;previous?:string;history?:{query:string;answer:string}[];purpose?:'chat'|'workflow';}
 export interface GenerationOutput {answer:string;mode:'demo'|'live';}
-export interface ActionContext {now?:string;generate?:(input:GenerationInput)=>Promise<GenerationOutput>;trainingGenerate?:(input:TrainingGenerationInput)=>Promise<GenerationOutput>;trustedRecording?:FollowupRecording;}
+export interface ActionContext {now?:string;generate?:(input:GenerationInput)=>Promise<GenerationOutput>;trainingGenerate?:(input:TrainingGenerationInput)=>Promise<GenerationOutput>;enrichCompany?:(deal:Deal)=>Promise<CompanyProfile>;trustedRecording?:FollowupRecording;}
 const agentIds=new Set(AGENTS.map(item=>item.id));
 const nodeTypes=new Set(['start','intent','knowledge','agent','review','output']);
 const managerActions=new Set(['skill_review','knowledge_add','workflow_save','workflow_publish','workflow_review']);
@@ -30,6 +30,87 @@ function optional(value:unknown,max=4000):string {
   if(typeof value!=='string'||value.length>max) fail('文本格式或长度不正确');
   return value.trim();
 }
+const projectFields=new Set(['projectName','name','contact','position','industry','stage','amount','priority','nextAction','summary','needs','source','website','region','customerProfile']);
+const profileFields=['decisionChain','goals','concerns','budget','timeline'] as const;
+function object(value:unknown):Record<string,unknown>|undefined {
+  return value!==null&&typeof value==='object'&&!Array.isArray(value)?value as Record<string,unknown>:undefined;
+}
+function onlyFields(value:Record<string,unknown>,allowed:Set<string>) {
+  if(Object.keys(value).some(key=>!allowed.has(key)))fail('项目参数包含不允许修改的字段');
+}
+/** A saved public reference must not point back into a local or credentialed URL. */
+function publicUrl(value:unknown):string {
+  const raw=text(value,'公开网址',2000);let url:URL;
+  try {url=new URL(raw);}catch {fail('请填写有效的公开 HTTP 或 HTTPS 网址');}
+  const host=url.hostname.toLowerCase().replace(/\.$/,'');
+  if(!['http:','https:'].includes(url.protocol)||url.username||url.password||!host.includes('.')||host.endsWith('.local')||host.endsWith('.localhost')||host.endsWith('.internal')||host.startsWith('['))fail('请填写有效的公开 HTTP 或 HTTPS 网址');
+  if(/^\d+\.\d+\.\d+\.\d+$/.test(host)) {
+    const [a,b]=host.split('.').map(Number);
+    if(a===0||a===10||a===127||a>=224||a===169&&b===254||a===172&&b>=16&&b<=31||a===192&&b===168||a===100&&b>=64&&b<=127||a===198&&(b===18||b===19))fail('请填写可公开访问的网址');
+  }
+  return url.toString();
+}
+function customerProfile(value:unknown,previous?:CustomerProfile):CustomerProfile {
+  const input=object(value);if(!input)fail('客户画像格式不正确');
+  onlyFields(input,new Set(profileFields));
+  return Object.fromEntries(profileFields.map(key=>[key,Object.hasOwn(input,key)?optional(input[key],2000):previous?.[key]??''])) as unknown as CustomerProfile;
+}
+function projectChanges(payload:Record<string,unknown>,previous?:Deal):Partial<Deal> {
+  const changes:Partial<Deal>={};
+  for(const key of ['projectName','name'] as const)if(Object.hasOwn(payload,key))changes[key]=text(payload[key],key==='name'?'企业名称':'项目名称',200);
+  for(const [key,max] of [['contact',120],['position',120],['industry',100],['nextAction',2000],['summary',5000],['source',300],['region',120]] as const)if(Object.hasOwn(payload,key))changes[key]=optional(payload[key],max);
+  if(Object.hasOwn(payload,'stage')) {if(!STAGES.includes(payload.stage as typeof STAGES[number]))fail('商机阶段不正确');changes.stage=payload.stage as string;}
+  if(Object.hasOwn(payload,'priority')) {if(!['high','medium','low'].includes(payload.priority as string))fail('优先级不正确');changes.priority=payload.priority as Deal['priority'];}
+  if(Object.hasOwn(payload,'amount')) {if(typeof payload.amount!=='number'||!Number.isFinite(payload.amount)||payload.amount<0||payload.amount>1e12)fail('项目金额须为0至1万亿元之间的有效数字');changes.amount=payload.amount;}
+  if(Object.hasOwn(payload,'website')) {const website=optional(payload.website,2000);changes.website=website?publicUrl(website):'';}
+  if(Object.hasOwn(payload,'needs'))changes.needs=list(payload.needs,[]);
+  if(Object.hasOwn(payload,'customerProfile'))changes.customerProfile=customerProfile(payload.customerProfile,previous?.customerProfile);
+  return changes;
+}
+function assignedOwner(state:WorkbenchState,role:Role,requested:unknown):{ownerId:string;owner:string} {
+  if(role==='sales') {if(requested!==undefined)fail('销售只能创建自己负责的项目');return {ownerId:'sales-1',owner:'林晓'};}
+  if(requested===undefined||requested==='manager')return {ownerId:'manager',owner:'周予安'};
+  const id=text(requested,'负责人',100);const existing=state.deals.find(deal=>deal.ownerId===id);
+  if(!existing)fail('请选择已有的项目负责人');
+  return {ownerId:existing.ownerId,owner:existing.owner};
+}
+function profileTime(value:unknown):string {
+  const date=text(value,'来源获取时间',40);if(!Number.isFinite(Date.parse(date)))fail('来源获取时间不正确');return date;
+}
+/** Validate again at the trusted service boundary; client payloads cannot create research facts. */
+function validateCompanyProfile(value:unknown,deal:Deal):CompanyProfile {
+  try {
+    const input=object(value);if(!input)fail('企业画像格式不正确');
+    const companyName=text(input.companyName,'企业名称',200);if(companyName!==deal.name.trim())fail('企业画像与当前企业不匹配');
+    if(input.provider!=='qcc'&&input.provider!=='web')fail('企业画像来源不正确');
+    if(input.status!=='ready'&&input.status!=='partial')fail('企业画像状态不正确');
+    if(typeof input.modelUsed!=='boolean')fail('企业画像生成方式不正确');
+    if(!Array.isArray(input.sources)||input.sources.length>20||!Array.isArray(input.facts)||input.facts.length>30)fail('企业画像资料数量超出限制');
+    const provider:CompanyProfile['provider']=input.provider;const sourceIds=new Set<string>();
+    const sources:CompanyProfile['sources']=input.sources.map(value=> {
+      const source=object(value);if(!source)fail('企业画像来源格式不正确');
+      const id=text(source.id,'来源标识',100);if(sourceIds.has(id)||source.provider!==provider)fail('企业画像来源标识或类型不正确');sourceIds.add(id);
+      return {id,title:text(source.title,'来源标题',300),url:publicUrl(source.url),provider,retrievedAt:profileTime(source.retrievedAt),...(source.snippet!==undefined?{snippet:optional(source.snippet,2000)}:{})};
+    });
+    const facts=input.facts.map(value=> {
+      const fact=object(value);if(!fact||!Array.isArray(fact.sourceIds)||!fact.sourceIds.length||fact.sourceIds.length>20||fact.sourceIds.some(id=>typeof id!=='string'||!sourceIds.has(id)))fail('企业事实缺少有效来源');
+      return {label:text(fact.label,'企业事实名称',120),value:text(fact.value,'企业事实',3000),sourceIds:[...new Set(fact.sourceIds as string[])]};
+    });
+    if(input.status==='ready'&&!sources.length)fail('完整企业画像须包含可核验来源');
+    const summary=optional(input.summary,12000);if(!summary&&!facts.length)fail('企业画像没有可展示内容');
+    return {companyName,summary,facts,sources,provider,status:input.status,warnings:list(input.warnings,[],10),updatedAt:profileTime(input.updatedAt),modelUsed:input.modelUsed};
+  }catch {throw new DomainError('企业补全结果缺少有效来源或格式异常，本次未保存',502);}
+}
+async function enrichDeal(deal:Deal,context:ActionContext):Promise<CompanyProfile> {
+  if(!context.enrichCompany)fail('企业检索服务暂时不可用，请稍后重试',503);
+  return validateCompanyProfile(await context.enrichCompany(structuredClone(deal)),deal);
+}
+function companyCitations(deal:Deal):Run['citations'] {
+  return deal.companyProfile?.sources.map(source=>({id:`company-${deal.id}-${source.id}`,title:source.title,excerpt:`${source.url}\n来源：${source.provider==='qcc'?'企查查':'公开网络'}；获取时间：${source.retrievedAt}`}))??[];
+}
+function companyAnswer(profile:CompanyProfile):string {
+  return [`## ${profile.companyName} · 企业画像`,profile.summary,...(profile.facts.length?['### 已检索资料',...profile.facts.map(fact=>`- **${fact.label}**：${fact.value}`)]:[]),...(profile.warnings.length?['### 待核实事项',...profile.warnings.map(item=>`- ${item}`)]:[]),...(profile.sources.length?['### 来源',...profile.sources.map(source=>`- [${source.title}](${source.url})`)]:[])].join('\n\n');
+}
 function list(value:unknown,fallback:string[],max=20):string[] {
   if(value===undefined) return fallback;
   if(!Array.isArray(value)||value.length>max) fail(`列表最多${max}项`);
@@ -40,7 +121,7 @@ function find<T extends {id:string}>(items:T[],id:unknown,label:string):T {
 }
 function visibleDeal(state:WorkbenchState,role:Role,id:unknown):Deal {
   const deal=find(state.deals,id,'客户');
-  if(role==='sales'&&deal.ownerId!=='sales-1') fail('当前销售体验视角无权访问该客户',403);
+  if(role==='sales'&&deal.ownerId!=='sales-1') fail('当前销售视角无权访问该项目',403);
   return deal;
 }
 function checkVersion(actual:number,supplied:unknown) {if(!Number.isInteger(supplied)||actual!==supplied) fail('记录已更新，请刷新后重试',409);}
@@ -67,7 +148,7 @@ export function projectState(state:WorkbenchState,role:Role):WorkbenchState {
     result.activities=result.activities.filter(item=>ownerOf(result,item.id)==='sales-1'||item.id==='activity-1');
   }
   result.role=role;
-  result.viewer={name:role==='sales'?'林晓':'周予安',team:'云栖园区 · 招商团队（体验空间）',salesId:'sales-1'};
+  result.viewer={name:role==='sales'?'林晓':'周予安',team:'销售工作空间',salesId:'sales-1'};
   delete result._access;
   delete result._workflowRuns;
   return result;
@@ -177,10 +258,17 @@ function rankedKnowledge(entries:Knowledge[],query:string):Knowledge[] {
   return entries.map(item=>({item,score:(query.includes(item.title)?100:0)+[...terms].filter(term=>`${item.title}${item.content}`.includes(term)).length})).filter(entry=>entry.score>0).sort((a,b)=>b.score-a.score).slice(0,4).map(item=>item.item);
 }
 function chooseDeal(state:WorkbenchState,role:Role,query:string,dealId?:unknown):Deal|undefined {
-  if(role==='sales'&&state.deals.some(deal=>deal.ownerId!=='sales-1'&&query.includes(deal.name))) fail('当前销售体验视角无权访问问题中提及的客户',403);
+  // Explicit selections are scoped by stable identity; shared display names are not authorization keys.
   if(dealId) return visibleDeal(state,role,dealId);
-  const matched=state.deals.find(deal=>query.includes(deal.name));
-  return matched?visibleDeal(state,role,matched.id):undefined;
+  if(role==='sales'&&state.deals.some(deal=>deal.ownerId!=='sales-1'&&(
+    !!deal.projectName&&query.includes(deal.projectName)||query.includes(deal.name)&&!state.deals.some(own=>own.ownerId==='sales-1'&&own.name===deal.name)
+  )))fail('当前销售视角无权访问问题中提及的项目',403);
+  const matches=state.deals.filter(deal=>query.includes(deal.name)||!!deal.projectName&&query.includes(deal.projectName));
+  const visible=role==='sales'?matches.filter(deal=>deal.ownerId==='sales-1'):matches;
+  if(matches.length&&!visible.length)fail('当前销售视角无权访问问题中提及的项目',403);
+  const named=visible.filter(deal=>deal.projectName&&query.includes(deal.projectName));
+  // A company can have several projects. An ambiguous company name must not silently pick one.
+  return named.length===1?named[0]:visible.length===1?visible[0]:undefined;
 }
 const agentName=(id:AgentId)=>AGENTS.find(item=>item.id===id)!.name;
 function conversationRuns(state:StoredState,role:Role,value:unknown):Run[] {
@@ -212,20 +300,22 @@ function isFollowup(query:string):boolean {
 }
 export function demoGenerate(input:GenerationInput):GenerationOutput {
   const {agentId,deal,query,deals,knowledge,instruction}=input;
-  if(input.purpose==='chat'&&!deal&&!deals.length&&!knowledge.length)return {answer:'演示生成 · 未调用外部模型\n\n当前是本地规则演示，无法生成此问题的通用回答。请在设置中配置模型连接后重试，也可以先选择示例客户体验销售任务。',mode:'demo'};
-  const name=deal?.name??'当前商机';const facts=deal?`${name}目前处于${deal.stage}阶段，已记录的需求是${deal.needs.join('、')}。`:'以下只使用当前体验视角可见的合成示例资料。';
+  if(input.purpose==='chat'&&!deal&&!deals.length&&!knowledge.length)return {answer:'本地生成 · 未调用外部模型\n\n当前尚未配置模型连接，无法生成此问题的完整回答。请在设置中配置模型，或选择项目并填写需求、预算和下一步沟通目标。',mode:'demo'};
+  const name=deal?.name??'当前项目';
+  const facts=deal?`${deal.projectName?`${deal.projectName} · `:''}${name}目前处于${deal.stage}阶段。已记录的需求：${deal.needs.length?deal.needs.join('、'):'尚未填写，需与客户确认'}。`:'以下为通用销售沟通建议，具体企业资料、采购需求和授权条件尚未确认。';
+  const missing=deal?.risks.length?deal.risks.join('；'):'预算、采购时间与最终决策人尚需确认';
   let answer='';
-  if(agentId==='insight') answer=`${facts}\n\n客户洞察：${deal?.summary??'先确认搬迁或拓店动因、空间用途、预算与交付时间，再与使用者及签约决策人核对优先条件。'}\n\n待核实的问题：${deal?`与${deal.contact}确认谁对预算和签约负责；${deal.risks.join('；')}。`:'谁提出需求、谁批准预算、谁有否决权？当前有哪些备选园区，最晚何时完成决策？'}\n\n建议下一步：${deal?.nextAction??'组织一次包含需求人与决策人的30分钟沟通，形成已确认事实和待核实事项清单。'}`;
-  if(agentId==='strategy') answer=`${facts}\n\n拜访目标：将客户最关心的条件变成可核实的清单，争取约定一次具体的下一步。\n\n建议议程：前5分钟复述${deal?.needs[0]??'空间用途与核心需求'}，再用15分钟核对预算、交付和决策标准，最后10分钟比较两种授权内方案并确认责任人。\n\n开场可以说：“我先确认一下，${deal?.needs[0]??'交付时间和使用条件'}是否仍是这次选择的优先项？我们把尚未确认的条件列清，再决定如何推进。”\n\n跟进行动：${deal?.nextAction??'会后发送事实清单与两种可比较方案，并约定下次确认时间。'} 涉及优惠、交付保证或用途审批的条件须经正式审核。`;
-  if(agentId==='risk') answer=`${facts}\n\n需要核对的商务风险：${deal?.risks.join('；')??(/免租/.test(query)?'免租诉求是否超出当前授权；装修周期与商业优惠是否混用；物业交付日期是否已书面确认。':'优惠授权、特殊用途资质、交付责任和付款条款是否有正式依据。')}\n\n处理建议：将诉求拆成“已确认事实、待核实条件、需要审批事项”，让对应负责人提供书面结论。${/免租/.test(query)?'示例政策只允许讨论30天内装修支持，60天免租不得直接承诺，须转经理审批。':''}\n\n对客户可以说：“我会把您的实际装修安排和总成本一起核算；超出授权的条件需要内部审批，我会给出明确的反馈时间。”\n\n本建议用于合成案例演示，不代替法务、物业或主管部门的专业确认。`;
+  if(agentId==='insight') answer=`${facts}\n\n客户洞察：${deal?.summary||'先确认客户业务目标、现有流程中的问题、采购预算与交付时间，再与使用部门及采购决策人核对优先事项。'}${deal?.companyProfile?`\n\n企业公开资料：${deal.companyProfile.summary} 仅依据已列明的外部来源，待核实事项不作事实结论。`:''}\n\n待核实的问题：${deal?.contact?`与${deal.contact}确认谁提出需求、谁审批预算、谁决定采购；${missing}。`:'谁提出需求、谁审批预算、谁有最终决策权？正在比较哪些方案，最晚何时完成采购？'}\n\n建议下一步：${deal?.nextAction||'约一次包含需求人与决策人的沟通，整理已确认事实、待核实事项与下一步责任人。'}`;
+  if(agentId==='strategy') answer=`${facts}\n\n沟通目标：将客户最关心的条件变成可验证的清单，并约定具体的下一步。\n\n建议议程：先复述${deal?.needs[0]||'业务目标与核心需求'}，再核对预算、采购流程、交付时间和决策标准，最后比较两种授权内方案并确认责任人。\n\n开场可以说：“我先确认一下，${deal?.needs[0]||'业务目标和交付要求'}是否仍是这次采购的优先项？我们把尚未确认的条件列清，再决定如何推进。”\n\n跟进行动：${deal?.nextAction||'会后发送事实清单与可比较方案，并约定下次确认时间。'} 涉及折扣、交付承诺或合同特殊条件的事项须按正式授权审核。`;
+  if(agentId==='risk') answer=`${facts}\n\n需要核对的商务风险：${deal?.risks.length?deal.risks.join('；'):/免租/.test(query)?'免租诉求是否超出当前项目的正式授权；装修周期与商业优惠是否混用；交付日期是否已书面确认。':'折扣授权、交付责任、验收标准和付款条款是否有正式依据。'}\n\n处理建议：将诉求拆成“已确认事实、待核实条件、需要审批事项”，请对应负责人给出书面结论。\n\n对客户可以说：“我会把您的目标、交付安排和总成本一起核算；超出授权的条件需要内部审批，我会给出明确的反馈时间。”\n\n本地建议依据当前输入整理，不替代法务或主管部门的专业确认。`;
   if(agentId==='opportunity') {
     const ranked=[...(deal?[deal]:deals)].sort((a,b)=>(a.priority==='high'?-1:1)-(b.priority==='high'?-1:1)||b.health-a.health).slice(0,3);
-    answer=`建议优先核实以下商机的下一步：\n\n${ranked.map((item,index)=>`${index+1}. ${item.name}（${item.stage}，规则健康度${item.health}/100）：${item.nextAction}。依据：${item.summary} 风险缺口：${item.risks.join('；')}。`).join('\n\n')}\n\n这些分值来自合成示例规则，只用于提示信息完整度和跟进顺序，不是成交概率。客户确认预算、决策人和下一步后，再由销售手动确认是否推进阶段。`;
+    answer=`建议优先核实以下项目的下一步：\n\n${ranked.map((item,index)=>`${index+1}. ${item.projectName??item.name}（${item.stage}，${item.health?`信息健康度${item.health}/100`:'健康度尚未评估'}）：${item.nextAction||'确认需求、预算与下一次沟通安排'}。依据：${item.summary||'项目信息待补充'} 风险缺口：${item.risks.join('；')||'尚待核实'}。`).join('\n\n')}\n\n健康度只提示信息完整度和跟进顺序，不是成交概率。客户确认预算、决策人和下一步后，再由销售手动确认是否推进阶段。`;
   }
-  if(agentId==='coach') answer=`练习场景：${deal?.name??'园区招商客户'}提出商务条件异议。\n\n客户会说：“隔壁园区给的优惠更大，如果免租期谈不下来，我为什么要继续看这里？”\n\n建议先回应真实顾虑，再追问优惠背后的装修周期与总成本，比较授权内的空间、交付和服务价值，最后给出明确的下一步。不要承诺未审批条件。\n\n进入“培训带练”可以进行多轮客户对话；结束后按实际输入给出规则演示评分与证据。`;
+  if(agentId==='coach') answer=`练习场景：${deal?.name??'客户'}对报价或采购价值提出异议。\n\n客户会说：“我们还在比较几家方案。你们的价格更高，我需要先弄清楚，多出的投入能解决什么问题？”\n\n建议先回应客户对投入产出的顾虑，再确认当前问题、预算、采购标准和交付要求，用有依据的方案说明价值，最后约定下一步。不要承诺未经审批的条件。\n\n进入“培训带练”可先确认客户画像，再开展多轮客户对话并查看复盘。`;
   if(instruction) answer+=`\n\n本节点配置重点：${instruction}`;
-  if(knowledge.length) answer+=`\n\n依据资料：${knowledge.map(item=>item.title).join('、')}。`;
-  return {answer:`演示生成 · 未调用外部模型\n\n${answer}`,mode:'demo'};
+  if(knowledge.length) answer+=`\n\n参考资料：${knowledge.map(item=>item.title).join('、')}。资料的适用行业与授权范围须另行核对。`;
+  return {answer:`本地生成 · 未调用外部模型\n\n${answer}`,mode:'demo'};
 }
 async function buildRun(state:StoredState,role:Role,query:string,context:ActionContext,now:string,options:{agentId?:unknown;dealId?:unknown;conversationRunIds?:unknown}={}):Promise<Run> {
   const started=Date.now();const steps:TraceStep[]=[];const citations:Run['citations']=[];const usedAgents:AgentId[]=[];let mode:Run['mode']='demo';const answers:string[]=[];
@@ -251,6 +341,16 @@ async function buildRun(state:StoredState,role:Role,query:string,context:ActionC
     return `${agentName(agentId)}\n${output.answer}`;
   };
     step('主 Agent 识别意图',`${role==='manager'?'销售管理者':'销售'}主 Agent ${options.agentId?'按指定专家':inheritedRoute.length?'沿用当前对话专家':'按问题关键词路由'}至${routed.map(agentName).join('、')}。`);
+    if(deal?.dataOrigin==='manual'&&!deal.companyProfile?.sources.length&&routed.includes('insight')) {
+      const tick=Date.now();
+      try {
+        deal.companyProfile=await enrichDeal(deal,context);deal.version++;
+        step('检索企业公开资料',`${deal.companyProfile.provider==='qcc'?'企查查接口':'公开网络检索'}；取得${deal.companyProfile.sources.length}个来源。${deal.companyProfile.warnings.join('；')}`,deal.companyProfile.status==='partial'?'warning':'success','insight',Date.now()-tick);
+      }catch {
+        step('检索企业公开资料','企业资料补全暂时未完成，本次仅依据已填写的项目资料回答；未核验信息保持未知。','warning','insight',Date.now()-tick);
+      }
+    }
+    if(deal)citations.push(...companyCitations(deal));
     getKnowledge();step('检索生效知识',`检索当前空间的${knowledge.length}条生效资料；未读取候选或退回Skill。`);
     for(const agentId of routed)await generate(agentId);
     step('核对建议边界','保留待核实事项；健康度为规则分值；未自动承诺商务条件或修改商机。');
@@ -336,7 +436,7 @@ async function startWorkflow(state:StoredState,role:Role,workflow:Workflow,sourc
   const order=validateWorkflow(workflow,true);const deal=chooseDeal(state,role,query,dealId);
   const scoped=role==='sales'?state.deals.filter(item=>item.ownerId==='sales-1'):state.deals;
   const checkpoint:WorkflowCheckpoint={workflow:structuredClone({...workflow,published:undefined}),role,deal:deal?compactDeal(deal):undefined,deals:scoped.map(compactDeal),order,cursor:0,knowledge:{},answers:{},frames:{}};
-  const run:Run={id:uid('run'),query,answer:'',agentIds:[],steps:[],citations:[],mode:'demo',createdAt:now,duration:0,workflowId:workflow.id,workflowVersion:workflow.version,workflowSource:source,status:'completed'};
+  const run:Run={id:uid('run'),query,answer:'',agentIds:[],steps:[],citations:deal?companyCitations(deal):[],mode:'demo',createdAt:now,duration:0,workflowId:workflow.id,workflowVersion:workflow.version,workflowSource:source,status:'completed',...(deal?{dealId:deal.id}:{})};
   await executeWorkflow(state,run,checkpoint,context);return run;
 }
 /** Bound persisted traces/checkpoints independently of the number of generated nodes. */
@@ -368,8 +468,33 @@ export async function executeAction(original:WorkbenchState,role:Role,action:str
   const state=structuredClone(original) as StoredState;const now=context.now??new Date().toISOString();const actor=role==='sales'?'林晓':'周予安';
   if(managerActions.has(action)&&role!=='manager')fail('此操作需要销售管理者体验视角',403);
   if(!payload||typeof payload!=='object'||Array.isArray(payload))fail('请求参数格式不正确');
-  let run:Run|undefined;let session:TrainingSession|undefined;let message='已保存';
+  let run:Run|undefined;let session:TrainingSession|undefined;let dealId:string|undefined;let message='已保存';
   switch(action) {
+    case 'deal_create': {
+      onlyFields(payload,new Set([...projectFields,'ownerId']));
+      const name=text(payload.name,'企业名称',200);const projectName=text(payload.projectName,'项目名称',200);
+      const owner=assignedOwner(state,role,payload.ownerId);
+      const deal:Deal={id:uid('deal'),name,projectName,contact:'',position:'',industry:'',...owner,stage:'线索',amount:0,health:0,priority:'medium',lastContact:'',nextAction:'',summary:'',needs:[],risks:[],notes:[],version:1,avatar:Array.from(name)[0],createdAt:now,dataOrigin:'manual',...projectChanges(payload)};
+      state.deals.unshift(deal);dealId=deal.id;
+      activity(state,role,'项目已创建',`${projectName} · ${name}`,'deal',now);message='项目已创建';break;
+    }
+    case 'deal_update': {
+      const deal=visibleDeal(state,role,payload.dealId);checkVersion(deal.version,payload.version);
+      onlyFields(payload,new Set([...projectFields,'dealId','version']));
+      const changes=projectChanges(payload,deal);if(!Object.keys(changes).length)fail('请填写需要更新的项目信息');
+      if(changes.name!==undefined&&changes.name!==deal.name)delete deal.companyProfile;
+      Object.assign(deal,changes);deal.version++;dealId=deal.id;
+      activity(state,role,'项目信息已更新',`${deal.projectName??deal.name} · ${actor}`,'deal',now);break;
+    }
+    case 'deal_enrich': {
+      const deal=visibleDeal(state,role,payload.dealId);checkVersion(deal.version,payload.version);
+      onlyFields(payload,new Set(['dealId','version']));const started=Date.now();
+      const profile=await enrichDeal(deal,context);
+      if(deal.companyProfile?.sources.length&&!profile.sources.length)fail('本次检索未取得有效来源，已保留原企业画像，请稍后重试',503);
+      deal.companyProfile=profile;deal.version++;dealId=deal.id;
+      run={id:uid('run'),query:`补全${deal.name}的企业画像`,answer:companyAnswer(profile),agentIds:['insight'],steps:[{id:uid('step'),title:'客户洞察 · 企业资料补全',detail:`${profile.provider==='qcc'?'企查查接口':'公开网络检索'}；取得${profile.sources.length}个来源、${profile.facts.length}项有来源资料。${profile.warnings.length?` ${profile.warnings.join('；')}`:''}`,status:profile.status==='partial'?'warning':'success',agent:'insight',duration:Date.now()-started}],citations:companyCitations(deal),mode:profile.modelUsed?'live':'demo',createdAt:now,duration:Date.now()-started,dealId:deal.id,status:'completed'};
+      state.runs.unshift(run);mark(state,run.id,role);activity(state,role,'企业画像已更新',`${deal.name} · ${profile.status==='partial'?'部分资料待核实':`${profile.sources.length}个来源`}`,'deal',now);message=profile.status==='partial'?'企业画像已保存，部分资料待核实':'企业画像已补全';break;
+    }
     case 'deal_note': {
       const deal=visibleDeal(state,role,payload.dealId);
       if(Object.prototype.hasOwnProperty.call(payload,'recording'))fail('请通过录音上传入口添加附件');
@@ -461,5 +586,5 @@ export async function executeAction(original:WorkbenchState,role:Role,action:str
     default:fail('不支持的操作');
   }
   trimRunHistory(state);state.revision=original.revision+1;
-  return {state,...(run?{run}:{}),...(session?{session}:{}),message};
+  return {state,...(run?{run}:{}),...(session?{session}:{}),...(dealId?{dealId}:{}),message};
 }

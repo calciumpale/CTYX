@@ -5,6 +5,8 @@ import { createSeed } from './seed.ts';
 import { readEffectiveModel } from './connection-store.ts';
 import { requestModelText } from './model-client.ts';
 import { buildModelMessages } from './model-messages.ts';
+import { readEffectiveCompanyConnection } from './company-connection.ts';
+import { researchCompany } from './company-research.ts';
 import { buildTrainingMessages, demoTrainingGenerate } from './training-dialogue.ts';
 import type { TrainingGenerationInput } from './training-dialogue.ts';
 import type { ApiResult, Role, WorkbenchState } from './types.ts';
@@ -64,7 +66,13 @@ export async function readWorkbench(userId:string,role:Role,siteOrigin='https://
 export async function mutateWorkbench(userId:string,role:Role,action:string,payload:Record<string,unknown>,revision:unknown,siteOrigin='https://production.invalid'):Promise<ApiResult> {
   const state=await loadWorkspace(userId,siteOrigin);assertRevision(state,revision);
   const model=await readEffectiveModel(userId,siteOrigin);
-  const result=await executeAction(state,role,action,payload,{generate:input=>generate(input,model),trainingGenerate:input=>generateTraining(input,model)});
+  const result=await executeAction(state,role,action,payload,{generate:input=>generate(input,model),trainingGenerate:input=>generateTraining(input,model),enrichCompany:async deal=>{
+    let qcc:Awaited<ReturnType<typeof readEffectiveCompanyConnection>>=null;let configurationIssue=false;
+    try{qcc=await readEffectiveCompanyConnection(userId);}catch{configurationIssue=true;}
+    const profile=await researchCompany(deal,{qcc,model});
+    if(configurationIssue)profile.warnings.unshift('企查查配置暂时无法使用，已改用公开网络检索；请在设置中重新保存凭证。');
+    return profile;
+  }});
   await saveWorkspace(userId,state.revision,result.state);
   return {...result,state:projectState(result.state,role)};
 }

@@ -3,6 +3,16 @@ import assert from 'node:assert/strict';
 import { DomainError, executeAction, projectState } from '../app/lib/domain.ts';
 import { createSeed } from '../app/lib/seed.ts';
 import type { TrainingGenerationInput } from '../app/lib/training-dialogue.ts';
+import { demoTrainingGenerate } from '../app/lib/training-dialogue.ts';
+import { defaultTrainingProfile } from '../app/lib/training-profile.ts';
+
+test('general value-objection practice starts with procurement instead of a lease assumption',()=>{
+  const general=defaultTrainingProfile('价格与价值异议');
+  assert.doesNotMatch(JSON.stringify(general),/园区|月租|搬迁|店铺|免租/);
+  const opening=demoTrainingGenerate({scenario:'价格与价值异议',profile:general,messages:[]});
+  assert.doesNotMatch(opening.answer,/免租|园区/);
+  assert.ok(opening.answer.includes(general.concern));
+});
 
 const now = '2026-10-23T08:00:00.000Z';
 const profile = () => ({name:'陈悦',industry:'精品咖啡',role:'联合创始人',need:'90平方米临街店铺，能做外带',budget:'每月租金不超过1.8万元',timeline:'12月开业，装修需要45天',decisionMode:'与合伙人共同决策' as const,communicationStyle:'谨慎细致' as const,concern:'装修期间的租金与交付延期',difficulty:'进阶' as const});

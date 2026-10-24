@@ -14,7 +14,7 @@
     "db:generate": "drizzle-kit generate",
     "typecheck": "tsc --noEmit",
     "check:tokens": "node scripts/check-tokens.mjs",
-    "test": "node --experimental-strip-types --test tests/domain.test.ts tests/training-dialogue.test.ts tests/training-voice.test.ts tests/duplex-voice.test.ts tests/voice-session.test.ts tests/voice-turn-queue.test.ts tests/connection-config.test.ts tests/connection-store.test.ts tests/followup-recordings.test.ts tests/workflow-studio.test.ts tests/workflow-graph.test.ts tests/model-client.test.ts tests/model-messages.test.ts tests/chat-context.test.ts tests/answer-content.test.ts tests/run-history.test.ts"
+    "test": "node --experimental-strip-types --test tests/domain.test.ts tests/training-dialogue.test.ts tests/training-voice.test.ts tests/duplex-voice.test.ts tests/voice-session.test.ts tests/voice-turn-queue.test.ts tests/connection-config.test.ts tests/connection-store.test.ts tests/followup-recordings.test.ts tests/workflow-studio.test.ts tests/workflow-graph.test.ts tests/model-client.test.ts tests/model-messages.test.ts tests/chat-context.test.ts tests/answer-content.test.ts tests/run-history.test.ts tests/project-workspace.test.ts tests/company-connection.test.ts tests/company-research.test.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",

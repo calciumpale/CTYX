@@ -1,3 +1,5 @@
+import {zlibSync} from 'fflate';
+import type {SpeechHotword} from './speech-types.ts';
 type VoiceEnvironment = { VOICE_GATEWAY_URL?: string; VOICE_GATEWAY_SECRET?: string };
 
 export function gatewayConfiguration(environment: VoiceEnvironment,siteOrigin='https://production.invalid'): {url:string;secret:string}|null {
@@ -15,9 +17,12 @@ function base64url(bytes:Uint8Array):string {
   let binary='';for(const byte of bytes)binary+=String.fromCharCode(byte);
   return btoa(binary).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
 }
-export async function signVoiceSession(secret:string,userId:string,sessionId:string,now=Math.floor(Date.now()/1000)):Promise<string> {
+export async function signVoiceSession(secret:string,userId:string,sessionId:string,now=Math.floor(Date.now()/1000),hotwords:SpeechHotword[]=[]):Promise<string> {
   const encode=(value:unknown)=>base64url(new TextEncoder().encode(JSON.stringify(value)));
-  const body=`${encode({alg:'HS256',typ:'JWT'})}.${encode({aud:'training-voice',sub:userId,sessionId,iat:now,exp:now+300,jti:crypto.randomUUID()})}`;
+  const active=hotwords.filter(word=>word.enabled).map(word=>({term:word.term,aliases:word.aliases,enabled:true}));
+  const packed=active.length?zlibSync(new TextEncoder().encode(JSON.stringify(active))):null;
+  if(packed&&packed.byteLength>7500)throw new Error('实时语音热词内容过长，请减少启用的热词或误识别写法');
+  const body=`${encode({alg:'HS256',typ:'JWT'})}.${encode({aud:'training-voice',sub:userId,sessionId,iat:now,exp:now+300,jti:crypto.randomUUID(),...(packed?{speechProfile:base64url(packed)}:{})})}`;
   const key=await crypto.subtle.importKey('raw',new TextEncoder().encode(secret),{name:'HMAC',hash:'SHA-256'},false,['sign']);
   return `${body}.${base64url(new Uint8Array(await crypto.subtle.sign('HMAC',key,new TextEncoder().encode(body))))}`;
 }

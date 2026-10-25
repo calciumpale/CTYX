@@ -1,6 +1,6 @@
 # 自部署全双工语音网关
 
-这是独立 Python 服务，部署在可运行 Docker 的服务器上。Cloudflare Worker 继续负责身份、训练记录和客户回应；此服务只做中文流式 ASR、打断与指定文字的 TTS，不运行第二个对话 LLM，不创建客户对话，不保存录音或转写文本。
+这是独立 Python 服务，可在 Mac 原生运行或部署到可运行 Docker 的服务器。Cloudflare Worker 负责身份、业务记录和客户回应；此服务负责中文流式 ASR、打断、指定文字的 TTS，以及后台录音转写。它不创建第二份客户对话。录音任务使用私有临时文件和 SQLite，处理后清除临时音频，结果保留7天供工作台同步。
 
 浏览器持续上传麦克风 PCM，同时接收客户 PCM。ASR 产生首个非空 partial 时立即取消正在合成的客户语音，随后发送 `input.speech.started`。最终文本由应用自动提交 `training_reply`，已保存的客户回应再原文交给网关播报。麦克风不因播报或 HTTP 保存请求而停止。
 
@@ -145,3 +145,36 @@ python -m unittest -v
 测试只替换模型推理和 TTS 网络边界，覆盖票据过期/篡改/重放、Origin 限制、音频边界、音色范围、Qwen 请求格式、连续输入自动打断、旧合成清理和损坏/空音频，不代表真实模型音质或端到端性能验收。
 
 官方参考：[sherpa 在线 transducer API](https://github.com/k2-fsa/sherpa-onnx/blob/v1.13.8/sherpa-onnx/python/sherpa_onnx/online_recognizer.py)、[中文流式模型](https://k2-fsa.github.io/sherpa/onnx/pretrained_models/online-transducer/zipformer-transducer-models.html#sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30-chinese)、[Kokoro-FastAPI](https://github.com/remsky/Kokoro-FastAPI)、[Qwen3-TTS 部署示例](https://github.com/vllm-project/vllm-omni/tree/main/examples/online_serving/text_to_speech#qwen3-tts)。
+
+## 录音转写：方言、热词表、讲话人
+
+设置 → 语音识别中维护热词表。标准词送入识别模型作为上下文；仅明确登记的误识别写法会做确定性替换，原始文字与纠偏记录同时保留。可保存50条词，每词40字、至多5个2至40字的误识别写法。当前本机模型上下文有限，启动转写前会计算启用热词的实际 token 预算，超过容量时提示减少启用词条，不截断音频或静默丢弃热词。
+
+本机模型安装：
+
+```sh
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python setup-asr-models.py
+```
+
+脚本下载官方 FunASR-Nano int8（约842 MB压缩包，安装约1GB），以及 pyannote segmentation 和 3D-Speaker embedding（约46MB）。模型和任务目录不提交仓库。原生默认路径位于本目录 models/ 和 data/transcriptions/；Compose 需按 .env.example 配置 /models 下的路径并挂载 models。任务目录使用独立持久卷。
+
+录音上传保存到项目后自动提交任务。旧录音可点“转写录音”。在途任务于后台串行运行，可离开页面；重新打开时同步完整结果到工作台，关联项目文字并触发客户分析、成单项目话术提炼。业务写入先提交，识别或分析失败不会回滚原录音。网关任务完成后删除其音频副本；完整结果在同步后独立保存在工作台 D1 中。后台网关仅保留7天结果，未同步而过期的任务可以从原始 R2 录音重新转写。
+
+支持单文件20MB、最长2小时、最多100,000字和6,000段；项目分析关联前50,000字（受工作空间容量约束），完整结果仍可在录音转写中查看。开始任务时使用当时保存的设置，修改热词不改变在途任务。
+
+语言与方言是识别上下文提示，不是经过校准的方言分类器。所选开源模型支持普通话及吴、粤、闽、客、赣、湘、晋等方言，具体音频质量和方言准确率需用目标业务录音验收。实时双工陪练继续使用低延迟普通话 Zipformer；它增加中文热词解码偏置与已登记误识别写法纠正，录音的多方言模型不会取代这条实时链路。
+
+讲话人分离先按音频进行真实分段，再逐段识别，不使用 FunASR 插值的字级时间戳去猜讲话人。编号不代表身份、销售或客户角色；重叠或无法区分的片段标为未区分。指定人数可改善自动聚类；RECORDING_SPEAKER_THRESHOLD 默认0.9，取值0.1–2，越大通常分得越少。未检测到可靠讲话人时继续文字转写，并明确未区分讲话人。
+
+HTTP 接口为 POST /transcriptions（multipart file、options）、GET /transcriptions/{id}，均验证5分钟、账号与录音绑定的 HS256 recording-asr 票据；服务端签发票据，不向前端暴露共享密钥。GET /speech-capabilities 仅公开模型能力与文件就绪状态，不含用户数据。仅限单进程运行。
+
+使用已准备的本地音频片段验证完整上传、排队、识别和项目关联：
+
+```sh
+.venv/bin/python smoke_recording.py --audio /绝对路径/片段.wav --output ../outputs/recording-smoke.json
+```
+
+验证脚本只接受本机 HTTP 地址，通过正常本地登录建立标明“本地测试”的项目，不伪造身份头。会保留该项目和录音，便于在界面核对。
+
+模型官方资料：[FunASR-Nano](https://k2-fsa.github.io/sherpa/onnx/funasr-nano/pretrained.html)、[讲话人分离](https://k2-fsa.github.io/sherpa/onnx/speaker-diarization/index.html)。开源模型支持范围与本次实测结果应分开记录。

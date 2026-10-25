@@ -30,6 +30,11 @@ const navigation: { id: View; label: string; icon: typeof Home }[] = [
 
 export default function Workbench() {
   const { state, loading, error, mutate, reload, uploadFollowup } = useWorkbench();
+  useEffect(()=>{
+    const refreshSpeech=()=>{void reload().catch(()=>{});};
+    window.addEventListener('speech-transcription-completed',refreshSpeech);
+    return()=>window.removeEventListener('speech-transcription-completed',refreshSpeech);
+  },[reload]);
   const [view, setView] = useState<View>('deals');
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
   const [mobileMenu, setMobileMenu] = useState(false);

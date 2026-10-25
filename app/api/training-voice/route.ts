@@ -2,6 +2,7 @@ import { env } from 'cloudflare:workers';
 import { DomainError } from '../../lib/domain.ts';
 import { readRole, readWorkbench, requireUserId } from '../../lib/server.ts';
 import { gatewayConfiguration, signVoiceSession } from '../../lib/voice-session.ts';
+import {createSpeechSettingsStore} from '../../lib/speech-settings.ts';
 
 export const dynamic='force-dynamic';
 const headers={'Cache-Control':'private, no-store','Vary':'Cookie, oai-authenticated-user-id','X-Content-Type-Options':'nosniff'};
@@ -34,6 +35,7 @@ export async function POST(request:Request):Promise<Response> {
     if(session.status!=='active')throw new DomainError('本次带练已结束，请开始新的练习',409);
     const configuration=gatewayConfiguration(env as Cloudflare.Env,new URL(request.url).origin);
     if(!configuration)throw new DomainError('自部署语音网关尚未配置，请先按部署说明启动服务',503);
-    return Response.json({url:configuration.url,token:await signVoiceSession(configuration.secret,userId,sessionId),outputSampleRate:24000,voices:[],defaultVoice:''},{headers});
+    const words=(await createSpeechSettingsStore(env as Cloudflare.Env).read(userId)).hotwords;
+    return Response.json({url:configuration.url,token:await signVoiceSession(configuration.secret,userId,sessionId,Math.floor(Date.now()/1000),words),outputSampleRate:24000,voices:[],defaultVoice:''},{headers});
   }catch(error){return failure(error);}
 }

@@ -3,6 +3,7 @@ import { env } from 'cloudflare:workers';
 import { DomainError, projectState } from '../../lib/domain.ts';
 import { authorizedRecording, parseAudioRange, parseRecordingForm, recordingObjectKey, saveRecordingNote } from '../../lib/followup-recordings.ts';
 import { loadWorkspace, readRole, requireUserId, saveWorkspace, refreshSalesProject } from '../../lib/server.ts';
+import { createSpeechTranscriptionService } from '../../lib/speech-transcription.ts';
 
 export const dynamic='force-dynamic';
 const responseHeaders={'Cache-Control':'private, no-store','Vary':'Cookie, oai-authenticated-user-id','X-Content-Type-Options':'nosniff'};
@@ -24,8 +25,12 @@ export async function POST(request:Request):Promise<Response> {
     const storage=bucket();const input=await parseRecordingForm(request);const role=readRole(request);
     let before:Awaited<ReturnType<typeof loadWorkspace>>;
     const result=await saveRecordingNote(userId,role,input,{bucket:storage,load:async()=>{before=await loadWorkspace(userId,siteOrigin);return before;},save:(revision,state)=>saveWorkspace(userId,revision,state,salesMutationEvents(before,state,'deal_note',{dealId:input.dealId},new Date().toISOString()))});
-    result.state=projectState(await refreshSalesProject(userId,input.dealId,siteOrigin),role);
-    return Response.json(result,{headers:responseHeaders});
+    const existing=new Set(before!.deals.find(deal=>deal.id===input.dealId)?.notes.map(note=>note.id));
+    const recording=result.state.deals.find(deal=>deal.id===input.dealId)?.notes.find(note=>!existing.has(note.id)&&note.recording)?.recording;
+    let transcription:Awaited<ReturnType<ReturnType<typeof createSpeechTranscriptionService>['start']>>|undefined;
+    if(recording){try{transcription=await createSpeechTranscriptionService(env as Cloudflare.Env,{load:loadWorkspace,save:saveWorkspace}).start(userId,role,input.dealId,recording.id,siteOrigin);}catch{/* A transcription failure never discards the committed recording. */}}
+    try{result.state=projectState(await refreshSalesProject(userId,input.dealId,siteOrigin),role);}catch{/* Derivative analysis cannot turn an already saved recording into a failed upload. */}
+    return Response.json({...result,...(transcription?{transcription}:{}),message:transcription?.status==='failed'?`录音及跟进记录已保存；${transcription.message}`:transcription?'录音及跟进记录已保存，转写任务已提交':result.message},{headers:responseHeaders});
   }catch(error){return failure(error);}
 }
 async function read(request:Request,head=false):Promise<Response> {

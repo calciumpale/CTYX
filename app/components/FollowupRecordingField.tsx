@@ -1,8 +1,9 @@
 'use client';
 
-import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { ArrowDownToLine, AudioLines, Loader2, Upload, X } from 'lucide-react';
 import type { FollowupRecording } from '../lib/types';
+import { RecordingTranscript } from './RecordingTranscript';
 import './followup-recordings.css';
 
 const MAX_RECORDING_BYTES = 20 * 1024 * 1024;
@@ -12,8 +13,9 @@ function fileSize(bytes: number) {
   return bytes < 1024 * 1024 ? `${Math.max(1, Math.ceil(bytes / 1024))} KB` : `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function RecordingAudio({ file, src, name, preview = false }: { file?: File; src?: string; name: string; preview?: boolean }) {
-  const audio = useRef<HTMLAudioElement>(null);
+function RecordingAudio({ file, src, name, preview = false, audioRef }: { file?: File; src?: string; name: string; preview?: boolean; audioRef?: RefObject<HTMLAudioElement | null> }) {
+  const internalAudio = useRef<HTMLAudioElement>(null);
+  const audio = audioRef ?? internalAudio;
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
   const hintId = useId();
@@ -32,7 +34,7 @@ function RecordingAudio({ file, src, name, preview = false }: { file?: File; src
       element?.load();
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [file, src]);
+  }, [file, src, audio]);
 
   return <div className="followup-audio">
     <audio ref={audio} controls preload={preview ? 'metadata' : 'none'} aria-label={`${preview ? '试听' : '播放'}录音：${name}`} aria-describedby={hintId}
@@ -79,9 +81,17 @@ export function FollowupRecordingField({ file, onChange, disabled = false, child
 }
 
 export function FollowupRecordingPlayer({ dealId, recording }: { dealId: string; recording: FollowupRecording }) {
+  const audio = useRef<HTMLAudioElement>(null);
   const src = `/api/deal-recordings?dealId=${encodeURIComponent(dealId)}&id=${encodeURIComponent(recording.id)}`;
+  const seek = (seconds: number) => {
+    const element = audio.current;
+    if (!element) return;
+    try { element.currentTime = Math.max(0, seconds); void element.play().catch(() => undefined); }
+    catch { /* The native player displays unsupported-format and loading errors. */ }
+  };
   return <section className="followup-recording-card followup-recording-saved" aria-label="已保存的跟进录音">
     <div className="followup-recording-file"><AudioLines size={17} /><div><strong title={recording.name}>{recording.name}</strong><span>{fileSize(recording.size)}</span></div><a className="followup-recording-download" href={src} download={recording.name} aria-label={`下载录音：${recording.name}`}><ArrowDownToLine size={14} /><span>下载</span></a></div>
-    <RecordingAudio src={src} name={recording.name} />
+    <RecordingAudio src={src} name={recording.name} audioRef={audio} />
+    <RecordingTranscript dealId={dealId} recordingId={recording.id} onSeek={seek} />
   </section>;
 }

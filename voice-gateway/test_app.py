@@ -5,6 +5,9 @@ import os
 import time
 import unittest
 import uuid
+import zlib
+import base64
+import tempfile
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -14,7 +17,9 @@ import app as gateway
 from test_gateway import SECRET, token
 
 
+TEST_JOB_DIR = tempfile.TemporaryDirectory(prefix='voice-gateway-test-')
 ENV = {
+    "RECORDING_JOB_DIR": TEST_JOB_DIR.name,
     "VOICE_GATEWAY_SECRET": SECRET,
     "ALLOWED_ORIGINS": "https://workbench.example",
     "TTS_BASE_URL": "http://tts:8880/v1",
@@ -65,6 +70,33 @@ class SettingsTests(unittest.TestCase):
 
 
 class SocketTests(unittest.TestCase):
+    def test_signed_hotwords_reach_decoder_and_final_is_corrected_without_a_manual_send(self):
+        words = [{"term": "实施周期", "aliases": ["交付时间"], "enabled": True}]
+        packed = base64.urlsafe_b64encode(zlib.compress(json.dumps(words).encode())).decode().rstrip('=')
+        class HotwordBoundary(ModelBoundary):
+            def create_stream(self, hotwords=None):
+                self.words = hotwords
+                return {"chunks": 0}
+        with patch.dict(os.environ, ENV, clear=True), patch.object(gateway, "StreamingASR", HotwordBoundary), self.client() as client:
+            ticket = token({"exp": int(time.time()) + 300, "jti": str(uuid.uuid4()), "speechProfile": packed})
+            with client.websocket_connect('/ws', headers={"origin": ENV["ALLOWED_ORIGINS"]}) as socket:
+                socket.send_json({"type": "session.start", "token": ticket})
+                self.assertEqual(socket.receive_json()['type'], 'session.ready')
+                self.assertEqual(gateway.app.state.asr.words, words)
+                socket.send_bytes(b'\x00\x00' * 320)
+                self.assertEqual(socket.receive_json()['type'], 'input.speech.started')
+                socket.receive_json()
+                socket.send_bytes(b'\x00\x00' * 320)
+                final = socket.receive_json()
+                self.assertEqual(final['text'], '我想先了解实施周期')
+                self.assertEqual(final['rawText'], '我想先了解交付时间')
+                self.assertEqual(final['corrections'], [{'from': '交付时间', 'to': '实施周期', 'count': 1}])
+
+    def test_compressed_profile_is_bounded_before_json_parsing(self):
+        packed = base64.urlsafe_b64encode(zlib.compress(b' ' * 100_000)).decode().rstrip('=')
+        with self.assertRaises(gateway.ProtocolError):
+            gateway.live_speech_profile({'speechProfile': packed})
+
     def client(self):
         return TestClient(gateway.app)
 

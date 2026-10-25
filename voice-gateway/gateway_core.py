@@ -45,7 +45,7 @@ def verify_token(token, secret, replay_cache, *, now=None):
     if len(secret.encode()) < 32:
         raise ProtocolError("语音服务认证尚未配置")
     try:
-        if not isinstance(token, str) or len(token) > 8192:
+        if not isinstance(token, str) or len(token) > 16_000:
             raise ValueError("invalid ticket")
         header, body, signature = token.split(".")
         metadata = json.loads(_decode(header))

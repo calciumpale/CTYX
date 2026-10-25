@@ -9,6 +9,8 @@ import os
 import threading
 import time
 import uuid
+import base64
+import zlib
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
@@ -20,6 +22,8 @@ import sherpa_onnx
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
 from gateway_core import AudioBudget, OutputChannel, ProtocolError, ReplayCache, parse_command, parse_json, verify_token
+from recording_jobs import RecordingJobs, router as recording_router, validate_options, correct_result
+from offline_asr import OfflineASR
 
 logger = logging.getLogger("training_voice_gateway")
 
@@ -87,18 +91,25 @@ class StreamingASR:
         if any(not value.is_file() for value in paths.values()):
             raise ValueError("ASR model files are missing; download and mount the documented streaming transducer model")
         self.lock = threading.Lock()
+        self.tokens = {line.rsplit(' ', 1)[0] for line in paths['tokens'].read_text().splitlines() if ' ' in line}
         self.recognizer = sherpa_onnx.OnlineRecognizer.from_transducer(
             **{key: str(value) for key, value in paths.items()},
             sample_rate=16000, feature_dim=80, num_threads=settings.asr_threads,
-            provider="cpu", decoding_method="greedy_search", enable_endpoint_detection=True,
+            provider="cpu", decoding_method="modified_beam_search", max_active_paths=4,
+            modeling_unit="cjkchar", hotwords_score=1.5, enable_endpoint_detection=True,
             rule1_min_trailing_silence=2.4,
             rule2_min_trailing_silence=settings.endpoint_silence,
             rule3_min_utterance_length=20.0,
         )
 
-    def create_stream(self):
+    def create_stream(self, hotwords=None):
         with self.lock:
-            return self.recognizer.create_stream()
+            phrases = []
+            for word in hotwords or []:
+                term = word['term']
+                if word['enabled'] and all('\u3400' <= char <= '\u9fff' and char in self.tokens for char in term):
+                    phrases.append(' '.join(term))
+            return self.recognizer.create_stream('\n'.join(phrases)) if phrases else self.recognizer.create_stream()
 
     def accept(self, stream, pcm):
         samples = np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768.0
@@ -125,13 +136,35 @@ async def lifespan(app):
     app.state.tickets = ReplayCache()
     app.state.active = 0
     app.state.tts_status = {"probe": "not_performed", "lastSynthesis": None}
+    app.state.recordings = RecordingJobs(OfflineASR())
+    app.state.recordings.start()
     async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10, read=20, write=10, pool=10), follow_redirects=False, trust_env=False) as client:
         app.state.http = client
-        yield
+        try:
+            yield
+        finally:
+            await app.state.recordings.close()
     app.state.executor.shutdown(wait=True, cancel_futures=True)
 
 
 app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+app.include_router(recording_router)
+
+
+def live_speech_profile(claims):
+    value = claims.get('speechProfile')
+    if value is None:
+        return validate_options({})
+    try:
+        if not isinstance(value, str) or len(value) > 10_000:
+            raise ValueError()
+        decoder = zlib.decompressobj()
+        unpacked = decoder.decompress(base64.urlsafe_b64decode(value + '=' * (-len(value) % 4)), 64_001)
+        if len(unpacked) > 64_000 or not decoder.eof or decoder.unconsumed_tail or decoder.unused_data:
+            raise ValueError()
+        return validate_options({'hotwords': json.loads(unpacked)})
+    except (ValueError, TypeError, zlib.error) as error:
+        raise ProtocolError('实时语音热词设置无效，请在设置中检查') from error
 
 
 @app.get("/healthz")
@@ -199,12 +232,13 @@ async def voice_socket(websocket: WebSocket):
         start = parse_json(raw)
         if start.get("type") != "session.start":
             raise ProtocolError("请先发送session.start认证消息")
-        verify_token(start.get("token"), settings.secret, app.state.tickets)
+        claims = verify_token(start.get("token"), settings.secret, app.state.tickets)
+        speech_profile = live_speech_profile(claims)
         if app.state.active >= settings.max_sessions:
             raise ProtocolError("语音服务连接已满，请稍后重试")
         app.state.active += 1
         admitted = True
-        stream = app.state.asr.create_stream()
+        stream = app.state.asr.create_stream(speech_profile['hotwords']) if speech_profile['hotwords'] else app.state.asr.create_stream()
         output = OutputChannel(send, synthesize)
         await send({"type": "session.ready", "sampleRate": 24000, "voices": settings.voices, "defaultVoice": settings.default_voice})
         budget = AudioBudget()
@@ -243,7 +277,8 @@ async def voice_socket(websocket: WebSocket):
                         await send({"type": "input.partial", "text": text})
                     if endpoint:
                         if text:
-                            await send({"type": "input.final", "id": str(uuid.uuid4()), "text": text})
+                            corrected = correct_result({'segments': [{'text': text}]}, speech_profile)
+                            await send({"type": "input.final", "id": str(uuid.uuid4()), "text": corrected['text'], "rawText": text, "corrections": corrected['corrections']})
                         speech_started, previous_partial = False, ""
                 elif message.get("text") is not None:
                     now = time.monotonic()

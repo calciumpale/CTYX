@@ -12,6 +12,7 @@ import type { TrainingProfile } from '../lib/training-profile';
 import { ApiConnectionSettings } from './ApiConnectionSettings';
 import { EmbeddingSettings } from './EmbeddingSettings';
 import { CompanyConnectionSettings } from './CompanyConnectionSettings';
+import { SpeechRecognitionSettings } from './SpeechRecognitionSettings';
 import { DuplexVoiceControls } from './DuplexVoiceControls';
 import { useTrainingVoice } from '../lib/use-training-voice';
 import { useDuplexVoice } from '../lib/use-duplex-voice';
@@ -321,6 +322,7 @@ export function SettingsView({ state,onConnectionChanged }: ViewProps & {onConne
       <a className="studio-btn studio-btn-secondary" href="#api-configuration"><Code2 size={16}/>API 配置</a>
     </PageHeading>
     <ApiConnectionSettings onSaved={onConnectionChanged}/>
+    <SpeechRecognitionSettings/>
     <CompanyConnectionSettings/><EmbeddingSettings/>
     <section className="studio-settings-card">
       <div className="studio-settings-card-title"><span className="studio-icon-clay"><ShieldCheck size={23}/></span><div><h2>当前角色</h2><p>管理当前业务视角与工作范围</p></div><span className="studio-tag">{state.role==='manager'?'销售管理者':'销售人员'}</span></div>

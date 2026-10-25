@@ -52,3 +52,13 @@ export const workbenchSalesCoverage=sqliteTable('workbench_sales_coverage',{
 export const workbenchSalesReports=sqliteTable('workbench_sales_reports',{
   userId:text('user_id').notNull(),reportDate:text('report_date').notNull(),status:text('status').notNull(),version:integer('version').notNull(),leaseToken:text('lease_token'),leaseUntil:text('lease_until'),updatedAt:text('updated_at').notNull(),dataJson:text('data_json').notNull(),
 },table=>[primaryKey({columns:[table.userId,table.reportDate]}),index('workbench_sales_report_updated').on(table.userId,table.updatedAt)]);
+
+/** Account-scoped recognition preferences, with compare-and-swap updates. */
+export const workbenchSpeechSettings=sqliteTable('workbench_speech_settings',{
+  userId:text('user_id').primaryKey(),version:integer('version').notNull(),updatedAt:text('updated_at').notNull(),dataJson:text('data_json').notNull(),
+});
+
+/** Long speaker-segment results remain outside the bounded workspace document. */
+export const workbenchRecordingTranscriptions=sqliteTable('workbench_recording_transcriptions',{
+  userId:text('user_id').notNull(),recordingId:text('recording_id').notNull(),dealId:text('deal_id').notNull(),version:integer('version').notNull(),remoteId:text('remote_id'),leaseUntil:text('lease_until'),updatedAt:text('updated_at').notNull(),dataJson:text('data_json').notNull(),
+},table=>[primaryKey({columns:[table.userId,table.recordingId]}),index('workbench_recording_transcription_project').on(table.userId,table.dealId)]);

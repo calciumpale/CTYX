@@ -1,6 +1,6 @@
 import type { ApprovalActor, ApprovalKind, ApprovalRequest, ApprovalStatus, ApprovalSummary, ApprovalTemplate, SubmitApprovalPayload } from './approval-types';
 
-export type ApprovalScope = 'inbox' | 'mine' | 'all';
+export type ApprovalScope = 'inbox' | 'mine' | 'all' | 'templates';
 export interface ApprovalListResult { identity: ApprovalActor; requests: ApprovalSummary[]; templates: ApprovalTemplate[]; pendingCount: number; nextCursor?: string; }
 export interface ApprovalDetailResult { identity: ApprovalActor; request: ApprovalRequest; }
 export interface ApprovalListQuery { scope?: ApprovalScope; projectId?: string; status?: ApprovalStatus | ''; q?: string; cursor?: string; limit?: number; }
@@ -27,8 +27,8 @@ async function mutate<T>(action: string, payload: unknown): Promise<T> {
 }
 export function listApprovals(query: ApprovalListQuery, signal?: AbortSignal) {
   const params = new URLSearchParams();
-  for (const [key, value] of Object.entries(query)) if (value !== undefined && value !== '') params.set(key, String(value));
-  return request<ApprovalListResult>(`/api/approvals?${params}`, { signal });
+  for (const [key, value] of Object.entries(query)) if ((query.scope !== 'templates' || key === 'scope') && value !== undefined && value !== '') params.set(key, String(value));
+  return request<ApprovalListResult>(`/api/approvals?${params}`, { signal }).then(value=>({...value,requests:value.requests??[],pendingCount:value.pendingCount??0}));
 }
 export function getApproval(id: string, signal?: AbortSignal) { return request<ApprovalDetailResult>(`/api/approvals?id=${encodeURIComponent(id)}`, { signal }); }
 export function submitApproval(payload: SubmitApprovalPayload) { return mutate<{ request: ApprovalRequest; message: string }>('submit', payload); }

@@ -80,6 +80,12 @@ test('unauthorized or stale uploads leave no object; failed SQL save cleans uplo
   await assert.rejects(saveRecordingNote('user','sales',{dealId:own.id,text:'',revision:state.revision,audio:file()},failing.deps),rejectsStatus(409));assert.equal(failing.objects.size,0);assert.equal(failing.saved(),undefined);
 });
 
+test('recording followups attribute the trusted signed-in salesperson display name',async()=>{
+  const state=createSeed(now),store=persistence(state),deal=state.deals.find(item=>item.ownerId==='sales-1')!;
+  const result=await saveRecordingNote('user','sales',{dealId:deal.id,text:'拜访录音',revision:state.revision,audio:file()},{...store.deps,actorName:'陈销售'});
+  assert.equal(result.state.deals.find(item=>item.id===deal.id)!.notes[0].author,'陈销售');
+});
+
 test('playback requires an actual visible deal note reference and validates single byte ranges',()=>{
   const state=createSeed(now);const own=state.deals.find(item=>item.ownerId==='sales-1')!;const other=state.deals.find(item=>item.ownerId!=='sales-1')!;
   own.notes[0].recording=recording;other.notes[0].recording={...recording,id:'recording-ec4ab83f-dae3-4a67-af13-4f5abf61e82c'};

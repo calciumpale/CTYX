@@ -1,4 +1,4 @@
-import Workbench from './components/Workbench';
+import WorkspaceEntry from './components/WorkspaceEntry';
 import { requireChatGPTUser } from './chatgpt-auth';
 export const dynamic = 'force-dynamic';
-export default async function Page() { await requireChatGPTUser('/'); return <Workbench />; }
+export default async function Page() { await requireChatGPTUser('/'); return <WorkspaceEntry />; }

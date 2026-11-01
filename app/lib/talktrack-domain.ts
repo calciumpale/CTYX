@@ -36,16 +36,30 @@ export function maintainTalkTracks(state:WorkbenchState,now:string):number{
     track.reviewNote=`自动维护：${stats.closed}个已结项项目，${stats.won}个成单；${policy.action==='archive'?'归档':'降低检索权重'}。使用相关性不代表因果成单率。`;track.updatedAt=now;track.version++;count++;
   }state.talkTrackPolicy={...policy,lastRunAt:now};return count;
 }
-export async function handleTalkAction(state:WorkbenchState,role:Role,action:string,payload:Record<string,unknown>,now:string,approve?:(track:TalkTrack)=>Promise<void>):Promise<string|null>{
+export async function handleTalkAction(state:WorkbenchState,role:Role,action:string,payload:Record<string,unknown>,now:string,approve?:(track:TalkTrack)=>Promise<void>,actorName?:string):Promise<string|null>{
   const deal=()=>{const d=state.deals.find(d=>d.id===payload.dealId);if(!d)fail('项目不存在',404);if(role==='sales'&&d.ownerId!=='sales-1')fail('无权操作其他销售的项目',403);return d;};
   switch(action){
     case 'deal_outcome':{const d=deal();if(payload.version!==d.version)fail('项目已更新，请刷新后重试',409);if(payload.confirmed!==true||!['open','won','lost'].includes(String(payload.outcome)))fail('请确认项目成单或结项结果');if(d.outcome===payload.outcome)fail('项目结果没有变化',409);d.outcome=payload.outcome as Deal['outcome'];d.version++;if(d.outcome==='won'){d.wonAt=now;await queueFeedback(state,d,now);}else{delete d.wonAt;for(const j of state.feedbackJobs??[])if(j.dealId===d.id){j.status='done';j.message='项目结果已变更，自动提炼停止';delete j.leaseToken;delete j.leaseUntil;}for(const t of state.talkTracks??[])if(t.dealId===d.id&&t.status!=='rejected'){t.status='archived';t.updatedAt=now;t.version++;t.reviewNote='来源项目已撤销成单，需要重新核实来源';}}return '项目结果已保存';}
     case 'transcript_add':{const d=deal();if(!['pasted','file'].includes(String(payload.source)))fail('请选择转写文本来源');const value=str(payload.text,'通话转写',50000);const all=state.transcripts??=[];if(all.reduce((sum,t)=>sum+t.text.length,0)+value.length>500000)fail('当前工作空间转写容量已满，请联系管理员扩容',413);if(all.some(t=>t.dealId===d.id&&t.text===value))fail('这段转写已保存，无需重复提交',409);all.unshift({id:id('transcript'),dealId:d.id,employeeId:d.ownerId,employeeName:d.owner,text:value,source:payload.source as 'pasted'|'file',createdAt:now});d.version++;d.lastContact=now.slice(0,10);await queueFeedback(state,d,now);return '通话转写已保存，成单项目自动进入提炼流程';}
     case 'feedback_retry':{const d=deal();if(d.outcome!=='won'||d.dataOrigin!=='manual')fail('只有已确认成单的正式项目可提炼话术');await queueFeedback(state,d,now,true);return '已检查并恢复待处理任务';}
+    case 'talktrack_archive':
+    case 'talktrack_weight':{
+      if(role!=='manager')fail('需要知识内容运营权限',403);
+      if(Object.keys(payload).some(key=>!['id','version','weight','note'].includes(key)))fail('只能调整已发布话术的检索权重或停用状态');
+      const track=state.talkTracks?.find(item=>item.id===payload.id);if(!track)fail('话术不存在',404);
+      if(track.version!==payload.version||track.status!=='published')fail('话术已更新或尚未发布，请刷新后重试',409);
+      if(action==='talktrack_weight'){
+        if(typeof payload.weight!=='number'||!Number.isFinite(payload.weight)||payload.weight<0||payload.weight>1)fail('检索权重须为0至1之间的数值');
+        track.weight=payload.weight;
+      }else track.status='archived';
+      track.reviewNote=[actorName??'周予安',typeof payload.note==='string'?payload.note.trim().slice(0,2800):action==='talktrack_archive'?'知识运营已停用此话术':'知识运营已调整检索权重'].join(' · ');
+      track.version++;track.updatedAt=now;
+      return action==='talktrack_archive'?'话术已停用，不再用于检索生成':'话术检索权重已更新';
+    }
     case 'talktrack_review':{if(role!=='manager')fail('需要销售管理者审核',403);const t=state.talkTracks?.find(t=>t.id===payload.id);if(!t)fail('话术不存在',404);if(t.version!==payload.version)fail('话术已更新，请刷新后重试',409);const decision=payload.decision;if(!['approve','reject','restore'].includes(String(decision)))fail('审核操作不正确');if((decision==='restore'?t.status!=='archived':t.status!=='candidate'))fail('话术状态已变更',409);
       if(payload.edits!==undefined){if(!payload.edits||typeof payload.edits!=='object'||Array.isArray(payload.edits))fail('微调格式不正确');const edits=payload.edits as Record<string,unknown>;if(Object.keys(edits).some(k=>!['topic','scenario','template','keywords','objectionLogic','steps','boundaries','leadTypes'].includes(k)))fail('不能修改来源、作者或原文证据');for(const key of ['topic','scenario','template'] as const)if(key in edits)t[key]=str(edits[key],key,key==='topic'?60:8000);for(const key of ['keywords','objectionLogic','steps','boundaries','leadTypes'] as const)if(key in edits)t[key]=strings(edits[key],key);}
       if(decision!=='reject'){const d=state.deals.find(d=>d.id===t.dealId);if(!d||d.outcome!=='won'||d.dataOrigin!=='manual')fail('来源项目尚未确认成单');if(!approve)fail('向量服务未配置，请先在设置中连接 Embedding API',503);await approve(t);t.status='published';t.publishedAt=now;t.weight=1;}else t.status='rejected';
-      t.reviewNote=typeof payload.note==='string'?payload.note.trim().slice(0,3000):'';t.reviewer='周予安';t.updatedAt=now;t.version++;t.title=talkTitle(t.employeeName,t.topic,t.version);
+      t.reviewNote=typeof payload.note==='string'?payload.note.trim().slice(0,3000):'';t.reviewer=actorName??'周予安';t.updatedAt=now;t.version++;t.title=talkTitle(t.employeeName,t.topic,t.version);
       for(const j of state.feedbackJobs??[])if(j.candidateIds.includes(t.id)&&j.candidateIds.every(key=>state.talkTracks?.find(track=>track.id===key)?.status!=='candidate')){j.status='done';j.message='候选话术已完成审核';j.updatedAt=now;}
       return decision==='reject'?'话术已打回':'话术已审核发布，可在生成时指定使用';}
     case 'talktrack_policy':{if(role!=='manager')fail('需要销售管理者设置维护策略',403);if(typeof payload.enabled!=='boolean'||!['downweight','archive'].includes(String(payload.action)))fail('维护策略格式不正确');for(const [key,min,max] of [['minClosedProjects',10,10000],['idleDays',1,3650],['winRateBelow',0,1]] as const)if(typeof payload[key]!=='number'||!Number.isFinite(payload[key])||(payload[key] as number)<min||(payload[key] as number)>max||(key!=='winRateBelow'&&!Number.isInteger(payload[key])))fail('请检查维护阈值（至少10个已结项项目）');state.talkTrackPolicy={enabled:payload.enabled,minClosedProjects:payload.minClosedProjects as number,winRateBelow:payload.winRateBelow as number,idleDays:payload.idleDays as number,action:payload.action as TalkTrackPolicy['action']};return '维护策略已保存';}

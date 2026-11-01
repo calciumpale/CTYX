@@ -18,7 +18,7 @@ export interface ProjectIntakeProps {
   onDirtyChange?: (dirty: boolean) => void;
 }
 
-export function ProjectIntake({ state, mutate, notify, onCreated, onNavigate, onBusyChange, onDirtyChange }: ProjectIntakeProps) {
+export function ProjectIntake({ state, mutate, notify, onCreated, onBusyChange, onDirtyChange }: ProjectIntakeProps) {
   const id = useId();
   const [text, setText] = useState('');
   const [clarification, setClarification] = useState('');
@@ -78,7 +78,7 @@ export function ProjectIntake({ state, mutate, notify, onCreated, onNavigate, on
     if (busyRef.current || composingRef.current) return;
     if (!value.trim()) { setError('请先输入或说出客户信息。'); return; }
     if (value.length > MAX_INTAKE_TEXT) { setError('客户信息最多6000字，请精简后再录入。'); return; }
-    if (!modelConnected) { setError('请先在设置中连接模型，再重新录入。当前原话已保留。'); return; }
+    if (!modelConnected) { setError('请联系管理员配置大模型服务。当前原话已保留，也可通过页面上方的“新建项目”手动录入。'); return; }
     busyRef.current = true; setBusy(true); setError('');
     lastSubmission.current = { text: value, inputMode };
     // Preserve the complete submitted raw text even if the response never arrives.
@@ -162,7 +162,7 @@ export function ProjectIntake({ state, mutate, notify, onCreated, onNavigate, on
     </form>
     {statusMessage && <p className="project-intake-status" role="status">{listening && <span className="project-intake-listening-dot" />}{statusMessage}</p>}
     {voice.interimTranscript && <p className="project-intake-interim" aria-live="polite">{voice.interimTranscript}</p>}
-    {!modelConnected && <div className="project-intake-connection"><p>连接模型后，即可从客户原话提取信息并建立项目。</p>{onNavigate && <button type="button" className="button ghost" onClick={() => onNavigate('settings')}>连接模型<ArrowRight size={15} /></button>}</div>}
+    {!modelConnected && <div className="project-intake-connection"><p>请联系管理员配置大模型服务。现在可通过页面上方的“新建项目”手动录入客户。</p></div>}
     {showError && <p className="project-intake-error" role="alert">{showError}</p>}
     {response?.status === 'duplicate' && <div className="project-intake-duplicates"><h3>已有相同客户的相似项目</h3><p>把这段原话补充为跟进，或为新的销售机会另建项目。</p><ul>{response.existing?.map(project => <li key={project.id}><div><strong>{project.projectName || project.name}</strong><span>{project.name}</span></div><button type="button" className="button secondary" disabled={busy} onClick={() => void saveFollowup(project.id)}>记录到此项目<ArrowRight size={15} /></button></li>)}</ul><button type="button" className="button ghost" disabled={busy} onClick={() => { const entry = lastSubmission.current; if (entry) void submitText(entry.text, entry.inputMode, true); }}><Plus size={16} />另建新项目</button></div>}
   </section>;

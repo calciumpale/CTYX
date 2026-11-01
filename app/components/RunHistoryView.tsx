@@ -48,7 +48,8 @@ function StepDetail({ step, index }: { step: TraceStep; index: number }) {
   </li>;
 }
 
-function RecordDetail({ run, existingCandidate, busy, extractionPending, error, onBack, onCopy, onExtract, headingRef }: {
+function RecordDetail({ run, existingCandidate, busy, extractionPending, error, onBack, onCopy, onExtract, headingRef, canExtract }: {
+  canExtract: boolean;
   run: Run;
   existingCandidate: boolean;
   busy: boolean;
@@ -80,7 +81,7 @@ function RecordDetail({ run, existingCandidate, busy, extractionPending, error, 
       <p className="run-history-experts">{run.workflowId ? <GitBranch size={14} aria-hidden="true" /> : <MessageSquare size={14} aria-hidden="true" />}<span>{run.workflowId ? '工作流' : '专家协作'}{run.agentIds.length > 0 && ` · ${run.agentIds.map(agentName).join('、')}`}</span></p>
       <div className="run-history-actions">
         <button type="button" className="studio-btn studio-btn-secondary" onClick={onCopy} disabled={!run.answer.trim()}><Copy size={15} aria-hidden="true" />复制结果</button>
-        <button type="button" className="studio-btn studio-btn-ghost" onClick={onExtract} disabled={extractionPending || existingCandidate} title="保存为候选草稿，由管理者审核后发布">{busy ? <Loader2 size={15} className="studio-spin" aria-hidden="true" /> : existingCandidate ? <Check size={15} aria-hidden="true" /> : <Sparkles size={15} aria-hidden="true" />}{busy ? '正在提炼…' : existingCandidate ? '已提炼为候选 Skill' : '提炼为候选 Skill'}</button>
+        {canExtract && <button type="button" className="studio-btn studio-btn-ghost" onClick={onExtract} disabled={extractionPending || existingCandidate} title="保存为候选草稿，由管理者审核后发布">{busy ? <Loader2 size={15} className="studio-spin" aria-hidden="true" /> : existingCandidate ? <Check size={15} aria-hidden="true" /> : <Sparkles size={15} aria-hidden="true" />}{busy ? '正在提炼…' : existingCandidate ? '已提炼为候选 Skill' : '提炼为候选 Skill'}</button>}
       </div>
       {error && <p className="run-history-feedback" role="alert"><AlertCircle size={16} aria-hidden="true" /><span>{error} 请重试提炼。</span></p>}
     </header>
@@ -110,7 +111,7 @@ function RecordDetail({ run, existingCandidate, busy, extractionPending, error, 
   </article>;
 }
 
-export function RunsView({ state, mutate, notify }: ViewProps) {
+export function RunsView({ state, mutate, notify, canExtract = true }: ViewProps & {canExtract?:boolean}) {
   const [filters, setFilters] = useState<RunFilters>({ search: '', status: 'all', source: 'all' });
   const [selectedId, setSelectedId] = useState('');
   const [mobileDetail, setMobileDetail] = useState(false);
@@ -141,7 +142,7 @@ export function RunsView({ state, mutate, notify }: ViewProps) {
     catch { notify('复制未完成，请选择结果文字后复制。'); }
   };
   const extractCandidate = async () => {
-    if (!selected || mutationRunning.current || existingCandidate) return;
+    if (!canExtract || !selected || mutationRunning.current || existingCandidate) return;
     const run = selected;
     mutationRunning.current = true;
     setExtractingId(run.id);
@@ -180,7 +181,7 @@ export function RunsView({ state, mutate, notify }: ViewProps) {
           <p>{run.workflowId ? <GitBranch size={13} aria-hidden="true" /> : <MessageSquare size={13} aria-hidden="true" />}<span>{run.workflowId ? '工作流' : '专家协作'}{run.agentIds.length > 0 && ` · ${run.agentIds.map(agentName).join('、')}`}</span><ChevronRight size={14} aria-hidden="true" /></p>
         </button></li>)}</ul></div>)}
       </nav>
-      <RecordDetail key={selected.id} run={selected} existingCandidate={existingCandidate} busy={extractingId === selected.id} extractionPending={!!extractingId} error={error.runId === selected.id ? error.message : ''} onBack={backToRecords} onCopy={copyResult} onExtract={extractCandidate} headingRef={headingRef} />
+      <RecordDetail key={selected.id} run={selected} existingCandidate={existingCandidate} busy={extractingId === selected.id} extractionPending={!!extractingId} error={error.runId === selected.id ? error.message : ''} onBack={backToRecords} onCopy={copyResult} onExtract={extractCandidate} headingRef={headingRef} canExtract={canExtract} />
     </div> : <Empty filtered={hasFilters} onClear={clearFilters} />}
   </section>;
 }

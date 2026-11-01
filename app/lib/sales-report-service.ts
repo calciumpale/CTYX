@@ -1,4 +1,5 @@
 import { DomainError } from './domain.ts';
+import {requireMemberRole} from './member-policy.ts';
 import { readEffectiveModel } from './connection-store.ts';
 import { requestModelText } from './model-client.ts';
 import type { EffectiveModel } from './connection-config.ts';
@@ -10,7 +11,7 @@ import type { SalesReport, SalesReportDispatch, SalesReportList } from './sales-
 interface Options {now?:()=>string;modelFor?:(ownerId:string)=>Promise<EffectiveModel|null>;generateText?:(model:EffectiveModel,messages:ModelMessage[])=>Promise<string>;}
 export function salesReportIdentity(request:Request):string{
   const id=request.headers.get('oai-authenticated-user-id');if(!id||id.length>512||!request.headers.get('oai-authenticated-user-email'))throw new DomainError('请先使用平台账号登录',401);
-  if((request.headers.get('cookie')??'').split(';').some(item=>item.trim()==='ctai_experience_role=sales'))throw new DomainError('请切换到管理视角查看销售日报',403);return id;
+  if(requireMemberRole(request)!=='manager')throw new DomainError('需要销售管理者权限',403);return id;
 }
 export function assertSalesReportOrigin(request:Request):void{const origin=request.headers.get('origin');if(origin&&origin!==new URL(request.url).origin||request.headers.get('sec-fetch-site')==='cross-site')throw new DomainError('只允许从当前站点发起操作',403);}
 export async function readSalesReportInput(request:Request,allowEmpty=false):Promise<Record<string,unknown>>{

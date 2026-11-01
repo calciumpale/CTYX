@@ -18,3 +18,15 @@ test('reopening source deal invalidates queued jobs and published source scripts
 test('screened out and duplicate feedback can be reprocessed after changing model settings',async()=>{let s=await manual();const d=s.deals[0];s=(await executeAction(s,'sales','transcript_add',{dealId:d.id,text:'销售：请先确认目标。客户：好。',source:'pasted'},{now})).state;s=(await executeAction(s,'sales','deal_outcome',{dealId:d.id,version:s.deals[0].version,outcome:'won',confirmed:true},{now})).state;for(const status of ['screened_out','duplicate'] as const){s.feedbackJobs![0].status=status;const result=await executeAction(s,'sales','feedback_retry',{dealId:d.id},{now});assert.equal(result.state.feedbackJobs?.[0].status,'queued');}});
 
 test('large transcript collections split into bounded employee-specific batches without losing evidence',()=>{const sources=Array.from({length:5},(_,i)=>({id:`t${i}`,dealId:'d',employeeId:i===4?'sales-2':'sales-1',employeeName:'销售',text:'字'.repeat(44000),source:'pasted' as const,createdAt:now}));const batches=feedbackBatches(sources);assert.equal(batches.length,3);assert.deepEqual(batches.flat().map(t=>t.id),sources.map(t=>t.id));for(const batch of batches){assert.ok(batch.reduce((n,t)=>n+t.text.length,0)<=100000);assert.equal(new Set(batch.map(t=>t.employeeId)).size,1);}});
+
+test('content operations can retire published scripts without publishing candidates or rewriting evidence',async()=>{
+  const state=await manual();state.talkTracks=[{...track(state.deals[0].id),status:'published'}];
+  const changed=await executeAction(state,'manager','talktrack_weight',{id:'talk-1',version:1,weight:0.5},{now});
+  assert.equal(changed.state.talkTracks![0].weight,0.5);assert.equal(changed.state.talkTracks![0].version,2);
+  assert.deepEqual(changed.state.talkTracks![0].evidence,state.talkTracks[0].evidence);
+  await assert.rejects(executeAction(changed.state,'manager','talktrack_archive',{id:'talk-1',version:1},{now}),{status:409});
+  const archived=await executeAction(changed.state,'manager','talktrack_archive',{id:'talk-1',version:2},{now});assert.equal(archived.state.talkTracks![0].status,'archived');
+  await assert.rejects(executeAction(state,'sales','talktrack_archive',{id:'talk-1',version:1},{now}),{status:403});
+  state.talkTracks[0].status='candidate';
+  for(const action of ['talktrack_weight','talktrack_archive'])await assert.rejects(executeAction(state,'manager',action,{id:'talk-1',version:1,weight:1},{now}),{status:409});
+});

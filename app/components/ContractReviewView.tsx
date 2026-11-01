@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useId, useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent, type ReactNode } from 'react';
-import { AlertCircle, ArrowLeft, Check, ChevronDown, ClipboardCheck, Copy, FileCheck2, FileText, History, Loader2, Pencil, Plus, Save, Settings2, ShieldCheck, Upload, X } from 'lucide-react';
+import { AlertCircle, ArrowLeft, Check, ChevronDown, ClipboardCheck, Copy, FileCheck2, FileText, History, Loader2, Pencil, Plus, Save, ShieldCheck, Upload, X } from 'lucide-react';
 import { CONTRACT_TYPES, type ContractDocument, type ContractFinding, type ContractFindingStatus, type ContractKind, type ContractParty, type ContractRiskLevel } from '../lib/contract-types';
 import { importContractFile } from '../lib/contract-import';
 import type { View, ViewProps } from '../lib/types';
@@ -34,10 +34,10 @@ function MarkedContract({ text, findings, selectedId, onSelect }: { text: string
 }
 
 function ReviewEmpty({ busy, modelConnected }: { busy: boolean; modelConnected: boolean }) {
-  return <div className="contract-review-empty" aria-live="polite">{busy ? <Loader2 size={28} className="studio-spin" /> : <ShieldCheck size={28} />}<h2>{busy ? '正在逐条核对合同' : '让风险与原文一一对应'}</h2><p>{busy ? '商务风控 Agent 正在分析权利义务、识别风险条款并准备修改建议。请保留此页面，较长合同需要更多时间。' : '导入或粘贴合同正文，确认我方立场后开始初审。风险条款会在原文标注，便于核对和修改。'}</p>{!busy && <ul><li>付款、验收与交付条件</li><li>违约责任、免责与权责失衡</li><li>保密、知识产权与争议解决</li><li>缺失条款与不明确的约定</li></ul>}{!busy && !modelConnected && <small>配置大模型 API 后即可开始初审，当前可先保存草稿。</small>}</div>;
+  return <div className="contract-review-empty" aria-live="polite">{busy ? <Loader2 size={28} className="studio-spin" /> : <ShieldCheck size={28} />}<h2>{busy ? '正在逐条核对合同' : '让风险与原文一一对应'}</h2><p>{busy ? '商务风控 Agent 正在分析权利义务、识别风险条款并准备修改建议。请保留此页面，较长合同需要更多时间。' : '导入或粘贴合同正文，确认我方立场后开始初审。风险条款会在原文标注，便于核对和修改。'}</p>{!busy && <ul><li>付款、验收与交付条件</li><li>违约责任、免责与权责失衡</li><li>保密、知识产权与争议解决</li><li>缺失条款与不明确的约定</li></ul>}{!busy && !modelConnected && <small>合同草稿可先保存，待管理员配置大模型服务后进行初审。</small>}</div>;
 }
 
-export function ContractReviewView({ state, mutate, notify, initialDealId, onApproval, onNavigate, onBusyChange, onDirtyChange }: Props) {
+export function ContractReviewView({ state, mutate, notify, initialDealId, onApproval, onBusyChange, onDirtyChange }: Props) {
   const prefix = useId();
   const [saved, setSaved] = useState<ContractDocument | null>(null);
   const [draft, setDraft] = useState<Draft>(() => emptyDraft(initialDealId || ''));
@@ -147,7 +147,7 @@ export function ContractReviewView({ state, mutate, notify, initialDealId, onApp
 
     <section className="contract-setup" aria-label="合同信息"><div className="contract-setup-heading"><h2>{current ? draft.title || '合同资料' : '准备合同资料'}</h2><span>{dirty ? '有未保存修改' : current ? '已保存' : '新草稿'}</span></div><div className="contract-form-grid"><label htmlFor={`${prefix}-project`}>关联项目<select id={`${prefix}-project`} value={draft.dealId} disabled={isBusy} onChange={event => update('dealId', event.target.value)}><option value="">选择一个项目</option>{state.deals.map(deal => <option key={deal.id} value={deal.id}>{deal.projectName || deal.name}</option>)}</select></label><label htmlFor={`${prefix}-title`}>合同标题<input id={`${prefix}-title`} maxLength={150} value={draft.title} disabled={isBusy} placeholder="例如：年度服务采购合同" onChange={event => update('title', event.target.value)} /></label><label htmlFor={`${prefix}-type`}>合同类型<select id={`${prefix}-type`} value={draft.contractType} disabled={isBusy} onChange={event => update('contractType', event.target.value as ContractKind)}>{CONTRACT_TYPES.map(type => <option key={type}>{type}</option>)}</select></label><label htmlFor={`${prefix}-party`}>我方立场<select id={`${prefix}-party`} value={draft.ourParty} disabled={isBusy} onChange={event => update('ourParty', event.target.value as ContractParty)}><option>待确认</option><option>甲方</option><option>乙方</option></select></label><label htmlFor={`${prefix}-focus`} className="contract-focus-field">审查重点<span>选填</span><input id={`${prefix}-focus`} maxLength={2000} value={draft.focus} disabled={isBusy} placeholder="例如：付款比例、验收标准、违约责任上限" onChange={event => update('focus', event.target.value)} /></label></div><div className="contract-save-row"><p><ShieldCheck size={15} />初审用于辅助识别风险，签署前应由负责人或法务确认。</p><div><button type="button" className="studio-btn studio-btn-secondary" disabled={isBusy || !canSave || Boolean(current && !dirty)} onClick={save}>{busy === 'save' ? <Loader2 size={15} className="studio-spin" /> : <Save size={15} />}保存草稿</button><button type="button" className="studio-btn studio-btn-primary" disabled={isBusy || !canSave || !state.model.connected} onClick={review}>{busy === 'review' ? <Loader2 size={15} className="studio-spin" /> : <FileCheck2 size={15} />}{analysis ? '重新初审' : '开始初审'}</button></div></div></section>
 
-    {!state.model.connected && <div className="contract-config-notice"><AlertCircle size={17} /><p>尚未配置大模型 API。可以先导入合同并保存草稿，完成配置后开始初审。</p>{onNavigate && <button type="button" className="studio-btn studio-btn-ghost" disabled={isBusy} onClick={() => onNavigate('settings')}><Settings2 size={14} />去设置</button>}</div>}
+    {!state.model.connected && <div className="contract-config-notice"><AlertCircle size={17} /><p>请联系管理员配置大模型服务。现在可以先导入合同并保存草稿，配置完成后再开始初审。</p></div>}
     {error && <p className="contract-error" role="alert"><AlertCircle size={17} />{error}</p>}
     {(draft.importWarnings?.length ?? 0) > 0 && <div className="contract-import-notice"><AlertCircle size={16} /><div><strong>请核对导入文本</strong>{draft.importWarnings?.map((warning, index) => <p key={index}>{warning}</p>)}</div></div>}
 

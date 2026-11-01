@@ -13,10 +13,13 @@ import { salesIntelligenceIsCurrent } from '../lib/sales-intelligence';
 import { ProjectBoard, ProjectDeadlineBadge, ProjectOutcomeBadge } from './ProjectBoard';
 import { deadlineFromInput, deadlineInputValue } from '../lib/project-deadline';
 import type { FeedbackJob } from '../lib/talktrack-types';
+import type { MemberSession } from '../lib/member-types';
 import './answer-content.css';
 import './project-workspace.css';
 
 type ProjectProps = ViewProps & {
+  member?: MemberSession;
+  initialIntent?: 'create' | 'followup' | null;
   initialDealId?: string | null;
   onDealClosed?: () => void;
   onReload?:()=>Promise<void>;
@@ -91,16 +94,17 @@ function FeedbackStatus({ job, busy, onRetry, onTranscript, onSettings, onLibrar
   return <div className="project-feedback-status" aria-live="polite"><div className="project-feedback-status-title">{job?.status === 'running' ? <Loader2 size={16} className="spin" /> : <Sparkles size={16} />}<strong>{job ? JOB_LABELS[job.status] : '等待通话转写'}</strong></div><p>{job?.message || '添加本项目的真实通话转写后，系统会提炼候选话术，提交销售管理者审核。'}</p><div>{(!job || job.status === 'waiting_transcript') && <button className="project-text-button" disabled={busy} onClick={onTranscript}>添加通话转写 <ArrowRight size={13} /></button>}{job?.status === 'waiting_config' && <button className="project-text-button" disabled={busy} onClick={onSettings}>前往配置服务 <ArrowRight size={13} /></button>}{job && ['failed', 'waiting_config', 'screened_out', 'duplicate'].includes(job.status) && <button className="project-text-button" disabled={busy} onClick={onRetry}>重新提炼 <ArrowRight size={13} /></button>}{job && ['review', 'done'].includes(job.status) && <button className="project-text-button" disabled={busy} onClick={onLibrary}>查看话术库 <ArrowRight size={13} /></button>}</div></div>;
 }
 
-export function ProjectsView({ state, mutate, notify, onAsk, initialDealId, onDealClosed, uploadFollowup, onNavigate, onApproval, onBusyChange, onDirtyChange, onReload }: ProjectProps) {
+export function ProjectsView({ state, member, mutate, notify, onAsk, initialDealId, initialIntent, onDealClosed, uploadFollowup, onNavigate, onApproval, onBusyChange, onDirtyChange, onReload }: ProjectProps) {
   const [selectedId, setSelectedId] = useState<string | null>(initialDealId || null);
   const [tab, setTab] = useState<Tab>('overview');
   const [query, setQuery] = useState('');
   const [stageFilter, setStageFilter] = useState('all');
   const [intentFilter, setIntentFilter] = useState('all');
-  const [layout, setLayout] = useState<'board' | 'list'>('board');
+  const [projectScope, setProjectScope] = useState<'team' | 'mine'>('team');
+  const [layout, setLayout] = useState<'board' | 'list'>(() => typeof window !== 'undefined' && window.matchMedia('(max-width: 700px)').matches ? 'list' : 'board');
   const [now, setNow] = useState(() => Date.now());
   const [creating, setCreating] = useState(false);
-  const [pickingFollowup, setPickingFollowup] = useState(false);
+  const [pickingFollowup, setPickingFollowup] = useState(initialIntent === 'followup');
   const [followupProjectId, setFollowupProjectId] = useState('');
   const [fields, setFields] = useState<ProjectFields>(() => fieldsFor());
   const [editing, setEditing] = useState<'project' | 'profile' | null>(null);
@@ -135,9 +139,13 @@ export function ProjectsView({ state, mutate, notify, onAsk, initialDealId, onDe
   const transcriptRef = useRef<HTMLTextAreaElement>(null);
   const titleRef = useRef<HTMLHeadingElement>(null);
   const tabsRef = useRef<HTMLDivElement>(null);
+  const intakeContainerRef = useRef<HTMLDivElement>(null);
   const prefix = useId();
+  const manager = member?.role === 'manager';
+  const ownProjects = state.deals.filter(item => item.ownerId === (member?.salesId ?? 'manager'));
+  const scopedProjects = manager && projectScope === 'mine' ? ownProjects : state.deals;
   const deal = state.deals.find(item => item.id === selectedId);
-  const matchingProjects = state.deals.filter(item => (intentFilter === 'all' || (salesIntelligenceIsCurrent(item) && item.intelligence?.latest?.insight.grade || 'pending') === intentFilter) && (stageFilter === 'all' || item.stage === stageFilter) && `${projectTitle(item)} ${item.name} ${item.contact} ${item.industry} ${item.owner} ${item.nextAction}`.toLowerCase().includes(query.trim().toLowerCase()));
+  const matchingProjects = scopedProjects.filter(item => (intentFilter === 'all' || (salesIntelligenceIsCurrent(item) && item.intelligence?.latest?.insight.grade || 'pending') === intentFilter) && (stageFilter === 'all' || item.stage === stageFilter) && `${projectTitle(item)} ${item.name} ${item.contact} ${item.industry} ${item.owner} ${item.nextAction}`.toLowerCase().includes(query.trim().toLowerCase()));
   const linkedRuns = deal ? state.runs.filter(run => run.dealId === deal.id).sort((a, b) => dateValue(b.createdAt) - dateValue(a.createdAt)) : [];
   const notes = deal ? [...deal.notes].sort((a, b) => dateValue(b.date) - dateValue(a.date)) : [];
   const transcripts = deal ? (state.transcripts || []).filter(item => item.dealId === deal.id).sort((a, b) => dateValue(b.createdAt) - dateValue(a.createdAt)) : [];
@@ -155,6 +163,17 @@ export function ProjectsView({ state, mutate, notify, onAsk, initialDealId, onDe
     return () => window.removeEventListener('beforeunload', protectSaving);
   }, []);
   useEffect(() => { const timer = window.setInterval(() => setNow(Date.now()), 60_000); return () => window.clearInterval(timer); }, []);
+  useEffect(() => {
+    if (!initialIntent) return;
+    const frame = requestAnimationFrame(() => {
+      const input = initialIntent === 'create'
+        ? intakeContainerRef.current?.querySelector<HTMLTextAreaElement>('textarea')
+        : document.getElementById(`${prefix}-followup-project`);
+      input?.scrollIntoView({ block: 'center', behavior: 'auto' });
+      input?.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [initialIntent, prefix]);
 
   const discardDrafts = () => {
     setNote(''); setRecording(null); setTranscript(''); setTranscriptFileName(''); setTranscriptSource('pasted');
@@ -268,14 +287,15 @@ export function ProjectsView({ state, mutate, notify, onAsk, initialDealId, onDe
   if (!deal) return <div className="business-page project-workspace">
     <header className="page-header project-page-header"><div><h1 id={`${prefix}-projects-heading`} className="page-title" tabIndex={-1}>项目中心</h1><p className="page-description">从第一条商机到每一次跟进，让客户信息与行动围绕项目汇聚。</p></div><div className="project-header-actions"><button className="button secondary" disabled={locked} onClick={() => navigateTo('approvals')}><ClipboardCheck size={16}/>审批中心</button><button className="button secondary" disabled={!state.deals.length || locked} onClick={() => requestTransition(() => { setPickingFollowup(!pickingFollowup); setCreating(false); setError(''); })}><MessageSquarePlus size={16} />记录跟进</button><button className="button primary" disabled={locked} onClick={() => createAtStage(STAGES[0])}><Plus size={17} />新建项目</button></div></header>
     {leavePrompt}
-    {!creating && !pickingFollowup && <ProjectIntake key={intakeKey} state={state} mutate={mutate} notify={notify} onNavigate={(view, id) => { navigateTo(view, id); }} onBusyChange={onIntakeBusy} onDirtyChange={onIntakeDirty} onCreated={id => { pendingTransition.current = null; setConfirmLeave(false); setIntakeDirty(false); dirtyRef.current = false; onDirtyChange?.(false); setSelectedId(id); setTab('overview'); setEditing(null); setCreating(false); setPickingFollowup(false); setError(''); requestAnimationFrame(() => titleRef.current?.focus()); }} />}
+    {!creating && !pickingFollowup && <div ref={intakeContainerRef}><ProjectIntake key={intakeKey} state={state} mutate={mutate} notify={notify} onNavigate={(view, id) => { navigateTo(view, id); }} onBusyChange={onIntakeBusy} onDirtyChange={onIntakeDirty} onCreated={id => { pendingTransition.current = null; setConfirmLeave(false); setIntakeDirty(false); dirtyRef.current = false; onDirtyChange?.(false); setSelectedId(id); setTab('overview'); setEditing(null); setCreating(false); setPickingFollowup(false); setError(''); requestAnimationFrame(() => titleRef.current?.focus()); }} /></div>}
     {creating && <section className="project-create-panel"><ProjectForm fields={fields} setFields={setFields} busy={locked} creating error={error} onSubmit={event => { void saveProject(event, true); }} onCancel={() => requestTransition(() => { setCreating(false); setError(''); })} /></section>}
-    {pickingFollowup && <form className="project-followup-picker" onSubmit={event => { event.preventDefault(); const item = state.deals.find(project => project.id === followupProjectId); if (item) openProject(item, 'followups'); }}><label htmlFor={`${prefix}-followup-project`}>为哪个项目记录跟进？<select id={`${prefix}-followup-project`} value={followupProjectId} onChange={event => setFollowupProjectId(event.target.value)} required><option value="">选择项目</option>{state.deals.map(item => <option key={item.id} value={item.id}>{projectTitle(item)} · {item.name}</option>)}</select></label><button className="button primary" disabled={locked || !followupProjectId}>开始记录 <ArrowRight size={15} /></button><button className="icon-button" type="button" onClick={() => requestTransition(() => setPickingFollowup(false))} aria-label="取消选择项目"><X size={17} /></button></form>}
+    {pickingFollowup && <form className="project-followup-picker" onSubmit={event => { event.preventDefault(); const item = scopedProjects.find(project => project.id === followupProjectId); if (item) openProject(item, 'followups'); }}><label htmlFor={`${prefix}-followup-project`}>为哪个项目记录跟进？<select id={`${prefix}-followup-project`} value={followupProjectId} disabled={locked || !scopedProjects.length} onChange={event => setFollowupProjectId(event.target.value)} required><option value="">{scopedProjects.length ? '选择项目' : manager && projectScope === 'mine' ? '你还没有负责的项目，可切换至团队项目' : '还没有项目，请先录入客户'}</option>{scopedProjects.map(item => <option key={item.id} value={item.id}>{projectTitle(item)} · {item.name}</option>)}</select></label><button className="button primary" disabled={locked || !scopedProjects.some(item => item.id === followupProjectId)}>开始记录 <ArrowRight size={15} /></button><button className="icon-button" type="button" disabled={locked} onClick={() => requestTransition(() => setPickingFollowup(false))} aria-label="取消选择项目"><X size={17} /></button></form>}
+    {manager && <div className="project-scope-switch" role="group" aria-label="项目范围"><button type="button" disabled={locked} aria-pressed={projectScope === 'team'} onClick={() => { setProjectScope('team'); setFollowupProjectId(''); }}>团队项目<span>{state.deals.length}</span></button><button type="button" disabled={locked} aria-pressed={projectScope === 'mine'} onClick={() => { setProjectScope('mine'); setFollowupProjectId(''); }}>我负责的<span>{ownProjects.length}</span></button></div>}
     <div className="project-toolbar"><label className="project-search"><Search size={17} /><input value={query} onChange={event => setQuery(event.target.value)} aria-label="搜索项目" placeholder="搜索项目、客户企业或联系人" />{query && <button type="button" onClick={() => setQuery('')} aria-label="清除搜索"><X size={14} /></button>}</label><select className="select" aria-label="筛选项目阶段" value={stageFilter} onChange={event => setStageFilter(event.target.value)}><option value="all">全部阶段</option>{STAGES.map(stage => <option key={stage}>{stage}</option>)}</select><select className="select" aria-label="筛选客户意向" value={intentFilter} onChange={event => setIntentFilter(event.target.value)}><option value="all">全部意向</option><option value="A">A · 高意向</option><option value="B">B · 中低意向</option><option value="C">C · 无明显意向</option><option value="pending">待评估</option></select><div className="project-view-switch" role="group" aria-label="项目视图"><button aria-pressed={layout === 'board'} onClick={() => setLayout('board')}><Columns3 size={15} />看板</button><button aria-pressed={layout === 'list'} onClick={() => setLayout('list')}><LayoutList size={15} />列表</button></div><span className="project-list-count">{matchingProjects.length} 个项目</span></div>
     {matchingProjects.length ? layout === 'board' ? <ProjectBoard disabled={locked} projects={matchingProjects} stageFilter={stageFilter} now={now} onOpen={item => openProject(item)} onFollowup={item => openProject(item, 'followups')} onCustomize={customizeProject} onCreate={createAtStage} /> : <section className="project-list" aria-label="项目列表"><div className="project-list-head" aria-hidden="true"><span>项目 / 客户企业</span><span>阶段</span><span>下一步行动</span><span>最近跟进</span><span /></div><ul>{matchingProjects.map(item => <li key={item.id}>
       <button className="project-name-button" disabled={locked} onClick={() => openProject(item)}><span className="project-company-avatar"><Building2 size={20} /></span><span><strong>{projectTitle(item)}</strong><small>{item.name}{item.contact ? ` · ${item.contact}` : ''}</small><span className="project-board-card-flags"><ProjectSalesBadges deal={item} /></span></span></button>
       <span className="project-stage"><span className="stage-tag">{item.stage}</span><ProjectOutcomeBadge deal={item} /><small>{item.owner || '尚未分配'}</small></span><div className="project-next-action"><p>{item.nextAction || '待安排下一步行动'}</p><ProjectDeadlineBadge deal={item} now={now} /></div><time className="project-last-contact">{dateValue(item.lastContact) ? formatDate(item.lastContact) : '暂无跟进'}</time><button className="button ghost project-row-followup" disabled={locked} onClick={() => openProject(item, 'followups')} aria-label={`为${projectTitle(item)}新增跟进`}><Plus size={14} />新增跟进</button>
-    </li>)}</ul></section> : <section className="project-empty"><Building2 size={30} /><h2>{state.deals.length ? '没有找到匹配的项目' : '从你的第一个项目开始'}</h2><p>{state.deals.length ? '尝试其他项目名称、企业名称，或清除筛选。' : '录入商机与客户企业，随后添加文字或录音跟进，逐步完善客户画像。'}</p><button className="button secondary" onClick={() => { if (state.deals.length) { setQuery(''); setStageFilter('all'); setIntentFilter('all'); } else { createAtStage(STAGES[0]); } }}>{state.deals.length ? '清除筛选' : <><Plus size={15} />新建项目</>}</button></section>}
+    </li>)}</ul></section> : <section className="project-empty"><Building2 size={30} /><h2>{manager && projectScope === 'mine' && !ownProjects.length ? '你还没有负责的项目' : state.deals.length ? '没有找到匹配的项目' : '从你的第一个项目开始'}</h2><p>{manager && projectScope === 'mine' && !ownProjects.length ? '切换至团队项目查看整体进展，或新建一个由你负责的项目。' : state.deals.length ? '尝试其他项目名称、企业名称，或清除筛选。' : '录入商机与客户企业，随后添加文字或录音跟进，逐步完善客户画像。'}</p><button className="button secondary" onClick={() => { if (manager && projectScope === 'mine' && !ownProjects.length) { setProjectScope('team'); setFollowupProjectId(''); } else if (state.deals.length) { setQuery(''); setStageFilter('all'); setIntentFilter('all'); } else { createAtStage(STAGES[0]); } }}>{manager && projectScope === 'mine' && !ownProjects.length ? '查看团队项目' : state.deals.length ? '清除筛选' : <><Plus size={15} />新建项目</>}</button></section>}
   </div>;
 
   const companyProfile = deal.companyProfile;

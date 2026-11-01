@@ -4,7 +4,7 @@ export type ApprovalKind = 'business' | 'contract';
 export type ApprovalStatus = 'pending' | 'approved' | 'rejected' | 'returned' | 'withdrawn' | 'superseded';
 export type ApprovalStepStatus = 'waiting' | 'pending' | 'approved' | 'rejected' | 'returned';
 export type ApprovalAction = 'approve' | 'reject' | 'return' | 'withdraw';
-export interface ApprovalActor { id: string; email: string; name: string; }
+export interface ApprovalActor { id: string; email: string; name: string; workspaceId?:string; memberRole?:'sales'|'manager'|'admin'; }
 export interface ApprovalRouteStep {
   id: string;
   label: string;

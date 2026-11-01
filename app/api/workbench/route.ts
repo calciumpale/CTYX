@@ -1,6 +1,6 @@
 import { DomainError } from '../../lib/domain.ts';
-import { mutateWorkbench, readRole, readWorkbench, requireUserId, roleCookie } from '../../lib/server.ts';
-import type { Role } from '../../lib/types.ts';
+import {loadWorkspace,mutateWorkbench,readRole,requireUserId} from '../../lib/server.ts';
+import {projectAccountResult,projectAccountState,readMemberDisplayName,requireMemberRole} from '../../lib/member-policy.ts';
 
 export const dynamic='force-dynamic';
 const responseHeaders={'Cache-Control':'private, no-store','Vary':'Cookie, oai-authenticated-user-id','X-Content-Type-Options':'nosniff'};
@@ -24,7 +24,7 @@ async function body(request:Request):Promise<Record<string,unknown>> {
   return parsed as Record<string,unknown>;
 }
 export async function GET(request:Request):Promise<Response> {
-  try {return Response.json(await readWorkbench(requireUserId(request),readRole(request),new URL(request.url).origin),{headers:responseHeaders});}catch(error){return errorResponse(error);}
+  try {return Response.json(projectAccountState(requireMemberRole(request),await loadWorkspace(requireUserId(request),new URL(request.url).origin)),{headers:responseHeaders});}catch(error){return errorResponse(error);}
 }
 export async function POST(request:Request):Promise<Response> {
   try {
@@ -34,12 +34,9 @@ export async function POST(request:Request):Promise<Response> {
     if(typeof input.action!=='string')throw new DomainError('缺少操作名称');
     const payload=input.payload??{};
     if(!payload||typeof payload!=='object'||Array.isArray(payload))throw new DomainError('操作参数格式不正确');
-    if(input.action==='switch_role') {
-      const role=(payload as Record<string,unknown>).role;
-      if(role!=='sales'&&role!=='manager')throw new DomainError('体验视角不正确');
-      return Response.json({state:await readWorkbench(userId,role as Role,new URL(request.url).origin),message:`已切换${role==='sales'?'销售':'销售管理者'}体验视角`},{headers:{...responseHeaders,'Set-Cookie':roleCookie(role as Role,request)}});
-    }
-    const result=await mutateWorkbench(userId,readRole(request),input.action,payload as Record<string,unknown>,input.revision,new URL(request.url).origin);
-    return Response.json(result,{headers:responseHeaders});
+    if(input.action==='switch_role')throw new DomainError('账号角色由登录权限确定，请退出后使用对应账号登录',403);
+    const memberRole=requireMemberRole(request);
+    const result=await mutateWorkbench(userId,readRole(request),input.action,payload as Record<string,unknown>,input.revision,new URL(request.url).origin,memberRole,readMemberDisplayName(request));
+    return Response.json(projectAccountResult(memberRole,result),{headers:responseHeaders});
   } catch(error){return errorResponse(error);}
 }

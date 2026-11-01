@@ -62,3 +62,22 @@ export const workbenchSpeechSettings=sqliteTable('workbench_speech_settings',{
 export const workbenchRecordingTranscriptions=sqliteTable('workbench_recording_transcriptions',{
   userId:text('user_id').notNull(),recordingId:text('recording_id').notNull(),dealId:text('deal_id').notNull(),version:integer('version').notNull(),remoteId:text('remote_id'),leaseUntil:text('lease_until'),updatedAt:text('updated_at').notNull(),dataJson:text('data_json').notNull(),
 },table=>[primaryKey({columns:[table.userId,table.recordingId]}),index('workbench_recording_transcription_project').on(table.userId,table.dealId)]);
+
+/** Three app-level member accounts share their original private Sites owner's workspace. */
+export const workbenchMemberAccounts=sqliteTable('workbench_member_accounts',{
+  accountId:text('account_id').primaryKey(),ownerId:text('owner_id').notNull(),username:text('username').notNull(),displayName:text('display_name').notNull(),role:text('role').notNull(),salesId:text('sales_id'),enabled:integer('enabled').notNull().default(1),passwordSalt:text('password_salt').notNull(),passwordHash:text('password_hash').notNull(),passwordIterations:integer('password_iterations').notNull(),createdAt:text('created_at').notNull(),updatedAt:text('updated_at').notNull(),
+},table=>[uniqueIndex('workbench_member_owner_username').on(table.ownerId,table.username)]);
+
+/** Opaque cookie tokens are hashed; raw session tokens never enter the database. */
+export const workbenchMemberSessions=sqliteTable('workbench_member_sessions',{
+  tokenHash:text('token_hash').primaryKey(),ownerId:text('owner_id').notNull(),accountId:text('account_id').notNull(),expiresAt:integer('expires_at').notNull(),createdAt:text('created_at').notNull(),
+},table=>[index('workbench_member_session_owner').on(table.ownerId,table.accountId),index('workbench_member_session_expiry').on(table.expiresAt)]);
+
+export const workbenchMemberLoginLimits=sqliteTable('workbench_member_login_limits',{
+  ownerId:text('owner_id').primaryKey(),attempts:integer('attempts').notNull(),windowStart:integer('window_start').notNull(),
+});
+
+/** Versioned operational business rules, independent from the workspace JSON. */
+export const workbenchBusinessSettings=sqliteTable('workbench_business_settings',{
+  userId:text('user_id').primaryKey(),version:integer('version').notNull(),updatedAt:text('updated_at').notNull(),dataJson:text('data_json').notNull(),
+});

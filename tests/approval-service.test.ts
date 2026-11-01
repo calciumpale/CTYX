@@ -26,11 +26,33 @@ function fixture(){
 }
 
 test('trusted identity normalization and origin validation do not use a role cookie',()=>{
-  const request=new Request('https://work.example.com/api/approvals',{headers:{'oai-authenticated-user-id':'finance','oai-authenticated-user-email':' FINANCE@EXAMPLE.COM ','oai-authenticated-user-full-name':encodeURIComponent('财务同事'),cookie:'ctai_experience_role=manager',origin:'https://work.example.com'}});
-  assert.deepEqual(readApprovalIdentity(request),{id:'finance',email:'finance@example.com',name:'财务同事'});assertApprovalOrigin(request);
+  const request=new Request('https://work.example.com/api/approvals',{headers:{'oai-authenticated-user-id':'finance','oai-authenticated-user-email':' FINANCE@EXAMPLE.COM ','x-ctai-member-authenticated':'1','x-ctai-member-role':'manager','x-ctai-member-username':'manager','x-ctai-member-account-id':'member-manager','x-ctai-member-display-name':encodeURIComponent('财务同事'),cookie:'ctai_experience_role=sales',origin:'https://work.example.com'}});
+  assert.deepEqual(readApprovalIdentity(request),{id:'finance',email:'finance@example.com',name:'财务同事',workspaceId:'finance',memberRole:'manager'});assertApprovalOrigin(request);
   assert.throws(()=>readApprovalIdentity(new Request(request.url,{headers:{cookie:'ctai_experience_role=manager'}})),{status:401});
   assert.throws(()=>assertApprovalOrigin(new Request(request.url,{headers:{origin:'https://attacker.example.com'}})),{status:403});
   assert.throws(()=>assertApprovalOrigin(new Request(request.url,{headers:{'sec-fetch-site':'cross-site'}})),{status:403});
+});
+
+test('workspace member applicants are distinct from the manager and admin has template-only authority',async(t)=>{
+  const {sqlite,service,payload}=fixture();t.after(()=>sqlite.close());
+  const salesperson={id:'sales-account',email:'sales+sales-account@accounts.ctai.local',name:'销售',workspaceId:alice.id,memberRole:'sales' as const};
+  const manager={...alice,workspaceId:alice.id,memberRole:'manager' as const};
+  const admin={id:'admin-account',email:'admin+admin-account@accounts.ctai.local',name:'管理员',workspaceId:alice.id,memberRole:'admin' as const};
+  const input=payload({steps:[{id:'manager',label:'销售管理者审批',role:'manager',approverName:'Alice',approverEmail:alice.email}]});
+  const created=(await service.mutate(salesperson,'sales','submit',input)).request!;
+  assert.equal(created.ownerId,alice.id);assert.equal(created.applicant.id,'sales-account');
+  assert.equal((await service.list(manager,{scope:'all'})).requests[0].canDecide,true);
+  await assert.rejects(service.detail({...salesperson,id:'other-sales'},created.id),{status:404});
+  await assert.rejects(service.detail({...manager,id:'different-owner',workspaceId:'different-owner'},created.id),{status:404});
+  await assert.rejects(service.mutate(salesperson,'sales','decide',{id:created.id,version:1,decision:'approve'}),{status:403});
+  await assert.rejects(service.mutate(admin,'manager','decide',{id:created.id,version:1,decision:'approve'}),{status:403});
+  await assert.rejects(service.detail(admin,created.id),{status:403});
+  await assert.rejects(service.list(admin),{status:403});
+  const approved=await service.mutate(manager,'manager','decide',{id:created.id,version:1,decision:'approve'});assert.equal(approved.request!.status,'approved');
+  const template={id:crypto.randomUUID(),name:'销售负责人审批',kind:'business',steps:input.steps,version:0};
+  await service.mutate(admin,'manager','template_save',template);
+  const templates=await service.templates(admin);assert.equal(templates.templates.length,1);assert.equal('requests' in templates,false);
+  assert.equal((await service.list(salesperson)).templates[0].id,template.id);
 });
 
 test('canonical submission snapshots stay private and only the exact current approver can decide',async(t)=>{

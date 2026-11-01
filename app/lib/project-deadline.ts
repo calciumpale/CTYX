@@ -2,16 +2,18 @@ export type ProjectUrgency = 'none' | 'upcoming' | 'urgent' | 'overdue';
 export type DeadlineProject = { deadline?: string; cardColor?: string; outcome?: 'open' | 'won' | 'lost' };
 export type ProjectCardTone = 'default' | 'custom' | 'red' | 'orange';
 const HOUR = 60 * 60 * 1000;
+export interface DeadlineRules { urgentDays: number; warningDays: number }
+export const DEFAULT_DEADLINE_RULES: DeadlineRules = { urgentDays: 2, warningDays: 5 };
 
 /** Exact elapsed-hour thresholds; closed projects no longer need action reminders. */
-export function projectUrgency(project: DeadlineProject, now: number = Date.now()): ProjectUrgency {
+export function projectUrgency(project: DeadlineProject, now: number = Date.now(), rules: DeadlineRules = DEFAULT_DEADLINE_RULES): ProjectUrgency {
   if (project.outcome === 'won' || project.outcome === 'lost') return 'none';
   const deadline = Date.parse(project.deadline || '');
   if (!Number.isFinite(deadline) || !Number.isFinite(now)) return 'none';
   const remaining = deadline - now;
   if (remaining <= 0) return 'overdue';
-  if (remaining < 48 * HOUR) return 'urgent';
-  if (remaining < 120 * HOUR) return 'upcoming';
+  if (remaining < rules.urgentDays * 24 * HOUR) return 'urgent';
+  if (remaining < rules.warningDays * 24 * HOUR) return 'upcoming';
   return 'none';
 }
 
@@ -20,14 +22,14 @@ export function normalizedCardColor(value?: string): string | undefined {
 }
 
 /** Custom color wins visually; projectUrgency still supplies an independent text badge. */
-export function projectCardTone(project: DeadlineProject, now: number = Date.now()): ProjectCardTone {
+export function projectCardTone(project: DeadlineProject, now: number = Date.now(), rules: DeadlineRules = DEFAULT_DEADLINE_RULES): ProjectCardTone {
   if (normalizedCardColor(project.cardColor)) return 'custom';
-  const urgency = projectUrgency(project, now);
+  const urgency = projectUrgency(project, now, rules);
   return urgency === 'urgent' || urgency === 'overdue' ? 'red' : urgency === 'upcoming' ? 'orange' : 'default';
 }
 
-export function urgencyLabel(urgency: ProjectUrgency): string {
-  return ({ none: '', upcoming: '5天内截止', urgent: '2天内截止', overdue: '已逾期' })[urgency];
+export function urgencyLabel(urgency: ProjectUrgency, rules: DeadlineRules = DEFAULT_DEADLINE_RULES): string {
+  return ({ none: '', upcoming: `${rules.warningDays}天内截止`, urgent: `${rules.urgentDays}天内截止`, overdue: '已逾期' })[urgency];
 }
 
 /** datetime-local is explicitly presented as Beijing time, regardless of browser timezone. */

@@ -21,7 +21,7 @@ interface WorkflowCheckpoint {workflow:Workflow;role:Role;deal?:Deal;deals:Deal[
 type StoredState=WorkbenchState & {_access?:Record<string,string>;_workflowRuns?:Record<string,WorkflowCheckpoint>};
 export interface GenerationInput {query:string;agentId:AgentId;projectApprovals?:ProjectApprovalContext[];deal?:Deal;deals:Deal[];knowledge:Knowledge[];instruction?:string;previous?:string;history?:{query:string;answer:string}[];contractReviews?:{title:string;reviewedAt?:string;analysis:ContractAnalysis}[];purpose?:'chat'|'workflow';}
 export interface GenerationOutput {answer:string;mode:'demo'|'live';}
-export interface ActionContext {extractIntake?:(text:string)=>Promise<IntakeExtraction>;now?:string;generate?:(input:GenerationInput)=>Promise<GenerationOutput>;trainingGenerate?:(input:TrainingGenerationInput)=>Promise<GenerationOutput>;enrichCompany?:(deal:Deal)=>Promise<CompanyProfile>;trustedRecording?:FollowupRecording;reviewContract?:(document:ContractDocument,deal:Deal)=>Promise<ContractAnalysis>;contractModelName?:string;approveTalkTrack?:(track:TalkTrack)=>Promise<void>;retrieveTalkTracks?:(query:string)=>Promise<TalkTrack[]>;}
+export interface ActionContext {actorName?:string;extractIntake?:(text:string)=>Promise<IntakeExtraction>;now?:string;generate?:(input:GenerationInput)=>Promise<GenerationOutput>;trainingGenerate?:(input:TrainingGenerationInput)=>Promise<GenerationOutput>;enrichCompany?:(deal:Deal)=>Promise<CompanyProfile>;trustedRecording?:FollowupRecording;reviewContract?:(document:ContractDocument,deal:Deal)=>Promise<ContractAnalysis>;contractModelName?:string;approveTalkTrack?:(track:TalkTrack)=>Promise<void>;retrieveTalkTracks?:(query:string)=>Promise<TalkTrack[]>;}
 const agentIds=new Set(AGENTS.map(item=>item.id));
 const nodeTypes=new Set(['start','intent','knowledge','agent','review','output']);
 const managerActions=new Set(['skill_review','knowledge_add','workflow_save','workflow_publish','workflow_review']);
@@ -76,9 +76,9 @@ function projectChanges(payload:Record<string,unknown>,previous?:Deal):Partial<D
   if(Object.hasOwn(payload,'customerProfile'))changes.customerProfile=customerProfile(payload.customerProfile,previous?.customerProfile);
   return changes;
 }
-function assignedOwner(state:WorkbenchState,role:Role,requested:unknown):{ownerId:string;owner:string} {
-  if(role==='sales') {if(requested!==undefined)fail('销售只能创建自己负责的项目');return {ownerId:'sales-1',owner:'林晓'};}
-  if(requested===undefined||requested==='manager')return {ownerId:'manager',owner:'周予安'};
+function assignedOwner(state:WorkbenchState,role:Role,requested:unknown,actorName?:string):{ownerId:string;owner:string} {
+  if(role==='sales') {if(requested!==undefined)fail('销售只能创建自己负责的项目');return {ownerId:'sales-1',owner:actorName??'林晓'};}
+  if(requested===undefined||requested==='manager')return {ownerId:'manager',owner:actorName??'周予安'};
   const id=text(requested,'负责人',100);const existing=state.deals.find(deal=>deal.ownerId===id);
   if(!existing)fail('请选择已有的项目负责人');
   return {ownerId:existing.ownerId,owner:existing.owner};
@@ -484,7 +484,7 @@ async function trainingResponse(input:TrainingGenerationInput,context:ActionCont
 
 /** Returns an unfiltered canonical state; only projectState may be sent to a client. */
 export async function executeAction(original:WorkbenchState,role:Role,action:string,payload:Record<string,unknown>,context:ActionContext={}):Promise<ApiResult> {
-  const state=structuredClone(original) as StoredState;const now=context.now??new Date().toISOString();const actor=role==='sales'?'林晓':'周予安';
+  const state=structuredClone(original) as StoredState;const now=context.now??new Date().toISOString();const actor=context.actorName===undefined?(role==='sales'?'林晓':'周予安'):text(context.actorName,'操作者姓名',200);
   if(managerActions.has(action)&&role!=='manager')fail('此操作需要销售管理者体验视角',403);
   if(!payload||typeof payload!=='object'||Array.isArray(payload))fail('请求参数格式不正确');
   let run:Run|undefined;let session:TrainingSession|undefined;let dealId:string|undefined;let message='已保存';
@@ -505,18 +505,18 @@ export async function executeAction(original:WorkbenchState,role:Role,action:str
     if(matches.length&&payload.forceNew!==true)return {state,intake:{status:'duplicate',question:'已有相似项目，要记为跟进，还是另建项目？',draft:extracted,existing:matches.slice(0,5).map(d=>({id:d.id,name:d.name,projectName:d.projectName||d.name}))},message:'找到已有项目，请选择录入方式'};
     const fields={...extracted.fields};delete fields.stage;
     if(fields.website){try{fields.website=publicUrl(/^https?:\/\//i.test(fields.website)?fields.website:`https://${fields.website}`);}catch{delete fields.website;}}
-    const owner=assignedOwner(state,role,undefined);
+    const owner=assignedOwner(state,role,undefined,actor);
     const deal:Deal={id:uid('deal'),name,projectName,contact:'',position:'',industry:'',...owner,stage:'线索',amount:0,health:0,priority:'medium',lastContact:now.slice(0,10),nextAction:'',summary:'',needs:[],risks:[],notes:[{id:uid('note'),text:rawText,author:actor,date:now}],version:1,avatar:Array.from(name)[0],createdAt:now,dataOrigin:'manual',...projectChanges(fields),intake:{requestId,rawText,inputMode:payload.inputMode,capturedAt:now}};
     state.deals.unshift(deal);state.revision++;activity(state,role,'客户已智能录入',`${projectName} · 已保留沟通原话`,'deal',now);return {state,dealId:deal.id,message:'客户已录入，正在更新洞察与预测'};
   }
   const contractStarted=Date.now();
-  const contractResult=await handleContractAction(state,role,action,payload,{now,review:context.reviewContract,modelName:context.contractModelName});
+  const contractResult=await handleContractAction(state,role,action,payload,{now,actorName:actor,review:context.reviewContract,modelName:context.contractModelName});
   if(contractResult){
     const document=contractResult.reviewed;
     if(document?.analysis){const a=document.analysis;const high=a.findings.filter(f=>f.level==='high').length;run={id:uid('run'),query:`合同初审：${document.title}`,answer:[`## ${document.title} · 合同初审`,a.summary,`审查范围：${a.coverage.characters}字，${a.coverage.clauses}个原文片段，${a.coverage.chunks}批。`,...a.findings.map((f,i)=>`### ${i+1}. ${f.title}（${{high:'高',medium:'中',low:'低'}[f.level]}风险）\n\n原文：${f.quote}\n\n风险原因：${f.reason}\n\n修改意见：${f.suggestion}\n\n建议文本：${f.replacement}`),...(a.missingItems.length?['### 待补充事项',...a.missingItems.map(m=>`- ${m.title}：${m.reason}；${m.suggestion}`)]:[]),...a.warnings].join('\n\n'),agentIds:['risk'],mode:'live',createdAt:now,dealId:document.dealId,status:'completed',duration:Date.now()-contractStarted,steps:[{id:uid('step'),title:'读取合同原文',detail:`已保存的项目合同 · v${document.version-1} · ${a.coverage.characters}字`,status:'success',agent:'risk',duration:0},{id:uid('step'),title:'商务风控 Agent 初审',detail:`完整提交${a.coverage.clauses}个片段、${a.coverage.chunks}批，发现${high}项高风险条款；原文锚点经服务端核验。`,status:'success',agent:'risk',duration:0}],citations:a.findings.map(f=>({id:`${document.id}-${f.id}`,title:f.title,excerpt:f.quote}))};state.runs.unshift(run);mark(state,run.id,role);}
     trimRunHistory(state);state.revision++;activity(state,role,'合同初审与处理',contractResult.message,'contract',now);return {state,contractId:contractResult.id,message:contractResult.message,...(run?{run}:{})};
   }
-  const talkMessage=await handleTalkAction(state,role,action,payload,now,context.approveTalkTrack);
+  const talkMessage=await handleTalkAction(state,role,action,payload,now,context.approveTalkTrack,actor);
   if(talkMessage){state.revision++;activity(state,role,'实战话术与项目信息已更新',talkMessage,'talktrack',now);return {state,message:talkMessage};}
   switch(action) {
     case 'deal_intake_followup': {
@@ -531,7 +531,7 @@ export async function executeAction(original:WorkbenchState,role:Role,action:str
     case 'deal_create': {
       onlyFields(payload,new Set([...projectFields,'ownerId']));
       const name=text(payload.name,'企业名称',200);const projectName=text(payload.projectName,'项目名称',200);
-      const owner=assignedOwner(state,role,payload.ownerId);
+      const owner=assignedOwner(state,role,payload.ownerId,actor);
       const deal:Deal={id:uid('deal'),name,projectName,contact:'',position:'',industry:'',...owner,stage:'线索',amount:0,health:0,priority:'medium',lastContact:'',nextAction:'',summary:'',needs:[],risks:[],notes:[],version:1,avatar:Array.from(name)[0],createdAt:now,dataOrigin:'manual',...projectChanges(payload)};
       state.deals.unshift(deal);dealId=deal.id;
       activity(state,role,'项目已创建',`${projectName} · ${name}`,'deal',now);message='项目已创建';break;
@@ -582,7 +582,7 @@ export async function executeAction(original:WorkbenchState,role:Role,action:str
     }
     case 'knowledge_add': {
       const item:Knowledge={id:uid('knowledge'),title:text(payload.title,'资料标题',200),content:text(payload.content,'资料内容',50000),category:optional(payload.category,80)||'导入资料',source:`${actor}手动导入`,status:'published',updatedAt:now};
-      state.knowledge.unshift(item);activity(state,role,'知识资料已导入',item.title,'knowledge',now);break;
+      state.knowledge.unshift(item);activity(state,role,'知识资料已导入',`${item.title} · ${actor}`,'knowledge',now);break;
     }
     case 'workflow_save': {
       const workflow=sanitizeWorkflow(payload.workflow,now);const previous=state.workflows.find(item=>item.id===workflow.id);

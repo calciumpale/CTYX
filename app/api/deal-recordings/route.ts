@@ -4,6 +4,7 @@ import { DomainError, projectState } from '../../lib/domain.ts';
 import { authorizedRecording, parseAudioRange, parseRecordingForm, recordingObjectKey, saveRecordingNote } from '../../lib/followup-recordings.ts';
 import { loadWorkspace, readRole, requireUserId, saveWorkspace, refreshSalesProject } from '../../lib/server.ts';
 import { createSpeechTranscriptionService } from '../../lib/speech-transcription.ts';
+import {readMemberDisplayName} from '../../lib/member-policy.ts';
 
 export const dynamic='force-dynamic';
 const responseHeaders={'Cache-Control':'private, no-store','Vary':'Cookie, oai-authenticated-user-id','X-Content-Type-Options':'nosniff'};
@@ -24,7 +25,7 @@ export async function POST(request:Request):Promise<Response> {
     if((origin&&origin!==siteOrigin)||request.headers.get('sec-fetch-site')==='cross-site')throw new DomainError('只允许从当前站点上传录音',403);
     const storage=bucket();const input=await parseRecordingForm(request);const role=readRole(request);
     let before:Awaited<ReturnType<typeof loadWorkspace>>;
-    const result=await saveRecordingNote(userId,role,input,{bucket:storage,load:async()=>{before=await loadWorkspace(userId,siteOrigin);return before;},save:(revision,state)=>saveWorkspace(userId,revision,state,salesMutationEvents(before,state,'deal_note',{dealId:input.dealId},new Date().toISOString()))});
+    const result=await saveRecordingNote(userId,role,input,{actorName:readMemberDisplayName(request),bucket:storage,load:async()=>{before=await loadWorkspace(userId,siteOrigin);return before;},save:(revision,state)=>saveWorkspace(userId,revision,state,salesMutationEvents(before,state,'deal_note',{dealId:input.dealId},new Date().toISOString()))});
     const existing=new Set(before!.deals.find(deal=>deal.id===input.dealId)?.notes.map(note=>note.id));
     const recording=result.state.deals.find(deal=>deal.id===input.dealId)?.notes.find(note=>!existing.has(note.id)&&note.recording)?.recording;
     let transcription:Awaited<ReturnType<ReturnType<typeof createSpeechTranscriptionService>['start']>>|undefined;

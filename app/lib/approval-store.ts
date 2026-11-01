@@ -7,7 +7,7 @@ export interface ApprovalRecord {
   currentApproverEmail:string|null;activeKey:string|null;inputHash:string;
   createdAt:string;updatedAt:string;request:ApprovalRequest;
 }
-export interface ApprovalStoreIdentity {id:string;email:string;}
+export interface ApprovalStoreIdentity {id:string;email:string;workspaceId?:string;memberRole?:'sales'|'manager'|'admin';}
 export interface ApprovalListOptions {scope?:'inbox'|'mine'|'all';status?:string;projectId?:string;q?:string;limit?:number;cursor?:string;}
 export type ApprovalStoredTemplate=ApprovalTemplate;
 interface Row {id:string;owner_id:string;project_id:string;kind:string;status:string;version:number;current_approver_email:string|null;active_key:string|null;created_at:string;updated_at:string;data_json:string;}
@@ -24,6 +24,14 @@ function cursor(value:string|undefined):{createdAt:string;id:string}|undefined {
 const encodeCursor=(record:ApprovalRecord)=>btoa(JSON.stringify({createdAt:record.createdAt,id:record.id}));
 function scoped(actor:ApprovalStoreIdentity,scope:string):{sql:string;values:(string|number)[]} {
   const binding="NOT EXISTS (SELECT 1 FROM json_each(r.data_json,'$.request.steps') bound_step WHERE json_extract(bound_step.value,'$.decidedBy.email') = ? AND json_extract(bound_step.value,'$.decidedBy.id') <> ?)";
+  if(actor.workspaceId){
+    if(actor.memberRole==='admin')return {sql:'1 = 0',values:[]};
+    const own="json_extract(r.data_json,'$.request.applicant.id') = ?";
+    if(scope==='mine')return {sql:`r.owner_id = ? AND ${own}`,values:[actor.workspaceId,actor.id]};
+    if(scope==='inbox')return {sql:`r.owner_id = ? AND r.current_approver_email = ? AND r.status = 'pending' AND json_extract(r.data_json,'$.request.applicant.id') <> ? AND json_extract(r.data_json,'$.request.applicant.email') <> ? AND ${binding}`,values:[actor.workspaceId,actor.email,actor.id,actor.email,actor.email,actor.id]};
+    if(actor.memberRole==='manager')return {sql:'r.owner_id = ?',values:[actor.workspaceId]};
+    return {sql:`r.owner_id = ? AND (${own} OR (EXISTS (SELECT 1 FROM workbench_approval_participants p WHERE p.request_id = r.id AND p.email = ?) AND ${binding}))`,values:[actor.workspaceId,actor.id,actor.email,actor.email,actor.id]};
+  }
   if(scope==='mine')return {sql:'r.owner_id = ?',values:[actor.id]};
   if(scope==='inbox')return {sql:`r.current_approver_email = ? AND r.status = 'pending' AND r.owner_id <> ? AND json_extract(r.data_json,'$.request.applicant.email') <> ? AND ${binding}`,values:[actor.email,actor.id,actor.email,actor.email,actor.id]};
   return {sql:`(r.owner_id = ? OR (EXISTS (SELECT 1 FROM workbench_approval_participants p WHERE p.request_id = r.id AND p.email = ?) AND ${binding}))`,values:[actor.id,actor.email,actor.email,actor.id]};

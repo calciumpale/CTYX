@@ -10,6 +10,7 @@ export interface RecordingObjectStore {
   delete(key:string):Promise<void>;
 }
 export interface RecordingPersistence {
+  actorName?:string;
   load:()=>Promise<WorkbenchState>;
   save:(revision:number,state:WorkbenchState)=>Promise<void>;
   bucket:RecordingObjectStore;
@@ -105,7 +106,7 @@ export async function saveRecordingNote(userId:string,role:Role,input:RecordingF
   const audio=await validateRecording(input.audio);
   const recording:FollowupRecording={id:`recording-${crypto.randomUUID()}`,name:audio.name,size:audio.bytes.length,mimeType:audio.mimeType};
   // The domain checks role visibility and text before any object can be written.
-  const result=await executeAction(state,role,'deal_note',{dealId:input.dealId,text:input.text},{trustedRecording:recording});
+  const result=await executeAction(state,role,'deal_note',{dealId:input.dealId,text:input.text},{trustedRecording:recording,actorName:deps.actorName});
   const key=await recordingObjectKey(userId,recording.id);
   const uploaded=await deps.bucket.put(key,audio.bytes,{onlyIf:{etagDoesNotMatch:'*'},httpMetadata:{contentType:audio.mimeType}});
   if(!uploaded)throw new DomainError('录音暂时无法保存，请重新上传',503);

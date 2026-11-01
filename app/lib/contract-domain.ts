@@ -3,7 +3,7 @@ import {CONTRACT_TYPES} from './contract-types.ts';
 import type {ContractAnalysis,ContractDocument,ContractFindingStatus} from './contract-types.ts';
 import type {Deal,Role,WorkbenchState} from './types.ts';
 import {validateContractAnalysis,ContractReviewError} from './contract-review.ts';
-export interface ContractActionContext{now:string;review?:(document:ContractDocument,deal:Deal)=>Promise<ContractAnalysis>;modelName?:string;}
+export interface ContractActionContext{now:string;actorName?:string;review?:(document:ContractDocument,deal:Deal)=>Promise<ContractAnalysis>;modelName?:string;}
 function fail(message:string,status=400):never{throw new DomainError(message,status);}
 function value(v:unknown,label:string,max:number,required=true):string{if(typeof v!=='string'||v.length>max||/[\u0000\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(v)||required&&!v.trim())fail(`请检查${label}（最多${max.toLocaleString()}字）`);return v;}
 function allowed(payload:Record<string,unknown>,keys:string[]){if(Object.keys(payload).some(k=>!keys.includes(k)))fail('合同参数包含不允许修改的字段');}
@@ -20,7 +20,7 @@ export async function handleContractAction(state:WorkbenchState,role:Role,action
     if(!previous&&contracts.length>=40)fail('当前工作空间最多保存40份合同，请联系管理员扩容',413);
     const fileName=payload.fileName===undefined?'':value(payload.fileName,'文件名',200,false).trim();if(/[\\/]/.test(fileName))fail('文件名格式不正确');
     const importWarnings=payload.importWarnings===undefined?[]:payload.importWarnings;if(!Array.isArray(importWarnings)||importWarnings.length>10)fail('导入提示格式不正确');const warnings=importWarnings.map(w=>value(w,'导入提示',500));
-    const document:ContractDocument={id:previous?.id??`contract-${crypto.randomUUID()}`,dealId:project.id,title,text,contractType:payload.contractType as ContractDocument['contractType'],ourParty:payload.ourParty as ContractDocument['ourParty'],focus,sourceFormat:payload.sourceFormat as ContractDocument['sourceFormat'],...(fileName?{fileName}:{}),importWarnings:warnings,createdBy:previous?.createdBy??(role==='sales'?'林晓':'周予安'),createdAt:previous?.createdAt??now,updatedAt:now,version:(previous?.version??0)+1};
+    const document:ContractDocument={id:previous?.id??`contract-${crypto.randomUUID()}`,dealId:project.id,title,text,contractType:payload.contractType as ContractDocument['contractType'],ourParty:payload.ourParty as ContractDocument['ourParty'],focus,sourceFormat:payload.sourceFormat as ContractDocument['sourceFormat'],...(fileName?{fileName}:{}),importWarnings:warnings,createdBy:previous?.createdBy??context.actorName??(role==='sales'?'林晓':'周予安'),createdAt:previous?.createdAt??now,updatedAt:now,version:(previous?.version??0)+1};
     const changed=!previous||['dealId','title','text','contractType','ourParty','focus'].some(k=>document[k as keyof ContractDocument]!==previous[k as keyof ContractDocument]);
     if(previous&&!changed){document.analysis=previous.analysis;document.reviewedAt=previous.reviewedAt;document.modelName=previous.modelName;}
     if(previous)contracts[contracts.findIndex(d=>d.id===previous.id)]=document;else contracts.unshift(document);

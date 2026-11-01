@@ -25,6 +25,10 @@ async function body(request:Request):Promise<Record<string,unknown>> {
 export async function GET(request:Request):Promise<Response>{
   try{
     const actor=readApprovalIdentity(request);assertApprovalOrigin(request);const params=new URL(request.url).searchParams,id=params.get('id');
+    if(params.get('scope')==='templates'){
+      if([...params.keys()].some(key=>key!=='scope'))throw new DomainError('审批流程查询参数无效');
+      return Response.json(await service().templates(actor),{headers});
+    }
     if(id)return Response.json(await service().detail(actor,id),{headers});
     const options:ApprovalListOptions={};for(const field of ['projectId','q','status','cursor'] as const){const value=params.get(field);if(value)options[field]=value;}
     const scope=params.get('scope');if(scope){if(!['inbox','mine','all'].includes(scope))throw new DomainError('审批列表范围无效');options.scope=scope as ApprovalListOptions['scope'];}

@@ -30,6 +30,19 @@ test('custom colors override automatic card tints without removing independent u
   assert.equal(projectCardTone({}, now), 'default');
 });
 
+test('saved business thresholds drive urgency, card tone, and badge copy together', () => {
+  const rules={urgentDays:4,warningDays:10};
+  const project={deadline:hoursFromNow(80)};
+  assert.equal(projectUrgency(project,now),'upcoming');
+  assert.equal(projectUrgency(project,now,rules),'urgent');
+  assert.equal(projectCardTone(project,now,rules),'red');
+  assert.equal(projectUrgency({deadline:hoursFromNow(96)},now,rules),'upcoming');
+  assert.equal(projectUrgency({deadline:hoursFromNow(240)},now,rules),'none');
+  assert.equal(urgencyLabel('urgent',rules),'4天内截止');
+  assert.equal(urgencyLabel('upcoming',rules),'10天内截止');
+  assert.equal(projectCardTone({...project,cardColor:'#669977'},now,rules),'custom');
+});
+
 test('converts displayed Beijing datetime input to an explicit UTC timestamp and back', () => {
   assert.equal(deadlineFromInput('2026-10-24T10:00'), '2026-10-24T02:00:00.000Z');
   assert.equal(deadlineInputValue('2026-10-23T16:00:00Z'), '2026-10-24T00:00');

@@ -48,6 +48,7 @@ export function trustedMemberHeaders(original:Headers,member:MemberSession):Head
 export function memberRouteAccess(request:Request):'session'|'service'|'manager'|'operator'|'member'{
   const path=new URL(request.url).pathname.replace(/\/$/,'');
   if(path==='/api/workspace-session')return 'session';
+  if(['/api/meeting-bridge/setup','/api/meeting-bridge/poll','/api/meeting-bridge/heartbeat','/api/meeting-bridge/complete','/api/meeting-bridge/media'].includes(path)&&request.method==='POST')return 'service';
   if(path==='/api/sales-reports/maintenance'||path==='/api/talktracks/maintenance'){
     if(!request.headers.get('oai-authenticated-user-id')&&!request.headers.get('oai-authenticated-user-email'))return 'service';
     return path==='/api/sales-reports/maintenance'?'manager':'operator';

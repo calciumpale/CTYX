@@ -81,3 +81,14 @@ export const workbenchMemberLoginLimits=sqliteTable('workbench_member_login_limi
 export const workbenchBusinessSettings=sqliteTable('workbench_business_settings',{
   userId:text('user_id').primaryKey(),version:integer('version').notNull(),updatedAt:text('updated_at').notNull(),dataJson:text('data_json').notNull(),
 });
+
+/** Each meeting device is pinned to one enabled business member, never a browser-selected tenant. */
+export const workbenchMeetingDevices=sqliteTable('workbench_meeting_devices',{
+ id:text('id').primaryKey(),ownerId:text('owner_id').notNull(),memberId:text('member_id').notNull(),label:text('label').notNull(),tokenHash:text('token_hash').notNull(),enabled:integer('enabled').notNull().default(1),authorized:integer('authorized').notNull().default(0),lastSeenAt:text('last_seen_at'),createdAt:text('created_at').notNull(),
+},table=>[uniqueIndex('workbench_meeting_device_token').on(table.tokenHash),index('workbench_meeting_device_member').on(table.ownerId,table.memberId,table.enabled)]);
+export const workbenchMeetingJobs=sqliteTable('workbench_meeting_jobs',{
+ id:text('id').primaryKey(),ownerId:text('owner_id').notNull(),memberId:text('member_id').notNull(),deviceId:text('device_id').notNull(),kind:text('kind').notNull(),dealId:text('deal_id'),status:text('status').notNull(),inputJson:text('input_json').notNull(),resultJson:text('result_json'),error:text('error'),activeKey:text('active_key'),leaseHash:text('lease_hash'),leaseUntil:text('lease_until'),attempts:integer('attempts').notNull().default(0),createdAt:text('created_at').notNull(),updatedAt:text('updated_at').notNull(),mediaJson:text('media_json'),
+},table=>[uniqueIndex('workbench_meeting_job_active').on(table.activeKey),index('workbench_meeting_job_queue').on(table.deviceId,table.status,table.createdAt),index('workbench_meeting_job_member').on(table.ownerId,table.memberId,table.createdAt)]);
+export const workbenchMeetingImports=sqliteTable('workbench_meeting_imports',{
+ id:text('id').primaryKey(),ownerId:text('owner_id').notNull(),memberId:text('member_id').notNull(),dealId:text('deal_id').notNull(),sourceKey:text('source_key').notNull(),sourceHash:text('source_hash').notNull(),dataJson:text('data_json').notNull(),linked:integer('linked').notNull().default(0),createdAt:text('created_at').notNull(),
+},table=>[uniqueIndex('workbench_meeting_import_source').on(table.ownerId,table.dealId,table.sourceKey,table.sourceHash),index('workbench_meeting_import_project').on(table.ownerId,table.dealId,table.createdAt)]);

@@ -1,6 +1,6 @@
 'use client';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowDown, ArrowRight, Bell, BookOpen, BriefcaseBusiness, Check, CheckCheck, ChevronDown, ChevronRight, CircleAlert, ClipboardCheck, Clock3, ExternalLink, GitBranch, Home, Loader2, LogOut, Menu, MessageSquare, Moon, PanelLeftClose, Search, Settings, ShieldCheck, Sun, Users, Workflow, X } from 'lucide-react';
+import { ArrowDown, ArrowRight, Bell, BookOpen, BriefcaseBusiness, Check, CheckCheck, ChevronDown, ChevronRight, CircleAlert, ClipboardCheck, Clock3, ExternalLink, GitBranch, Home, Loader2, LogOut, Menu, MessageSquare, Moon, PanelLeftClose, Search, Settings, ShieldCheck, Sun, Users, Video, Workflow, X } from 'lucide-react';
 import { useWorkbench } from '../lib/api';
 import { useChatScroll } from '../lib/use-chat-scroll';
 import { AGENTS, type AgentId, type Run, type View } from '../lib/types';
@@ -16,14 +16,15 @@ import './answer-content.css';
 import { RoleDashboard } from './RoleDashboard';
 import { AdminHome, BusinessRulesView, KnowledgeWorkspace, MEMBER_LABELS, MembersView } from './AdminWorkspace';
 import type { MemberRole, MemberSession } from '../lib/member-types';
+import { MeetingImportWorkspace } from './MeetingImportWorkspace';
 
 type NavigationItem={id:View;label:string;icon:typeof Home};
 const roleNavigation:Record<MemberRole,NavigationItem[]>={
-  sales:[{id:'home',label:'今日工作',icon:Home},{id:'deals',label:'我的项目',icon:BriefcaseBusiness},{id:'knowledge',label:'话术资料',icon:BookOpen},{id:'training',label:'培训带练',icon:MessageSquare}],
-  manager:[{id:'home',label:'团队总览',icon:Home},{id:'deals',label:'团队项目',icon:BriefcaseBusiness},{id:'approvals',label:'待我处理',icon:ClipboardCheck},{id:'knowledge',label:'话术知识',icon:BookOpen},{id:'training',label:'团队训练',icon:MessageSquare}],
+  sales:[{id:'home',label:'今日工作',icon:Home},{id:'deals',label:'我的项目',icon:BriefcaseBusiness},{id:'meetings',label:'会议导入',icon:Video},{id:'knowledge',label:'话术资料',icon:BookOpen},{id:'training',label:'培训带练',icon:MessageSquare}],
+  manager:[{id:'home',label:'团队总览',icon:Home},{id:'deals',label:'团队项目',icon:BriefcaseBusiness},{id:'meetings',label:'会议导入',icon:Video},{id:'approvals',label:'待我处理',icon:ClipboardCheck},{id:'knowledge',label:'话术知识',icon:BookOpen},{id:'training',label:'团队训练',icon:MessageSquare}],
   admin:[{id:'members',label:'人员权限',icon:Users},{id:'rules',label:'业务规则',icon:ShieldCheck},{id:'knowledge',label:'知识库',icon:BookOpen},{id:'settings',label:'服务连接',icon:Settings},{id:'studio',label:'搭建中心',icon:Workflow},{id:'runs',label:'系统运行',icon:Clock3}],
 };
-const permitted:Record<MemberRole,View[]>={sales:['home','deals','knowledge','talktracks','contracts','approvals','training','runs','studio'],manager:['home','deals','knowledge','talktracks','contracts','approvals','training','runs','reports','studio'],admin:['home','knowledge','talktracks','members','rules','settings','studio','runs']};
+const permitted:Record<MemberRole,View[]>={sales:['home','deals','meetings','knowledge','talktracks','contracts','approvals','training','runs','studio'],manager:['home','deals','meetings','knowledge','talktracks','contracts','approvals','training','runs','reports','studio'],admin:['home','knowledge','talktracks','members','rules','settings','studio','runs','meetings']};
 
 export default function Workbench({member,onLogout}:{member:MemberSession;onLogout:()=>Promise<void>}) {
   const navigation=roleNavigation[member.role];
@@ -34,6 +35,7 @@ export default function Workbench({member,onLogout}:{member:MemberSession;onLogo
     return()=>window.removeEventListener('speech-transcription-completed',refreshSpeech);
   },[reload]);
   const [view, setView] = useState<View>('home');
+  const [meetingEmbed, setMeetingEmbed] = useState(false);
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
   const [mobileMenu, setMobileMenu] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -103,6 +105,7 @@ export default function Workbench({member,onLogout}:{member:MemberSession;onLogo
   }, []);
   useEffect(() => {
     const params=new URLSearchParams(window.location.search);
+    if(params.get('view')==='meetings'){const id=params.get('deal');requestAnimationFrame(()=>{setView('meetings');setMeetingEmbed(params.get('embed')==='tencent');setFocusedDeal(id&&/^[a-zA-Z0-9-]{1,100}$/.test(id)?id:null);});}
     if(member.role==='manager'&&params.get('view')==='reports')requestAnimationFrame(()=>setView('reports'));
     if(member.role!=='admin'&&params.get('view')==='approvals'){const id=params.get('approval');requestAnimationFrame(()=>{setView('approvals');setFocusedApprovalId(id&&/^[a-zA-Z0-9-]{1,100}$/.test(id)?id:null);});}
   }, [member.role]);
@@ -165,6 +168,7 @@ export default function Workbench({member,onLogout}:{member:MemberSession;onLogo
   const noticeCount = (state.role === 'manager' ? candidates.length : 0) + Math.min(3, state.activities.length);
   const props = { state, mutate, notify, onAsk };
   const title = navigation.find(n => n.id === view)?.label || ({home:'管理工作空间',contracts:'合同初审',approvals:'审批记录',talktracks:'成单话术',reports:'销售日报',runs:'任务记录',studio:'团队应用'} as Partial<Record<View,string>>)[view] || '工作空间';
+  if(meetingEmbed)return <div className="meeting-embed-shell"><header className="meeting-embed-header"><span className="meeting-embed-brand"><BrandMark small/>CTAI</span><a href="/?view=meetings" target="_blank" rel="noopener noreferrer">完整工作台 <ExternalLink size={13}/></a><button className="icon-button" disabled={accountBusy} onClick={requestLogout} aria-label={`退出${member.displayName}的账号`} title={`当前账号：${member.displayName}`}>{accountBusy?<Loader2 size={16} className="spin"/>:<LogOut size={16}/>}</button></header>{toast&&<p className="meeting-message" role="status">{toast}</p>}<MeetingImportWorkspace state={state} onWorkspaceRefresh={reload} initialDealId={focusedDeal} admin={member.role==='admin'} compact/></div>;
   return <div className="app-shell">
     {mobileMenu && <button className="sidebar-backdrop" onClick={() => setMobileMenu(false)} aria-label="关闭导航" />}
     <aside className={'sidebar '+(mobileMenu?'mobile-open':'')} aria-label="主导航">
@@ -179,6 +183,7 @@ export default function Workbench({member,onLogout}:{member:MemberSession;onLogo
       <main className="main-content" key={view}>
         {view==='home'&&(member.role==='admin'?<AdminHome state={state} onNavigate={navigate}/>:<RoleDashboard {...props} member={member} onNavigate={navigate} onRecordCustomer={()=>navigate('deals',undefined,undefined,undefined,'create')} onRecordFollowup={()=>navigate('deals',undefined,undefined,undefined,'followup')} pendingApprovals={approvalPendingCount}/>)}
         {view==='reports'&&member.role==='manager'&&<SalesDailyReport state={state} notify={notify} onNavigate={navigate}/>}
+        {view==='meetings'&&<MeetingImportWorkspace state={state} onWorkspaceRefresh={reload} initialDealId={focusedDeal} admin={member.role==='admin'} onOpenProjects={()=>navigate('deals')}/>}
         {view==='deals'&&member.role!=='admin'&&<ProjectsView member={member} key={(focusedDeal||'all')+':'+(projectIntent||'')} {...props} uploadFollowup={saveRecordingFollowup} onReload={reload} onBusyChange={onProjectBusy} onDirtyChange={onProjectDirty} onNavigate={navigate} onApproval={(projectId,requestId)=>navigate('approvals',projectId,undefined,requestId)} initialDealId={focusedDeal} initialIntent={projectIntent} onDealClosed={()=>{setFocusedDeal(null);setProjectIntent(null);}}/>}
         {view==='contracts'&&member.role!=='admin'&&<ContractReviewView key={focusedDeal||'all'} {...props} initialDealId={focusedDeal} onNavigate={navigate} onBusyChange={onContractBusy} onDirtyChange={onContractDirty} onApproval={(contractId,dealId)=>navigate('approvals',dealId,contractId)}/>}
         {view==='training'&&member.role!=='admin'&&<TrainingView {...props} onPendingChange={onTrainingPendingChange} onMediaStopReady={onTrainingMediaReady}/>}
@@ -186,12 +191,12 @@ export default function Workbench({member,onLogout}:{member:MemberSession;onLogo
         {(view==='knowledge'||view==='talktracks')&&<KnowledgeWorkspace key={view+':'+(focusedDeal||'')} focus={focusedDeal} {...props} member={member} initialTab={view==='talktracks'?'talktracks':'documents'} onUsePlaybook={id=>{if(member.role==='admin')return;setSelectedTalkIds([id]);setConversation([]);setFailedRequest(null);setChatError('');setChatOpen(true);}}/>}
         {view==='studio'&&<BuilderStudio {...props} readOnly={member.role!=='admin'} onGuardReady={onStudioGuardReady}/>}
         {view==='runs'&&<RunsView {...props} canExtract={member.role!=='admin'}/>}
-        {view==='settings'&&member.role==='admin'&&<SettingsView {...props} onConnectionChanged={reload}/>}
+        {view==='settings'&&member.role==='admin'&&<><SettingsView {...props} onConnectionChanged={reload}/><section className="meeting-settings-status"><MeetingImportWorkspace state={state} onWorkspaceRefresh={reload} admin/></section></>}
         {view==='members'&&member.role==='admin'&&<MembersView member={member} notify={notify} onBusyChange={onProjectBusy} onDirtyChange={onProjectDirty}/>}
         {view==='rules'&&member.role==='admin'&&<BusinessRulesView state={state} notify={notify} onBusyChange={onApprovalBusy} onDirtyChange={onApprovalDirty}/>}
       </main>
     </div>
-    {member.role!=='admin'&&<nav className="mobile-role-navigation" aria-label="快捷导航">{navigation.map(item=>{const Icon=item.icon;return <button key={item.id} aria-current={view===item.id?'page':undefined} onClick={()=>navigate(item.id)}><Icon size={20}/><span>{item.label}</span></button>;})}</nav>}
+    {member.role!=='admin'&&<nav className="mobile-role-navigation" aria-label="快捷导航">{navigation.filter(item=>item.id!=='meetings').map(item=>{const Icon=item.icon;return <button key={item.id} aria-current={view===item.id?'page':undefined} onClick={()=>navigate(item.id)}><Icon size={20}/><span>{item.label}</span></button>;})}</nav>}
     {leaveProject&&<Overlay className="confirmation-dialog" title="有尚未保存的内容" onClose={()=>{setLeaveProject(false);pendingProjectLeave.current=null;}}><p>离开会丢弃本次尚未保存的修改或录入。</p><div className="contract-leave-actions"><button data-dialog-initial-focus="true" className="button secondary" onClick={()=>{setLeaveProject(false);pendingProjectLeave.current=null;}}>继续编辑</button><button className="button primary" onClick={()=>{projectDirty.current=false;setLeaveProject(false);const proceed=pendingProjectLeave.current;pendingProjectLeave.current=null;proceed?.();}}>放弃并离开</button></div></Overlay>}
     {leaveApproval&&<Overlay className="confirmation-dialog" title="审批内容尚未提交" onClose={()=>{setLeaveApproval(false);pendingApprovalLeave.current=null;}}><p>离开会丢弃尚未提交的申请或流程修改。</p><div className="contract-leave-actions"><button data-dialog-initial-focus="true" className="button secondary" onClick={()=>{setLeaveApproval(false);pendingApprovalLeave.current=null;}}>继续编辑</button><button className="button primary" onClick={()=>{approvalDirty.current=false;setLeaveApproval(false);const proceed=pendingApprovalLeave.current;pendingApprovalLeave.current=null;proceed?.();}}>放弃更改并离开</button></div></Overlay>}
     {leaveContract&&<Overlay className="confirmation-dialog" title="合同草稿尚未保存" onClose={()=>{setLeaveContract(false);pendingContractLeave.current=null;}}><p>离开会丢弃尚未保存的合同更改。</p><div className="contract-leave-actions"><button data-dialog-initial-focus="true" className="button secondary" onClick={()=>{setLeaveContract(false);pendingContractLeave.current=null;}}>继续编辑</button><button className="button primary" onClick={()=>{contractDirty.current=false;setLeaveContract(false);const proceed=pendingContractLeave.current;pendingContractLeave.current=null;proceed?.();}}>放弃更改并离开</button></div></Overlay>}

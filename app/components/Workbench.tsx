@@ -17,14 +17,15 @@ import { RoleDashboard } from './RoleDashboard';
 import { AdminHome, BusinessRulesView, KnowledgeWorkspace, MEMBER_LABELS, MembersView } from './AdminWorkspace';
 import type { MemberRole, MemberSession } from '../lib/member-types';
 import { MeetingImportWorkspace } from './MeetingImportWorkspace';
+import { ProspectingWorkspace } from './ProspectingWorkspace';
 
 type NavigationItem={id:View;label:string;icon:typeof Home};
 const roleNavigation:Record<MemberRole,NavigationItem[]>={
-  sales:[{id:'home',label:'今日工作',icon:Home},{id:'deals',label:'我的项目',icon:BriefcaseBusiness},{id:'meetings',label:'会议导入',icon:Video},{id:'knowledge',label:'话术资料',icon:BookOpen},{id:'training',label:'培训带练',icon:MessageSquare}],
-  manager:[{id:'home',label:'团队总览',icon:Home},{id:'deals',label:'团队项目',icon:BriefcaseBusiness},{id:'meetings',label:'会议导入',icon:Video},{id:'approvals',label:'待我处理',icon:ClipboardCheck},{id:'knowledge',label:'话术知识',icon:BookOpen},{id:'training',label:'团队训练',icon:MessageSquare}],
+  sales:[{id:'home',label:'今日工作',icon:Home},{id:'deals',label:'我的项目',icon:BriefcaseBusiness},{id:'meetings',label:'会议导入',icon:Video},{id:'prospecting',label:'抖音获客',icon:Search},{id:'knowledge',label:'话术资料',icon:BookOpen},{id:'training',label:'培训带练',icon:MessageSquare}],
+  manager:[{id:'home',label:'团队总览',icon:Home},{id:'deals',label:'团队项目',icon:BriefcaseBusiness},{id:'meetings',label:'会议导入',icon:Video},{id:'prospecting',label:'抖音获客',icon:Search},{id:'approvals',label:'待我处理',icon:ClipboardCheck},{id:'knowledge',label:'话术知识',icon:BookOpen},{id:'training',label:'团队训练',icon:MessageSquare}],
   admin:[{id:'members',label:'人员权限',icon:Users},{id:'rules',label:'业务规则',icon:ShieldCheck},{id:'knowledge',label:'知识库',icon:BookOpen},{id:'settings',label:'服务连接',icon:Settings},{id:'studio',label:'搭建中心',icon:Workflow},{id:'runs',label:'系统运行',icon:Clock3}],
 };
-const permitted:Record<MemberRole,View[]>={sales:['home','deals','meetings','knowledge','talktracks','contracts','approvals','training','runs','studio'],manager:['home','deals','meetings','knowledge','talktracks','contracts','approvals','training','runs','reports','studio'],admin:['home','knowledge','talktracks','members','rules','settings','studio','runs','meetings']};
+const permitted:Record<MemberRole,View[]>={sales:['home','deals','prospecting','meetings','knowledge','talktracks','contracts','approvals','training','runs','studio'],manager:['home','deals','prospecting','meetings','knowledge','talktracks','contracts','approvals','training','runs','reports','studio'],admin:['home','knowledge','talktracks','members','rules','settings','studio','runs','meetings']};
 
 export default function Workbench({member,onLogout}:{member:MemberSession;onLogout:()=>Promise<void>}) {
   const navigation=roleNavigation[member.role];
@@ -72,6 +73,8 @@ export default function Workbench({member,onLogout}:{member:MemberSession;onLogo
   const sending = useRef(false);
   const trainingPending=useRef(0);
   const studioGuard=useRef<((proceed:()=>void)=>boolean)|null>(null);
+  const prospectingGuard=useRef<((proceed:()=>void)=>boolean)|null>(null);
+  const onProspectingGuardReady=useCallback((guard:((proceed:()=>void)=>boolean)|null)=>{prospectingGuard.current=guard;},[]);
   const onStudioGuardReady=useCallback((guard:((proceed:()=>void)=>boolean)|null)=>{studioGuard.current=guard;},[]);
   const contractBusy=useRef(false);const contractDirty=useRef(false);const pendingContractLeave=useRef<(()=>void)|null>(null);const [leaveContract,setLeaveContract]=useState(false);
   const onContractBusy=useCallback((value:boolean)=>{contractBusy.current=value;},[]);
@@ -106,6 +109,7 @@ export default function Workbench({member,onLogout}:{member:MemberSession;onLogo
   useEffect(() => {
     const params=new URLSearchParams(window.location.search);
     if(params.get('view')==='meetings'){const id=params.get('deal');requestAnimationFrame(()=>{setView('meetings');setMeetingEmbed(params.get('embed')==='tencent');setFocusedDeal(id&&/^[a-zA-Z0-9-]{1,100}$/.test(id)?id:null);});}
+    if(member.role!=='admin'&&params.get('view')==='prospecting')requestAnimationFrame(()=>setView('prospecting'));
     if(member.role==='manager'&&params.get('view')==='reports')requestAnimationFrame(()=>setView('reports'));
     if(member.role!=='admin'&&params.get('view')==='approvals'){const id=params.get('approval');requestAnimationFrame(()=>{setView('approvals');setFocusedApprovalId(id&&/^[a-zA-Z0-9-]{1,100}$/.test(id)?id:null);});}
   }, [member.role]);
@@ -117,8 +121,8 @@ export default function Workbench({member,onLogout}:{member:MemberSession;onLogo
     if(contractBusy.current){notify('合同正在导入、保存或初审，请等待完成后离开。');return;}
     if(followupPending.current){notify('跟进录音正在保存，请等待完成后离开。');return;}
     if(trainingPending.current){notify('语音回应正在保存，请等待完成；失败时可在带练页直接重试。');return;}
-    const proceed=()=>{stopTrainingMedia.current?.();setView(next);setProjectIntent(intent||null);setFocusedDeal(id||null);setFocusedApprovalContract(contractId||null);setFocusedApprovalId(approvalId||null);if(next!=='approvals'){const url=new URL(window.location.href);url.searchParams.delete('view');url.searchParams.delete('approval');window.history.replaceState(null,'',url.href);}setMobileMenu(false);setSearchOpen(false);setNoticesOpen(false);window.scrollTo({top:0,left:0,behavior:'auto'});};
-    const guardedProceed=()=>{if(studioGuard.current&&!studioGuard.current(proceed)){setMobileMenu(false);setSearchOpen(false);setNoticesOpen(false);return;}proceed();};
+    const proceed=()=>{stopTrainingMedia.current?.();setView(next);setProjectIntent(intent||null);setFocusedDeal(id||null);setFocusedApprovalContract(contractId||null);setFocusedApprovalId(approvalId||null);if(next!=='approvals'){const url=new URL(window.location.href);url.searchParams.delete('view');url.searchParams.delete('approval');if(next==='prospecting')url.searchParams.set('view','prospecting');window.history.replaceState(null,'',url.href);}setMobileMenu(false);setSearchOpen(false);setNoticesOpen(false);window.scrollTo({top:0,left:0,behavior:'auto'});};
+    const guardedProceed=()=>{if(prospectingGuard.current&&!prospectingGuard.current(proceed)){setMobileMenu(false);setSearchOpen(false);setNoticesOpen(false);return;}if(studioGuard.current&&!studioGuard.current(proceed)){setMobileMenu(false);setSearchOpen(false);setNoticesOpen(false);return;}proceed();};
     if(projectDirty.current){pendingProjectLeave.current=guardedProceed;setLeaveProject(true);return;}
     if(approvalDirty.current){pendingApprovalLeave.current=guardedProceed;setLeaveApproval(true);return;}
     if(contractDirty.current){pendingContractLeave.current=guardedProceed;setLeaveContract(true);return;}
@@ -147,7 +151,7 @@ export default function Workbench({member,onLogout}:{member:MemberSession;onLogo
     if(accountBusy)return;
     if(projectBusy.current||approvalBusy.current||contractBusy.current||followupPending.current||trainingPending.current||sending.current){notify('当前操作正在保存，请完成后再退出登录');return;}
     const proceed=()=>{stopTrainingMedia.current?.();setAccountBusy(true);void onLogout().catch(cause=>notify(cause instanceof Error?cause.message:'退出未完成，请重试')).finally(()=>setAccountBusy(false));};
-    const guarded=()=>{if(studioGuard.current&&!studioGuard.current(proceed))return;proceed();};
+    const guarded=()=>{if(prospectingGuard.current&&!prospectingGuard.current(proceed))return;if(studioGuard.current&&!studioGuard.current(proceed))return;proceed();};
     if(projectDirty.current){pendingProjectLeave.current=guarded;setLeaveProject(true);return;}
     if(approvalDirty.current){pendingApprovalLeave.current=guarded;setLeaveApproval(true);return;}
     if(contractDirty.current){pendingContractLeave.current=guarded;setLeaveContract(true);return;}
@@ -183,6 +187,7 @@ export default function Workbench({member,onLogout}:{member:MemberSession;onLogo
       <main className="main-content" key={view}>
         {view==='home'&&(member.role==='admin'?<AdminHome state={state} onNavigate={navigate}/>:<RoleDashboard {...props} member={member} onNavigate={navigate} onRecordCustomer={()=>navigate('deals',undefined,undefined,undefined,'create')} onRecordFollowup={()=>navigate('deals',undefined,undefined,undefined,'followup')} pendingApprovals={approvalPendingCount}/>)}
         {view==='reports'&&member.role==='manager'&&<SalesDailyReport state={state} notify={notify} onNavigate={navigate}/>}
+        {view==='prospecting'&&member.role!=='admin'&&<ProspectingWorkspace onGuardReady={onProspectingGuardReady}/>}
         {view==='meetings'&&<MeetingImportWorkspace state={state} onWorkspaceRefresh={reload} initialDealId={focusedDeal} admin={member.role==='admin'} onOpenProjects={()=>navigate('deals')}/>}
         {view==='deals'&&member.role!=='admin'&&<ProjectsView member={member} key={(focusedDeal||'all')+':'+(projectIntent||'')} {...props} uploadFollowup={saveRecordingFollowup} onReload={reload} onBusyChange={onProjectBusy} onDirtyChange={onProjectDirty} onNavigate={navigate} onApproval={(projectId,requestId)=>navigate('approvals',projectId,undefined,requestId)} initialDealId={focusedDeal} initialIntent={projectIntent} onDealClosed={()=>{setFocusedDeal(null);setProjectIntent(null);}}/>}
         {view==='contracts'&&member.role!=='admin'&&<ContractReviewView key={focusedDeal||'all'} {...props} initialDealId={focusedDeal} onNavigate={navigate} onBusyChange={onContractBusy} onDirtyChange={onContractDirty} onApproval={(contractId,dealId)=>navigate('approvals',dealId,contractId)}/>}
@@ -196,7 +201,7 @@ export default function Workbench({member,onLogout}:{member:MemberSession;onLogo
         {view==='rules'&&member.role==='admin'&&<BusinessRulesView state={state} notify={notify} onBusyChange={onApprovalBusy} onDirtyChange={onApprovalDirty}/>}
       </main>
     </div>
-    {member.role!=='admin'&&<nav className="mobile-role-navigation" aria-label="快捷导航">{navigation.filter(item=>item.id!=='meetings').map(item=>{const Icon=item.icon;return <button key={item.id} aria-current={view===item.id?'page':undefined} onClick={()=>navigate(item.id)}><Icon size={20}/><span>{item.label}</span></button>;})}</nav>}
+    {member.role!=='admin'&&<nav className="mobile-role-navigation" aria-label="快捷导航">{navigation.filter(item=>item.id!=='meetings'&&item.id!=='training').map(item=>{const Icon=item.icon;return <button key={item.id} aria-current={view===item.id?'page':undefined} onClick={()=>navigate(item.id)}><Icon size={20}/><span>{item.label}</span></button>;})}</nav>}
     {leaveProject&&<Overlay className="confirmation-dialog" title="有尚未保存的内容" onClose={()=>{setLeaveProject(false);pendingProjectLeave.current=null;}}><p>离开会丢弃本次尚未保存的修改或录入。</p><div className="contract-leave-actions"><button data-dialog-initial-focus="true" className="button secondary" onClick={()=>{setLeaveProject(false);pendingProjectLeave.current=null;}}>继续编辑</button><button className="button primary" onClick={()=>{projectDirty.current=false;setLeaveProject(false);const proceed=pendingProjectLeave.current;pendingProjectLeave.current=null;proceed?.();}}>放弃并离开</button></div></Overlay>}
     {leaveApproval&&<Overlay className="confirmation-dialog" title="审批内容尚未提交" onClose={()=>{setLeaveApproval(false);pendingApprovalLeave.current=null;}}><p>离开会丢弃尚未提交的申请或流程修改。</p><div className="contract-leave-actions"><button data-dialog-initial-focus="true" className="button secondary" onClick={()=>{setLeaveApproval(false);pendingApprovalLeave.current=null;}}>继续编辑</button><button className="button primary" onClick={()=>{approvalDirty.current=false;setLeaveApproval(false);const proceed=pendingApprovalLeave.current;pendingApprovalLeave.current=null;proceed?.();}}>放弃更改并离开</button></div></Overlay>}
     {leaveContract&&<Overlay className="confirmation-dialog" title="合同草稿尚未保存" onClose={()=>{setLeaveContract(false);pendingContractLeave.current=null;}}><p>离开会丢弃尚未保存的合同更改。</p><div className="contract-leave-actions"><button data-dialog-initial-focus="true" className="button secondary" onClick={()=>{setLeaveContract(false);pendingContractLeave.current=null;}}>继续编辑</button><button className="button primary" onClick={()=>{contractDirty.current=false;setLeaveContract(false);const proceed=pendingContractLeave.current;pendingContractLeave.current=null;proceed?.();}}>放弃更改并离开</button></div></Overlay>}

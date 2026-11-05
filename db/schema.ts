@@ -92,3 +92,18 @@ export const workbenchMeetingJobs=sqliteTable('workbench_meeting_jobs',{
 export const workbenchMeetingImports=sqliteTable('workbench_meeting_imports',{
  id:text('id').primaryKey(),ownerId:text('owner_id').notNull(),memberId:text('member_id').notNull(),dealId:text('deal_id').notNull(),sourceKey:text('source_key').notNull(),sourceHash:text('source_hash').notNull(),dataJson:text('data_json').notNull(),linked:integer('linked').notNull().default(0),createdAt:text('created_at').notNull(),
 },table=>[uniqueIndex('workbench_meeting_import_source').on(table.ownerId,table.dealId,table.sourceKey,table.sourceHash),index('workbench_meeting_import_project').on(table.ownerId,table.dealId,table.createdAt)]);
+
+/** Device tokens are hashed and the observed sender identity is pinned on first login. */
+export const workbenchProspectDevices=sqliteTable('workbench_prospect_devices',{
+ id:text('id').primaryKey(),ownerId:text('owner_id').notNull(),memberId:text('member_id').notNull(),label:text('label').notNull(),tokenHash:text('token_hash').notNull(),enabled:integer('enabled').notNull().default(1),authenticated:integer('authenticated').notNull().default(0),accountId:text('account_id'),accountName:text('account_name'),message:text('message'),lastSeenAt:text('last_seen_at'),createdAt:text('created_at').notNull(),
+},table=>[uniqueIndex('workbench_prospect_device_token').on(table.tokenHash),index('workbench_prospect_device_member').on(table.ownerId,table.memberId,table.enabled)]);
+export const workbenchProspectCampaigns=sqliteTable('workbench_prospect_campaigns',{
+ id:text('id').primaryKey(),ownerId:text('owner_id').notNull(),memberId:text('member_id').notNull(),status:text('status').notNull(),dataJson:text('data_json').notNull(),createdAt:text('created_at').notNull(),updatedAt:text('updated_at').notNull(),
+},table=>[index('workbench_prospect_campaign_member').on(table.ownerId,table.memberId,table.createdAt)]);
+export const workbenchProspectLeads=sqliteTable('workbench_prospect_leads',{
+ id:text('id').notNull(),campaignId:text('campaign_id').notNull(),ownerId:text('owner_id').notNull(),memberId:text('member_id').notNull(),version:integer('version').notNull().default(1),status:text('status').notNull(),jobId:text('job_id'),analysisAttempted:integer('analysis_attempted').notNull().default(0),dataJson:text('data_json').notNull(),updatedAt:text('updated_at').notNull(),
+},table=>[primaryKey({columns:[table.campaignId,table.id]}),index('workbench_prospect_lead_member').on(table.ownerId,table.memberId,table.campaignId)]);
+/** recipient_key retains first-touch reservations even for uncertain/failed dispatches. */
+export const workbenchProspectJobs=sqliteTable('workbench_prospect_jobs',{
+ id:text('id').primaryKey(),ownerId:text('owner_id').notNull(),memberId:text('member_id').notNull(),deviceId:text('device_id').notNull(),campaignId:text('campaign_id').notNull(),leadId:text('lead_id'),kind:text('kind').notNull(),status:text('status').notNull(),inputJson:text('input_json').notNull(),resultJson:text('result_json'),error:text('error'),activeKey:text('active_key'),recipientKey:text('recipient_key'),senderId:text('sender_id'),leaseHash:text('lease_hash'),leaseUntil:text('lease_until'),startedAt:text('started_at'),createdAt:text('created_at').notNull(),updatedAt:text('updated_at').notNull(),
+},table=>[uniqueIndex('workbench_prospect_job_active').on(table.activeKey),uniqueIndex('workbench_prospect_job_recipient').on(table.recipientKey),index('workbench_prospect_job_queue').on(table.deviceId,table.status,table.createdAt),index('workbench_prospect_job_sender').on(table.ownerId,table.senderId,table.startedAt)]);

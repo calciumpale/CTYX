@@ -1,0 +1,11 @@
+node_modules/
+*.local.json
+state/
+browser-profile/
+profiles/
+configs/
+config.json
+config.*.json
+journal*.json
+journal*.json.lock
+douyin-bridge-state/

@@ -57,6 +57,20 @@
       "when": 1793722345972,
       "tag": "0007_meeting_imports",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1793858934485,
+      "tag": "0008_chemical_dorian_gray",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1793859036207,
+      "tag": "0009_worthless_johnny_storm",
+      "breakpoints": true
     }
   ]
 }

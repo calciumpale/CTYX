@@ -1,0 +1,1 @@
+ALTER TABLE `workbench_prospect_leads` ADD `analysis_attempted` integer DEFAULT 0 NOT NULL;

@@ -20,6 +20,7 @@ export function readMemberDisplayName(request:Request):string {
 export function assertMemberApi(role:MemberRole,pathname:string,method:string):void {
   const path=pathname.replace(/\/$/,'');const verb=method.toUpperCase();
   if(path==='/api/workbench'){if(['GET','POST'].includes(verb))return;return denied();}
+  if(path==='/api/prospecting'){if(role!=='admin'&&['GET','POST'].includes(verb))return;return denied();}
   if(path==='/api/meeting-imports'){if(verb==='GET'||role!=='admin'&&verb==='POST')return;return denied();}
   if(/^\/api\/meeting-imports\/media\/[a-zA-Z0-9_.:-]+$/.test(path)){if(role!=='admin'&&['GET','HEAD'].includes(verb))return;return denied();}
   if(path==='/api/approvals'){if(['GET','POST'].includes(verb))return;return denied();}

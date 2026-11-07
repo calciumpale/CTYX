@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "CTAI · 营销工作台",
-  description: "让客户洞察、策略、商机、风控和培训在同一个工作台协作。",
+  title: "营销工作台",
+  description: "用于抖音获客、项目跟进、培训提升和知识库管理。",
   icons: {
     icon: "/favicon.svg",
     shortcut: "/favicon.svg",

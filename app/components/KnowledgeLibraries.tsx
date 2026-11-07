@@ -226,7 +226,7 @@ export function KnowledgeLibraries({ notify }: { notify: (message: string) => vo
   }
 
   return <div className="knowledge-libraries">
-    <header className="knowledge-libraries-heading"><div><h1>资料库</h1>{snapshot && !canManage && <span className="knowledge-readonly">只读 · 管理员和销售管理者可维护</span>}</div>
+    <header className="knowledge-libraries-heading"><div><h1>知识库</h1>{snapshot && !canManage && <span className="knowledge-readonly">只读 · 管理员和销售管理者可维护</span>}</div>
       <div className="knowledge-actions"><button className="button ghost" disabled={Boolean(busy)} onClick={refresh}><RefreshCw size={15} />刷新</button>{canManage && <button className="button primary" disabled={Boolean(busy)} onClick={() => openDialog({ kind: 'create' })}><Plus size={16} />新建资料库</button>}</div>
     </header>
     {error && <p className="knowledge-feedback is-error" role="alert"><CircleAlert size={17} />{error}</p>}

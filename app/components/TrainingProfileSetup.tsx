@@ -120,7 +120,7 @@ export function TrainingProfileSetup({ scenario, voice, busy, error, modelConnec
       <div className="training-profile-preview"><ProfileFacts profile={reviewed} /></div>
       <div className="training-profile-ready"><Check size={16} /><p>{modelConnected ? '已配置模型' : '本地规则'}{voice ? ' · 语音连接后由你开启麦克风' : ' · 文字对话'}</p></div>
       {error && <div className="training-profile-error" role="alert"><Info size={16} /><div><p>{error}</p><span>画像已保留，可重试开始或返回修改。</span></div></div>}
-      <div className="training-profile-actions training-profile-confirm-actions"><button type="button" className="studio-btn studio-btn-ghost" disabled={busy} onClick={backToEdit}><ArrowLeft size={15} />返回修改</button><button type="button" className="studio-btn studio-btn-primary" disabled={busy} onClick={() => void confirm()}>{busy ? <Loader2 size={16} className="studio-spin" /> : voice ? <Mic size={16} /> : <Check size={16} />}{busy ? '正在准备客户…' : `开始${voice ? '语音' : ''}带练`}</button></div>
+      <div className="training-profile-actions training-profile-confirm-actions"><button type="button" className="studio-btn studio-btn-ghost" disabled={busy} onClick={backToEdit}><ArrowLeft size={15} />返回修改</button><button type="button" className="studio-btn studio-btn-primary" disabled={busy} onClick={() => void confirm()}>{busy ? <Loader2 size={16} className="studio-spin" /> : voice ? <Mic size={16} /> : <Check size={16} />}{busy ? '正在准备客户…' : `开始${voice ? '语音' : ''}陪练`}</button></div>
     </>}
   </section>;
 }

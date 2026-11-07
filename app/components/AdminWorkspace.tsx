@@ -20,13 +20,13 @@ export function AdminHome({state,onNavigate}:{state:ViewProps['state'];onNavigat
   const knowledgeCount=state.knowledge.filter(item=>item.status==='published').length;
   const trackCount=(state.talkTracks??[]).filter(item=>item.status==='published').length;
   return <div className="admin-home">
-    <header className="admin-page-heading"><h1>管理</h1></header>
+    <header className="admin-page-heading"><h1>系统管理</h1></header>
     <section className="admin-quick-list" aria-label="管理入口">
-      <button onClick={()=>onNavigate('knowledge')}><BookOpen size={18}/><span><strong>资料与话术</strong></span><small>{knowledgeCount} 条知识 · {trackCount} 条话术</small><ArrowRight size={16}/></button>
+      <button onClick={()=>onNavigate('knowledge')}><BookOpen size={18}/><span><strong>知识库</strong></span><small>{knowledgeCount} 条知识 · {trackCount} 条话术</small><ArrowRight size={16}/></button>
       <button onClick={()=>onNavigate('members')}><Users size={18}/><span><strong>人员权限</strong></span><ArrowRight size={16}/></button>
       <button onClick={()=>onNavigate('rules')}><ShieldCheck size={18}/><span><strong>业务规则</strong></span><ArrowRight size={16}/></button>
       <button onClick={()=>onNavigate('settings')}><Settings size={18}/><span><strong>服务连接</strong></span><small>{state.model.connected?'模型已配置':'模型未配置'}</small><ArrowRight size={16}/></button>
-      <button onClick={()=>onNavigate('studio')}><GitBranch size={18}/><span><strong>搭建中心</strong></span><ArrowRight size={16}/></button>
+      <button onClick={()=>onNavigate('studio')}><GitBranch size={18}/><span><strong>AI 搭建中心</strong></span><ArrowRight size={16}/></button>
     </section>
   </div>;
 }

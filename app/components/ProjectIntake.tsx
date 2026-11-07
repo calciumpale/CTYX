@@ -148,12 +148,12 @@ export function ProjectIntake({ state, mutate, notify, onCreated, onBusyChange, 
     finally { busyRef.current = false; if (mounted.current) setBusy(false); }
   }
   const descriptionId = `${id}-description`;
-  const statusMessage = busy ? '正在提取信息并保存项目，随后更新客户洞察和成交预测…' : listening ? voice.phase === 'requesting' ? '正在等待麦克风权限…' : voice.phase === 'stopping' ? '正在结束识别，完成后自动录入…' : '正在听，停顿后会自动录入。' : '';
+  const statusMessage = busy ? '正在提取信息并保存项目，随后更新销售分析…' : listening ? voice.phase === 'requesting' ? '正在等待麦克风权限…' : voice.phase === 'stopping' ? '正在结束识别，完成后自动录入…' : '正在听，停顿后会自动录入。' : '';
   const showError = error || voice.error;
   const maxClarification = Math.max(0, MAX_INTAKE_TEXT - text.length - '\n补充：'.length);
 
   return <section className="project-intake" aria-labelledby={`${id}-title`} aria-busy={busy}>
-    <div className="project-intake-heading"><div><h2 id={`${id}-title`}>快速录入</h2><p id={descriptionId}>输入或说出客户情况，自动建立项目。</p></div><Building2 size={22} aria-hidden="true" /></div>
+    <div className="project-intake-heading"><div><h2 id={`${id}-title`}>AI 跟进助手</h2><p id={descriptionId}>输入或说出客户情况，AI 提取信息并建立项目。</p></div><Building2 size={22} aria-hidden="true" /></div>
     <form onSubmit={handleSubmit}>
       <label className="project-intake-label" htmlFor={`${id}-text`}>客户信息</label>
       <textarea ref={textareaRef} id={`${id}-text`} value={text} rows={3} maxLength={MAX_INTAKE_TEXT} disabled={busy || listening} aria-describedby={descriptionId} placeholder="企业名称、联系人、需求与下一步安排" onChange={event => { setText(event.target.value); setResponse(null); setClarification(''); setError(''); }} onCompositionStart={() => { composingRef.current = true; setComposing(true); }} onCompositionEnd={() => { composingRef.current = false; setComposing(false); }} />
@@ -162,7 +162,7 @@ export function ProjectIntake({ state, mutate, notify, onCreated, onBusyChange, 
     </form>
     {statusMessage && <p className="project-intake-status" role="status">{listening && <span className="project-intake-listening-dot" />}{statusMessage}</p>}
     {voice.interimTranscript && <p className="project-intake-interim" aria-live="polite">{voice.interimTranscript}</p>}
-    {!modelConnected && <div className="project-intake-connection"><p>自动录入需管理员配置模型。也可通过“新建项目”手动填写。</p></div>}
+    {!modelConnected && <div className="project-intake-connection"><p>AI 录入需管理员配置模型。也可通过“新建项目”手动填写。</p></div>}
     {showError && <p className="project-intake-error" role="alert">{showError}</p>}
     {response?.status === 'duplicate' && <div className="project-intake-duplicates"><h3>已有相同客户的相似项目</h3><p>把这段原话补充为跟进，或为新的销售机会另建项目。</p><ul>{response.existing?.map(project => <li key={project.id}><div><strong>{project.projectName || project.name}</strong><span>{project.name}</span></div><button type="button" className="button secondary" disabled={busy} onClick={() => void saveFollowup(project.id)}>记录到此项目<ArrowRight size={15} /></button></li>)}</ul><button type="button" className="button ghost" disabled={busy} onClick={() => { const entry = lastSubmission.current; if (entry) void submitText(entry.text, entry.inputMode, true); }}><Plus size={16} />另建新项目</button></div>}
   </section>;

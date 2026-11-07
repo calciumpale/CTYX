@@ -172,7 +172,7 @@ export function TrainingView({ state, mutate, notify,onPendingChange,onMediaStop
   const start = async (profile: TrainingProfile) => {
     stopVoice();
     const result = await perform('training_start', { scenario, profile, confirmed: true });
-    if (result?.session) { setSessionId(result.session.id); setDraft(''); setUnaddedTranscript(''); pinned.current = true; notify('带练已开始，可以像面对客户一样自然回应。'); }
+    if (result?.session) { setSessionId(result.session.id); setDraft(''); setUnaddedTranscript(''); pinned.current = true; notify('陪练已开始，可以像面对客户一样自然回应。'); }
   };
   const sendReply = async (event?: FormEvent) => {
     event?.preventDefault();
@@ -185,7 +185,7 @@ export function TrainingView({ state, mutate, notify,onPendingChange,onMediaStop
     if (!session || session.status !== 'active'||voiceQueue.pending>0) return;
     stopVoice();
     const result = await perform('training_finish', { sessionId: session.id });
-    if (result) notify('本次带练已完成，复盘已保存。');
+    if (result) notify('本次陪练已完成，复盘已保存。');
   };
   const startListening = () => {
     if (!session || session.status !== 'active' || interactionMode !== 'voice' || busy || capturing || !voice.ready || !voice.inputSupported) return;
@@ -211,11 +211,11 @@ export function TrainingView({ state, mutate, notify,onPendingChange,onMediaStop
   };
 
   return <section className="studio-view studio-training-view">
-    <header className="studio-heading training-page-heading"><h1>培训带练</h1></header>
+    <header className="studio-heading training-page-heading"><h1>AI 销售陪练</h1></header>
     {error && session && <Notice error>{error}</Notice>}
     <div className="studio-training-layout">
       <main className="studio-training-main">
-        <div className="training-interaction-bar"><strong>带练方式</strong><div className="training-mode-switch" role="group" aria-label="带练方式"><button type="button" disabled={busy} aria-pressed={interactionMode === 'text'} onClick={() => changeMode('text')}><MessageSquare size={15} />文字带练</button><button type="button" disabled={busy} aria-pressed={interactionMode === 'voice'} onClick={() => changeMode('voice')}><Mic size={15} />语音带练</button></div></div>
+        <div className="training-interaction-bar"><strong>陪练方式</strong><div className="training-mode-switch" role="group" aria-label="陪练方式"><button type="button" disabled={busy} aria-pressed={interactionMode === 'text'} onClick={() => changeMode('text')}><MessageSquare size={15} />文字陪练</button><button type="button" disabled={busy} aria-pressed={interactionMode === 'voice'} onClick={() => changeMode('voice')}><Mic size={15} />语音陪练</button></div></div>
         {interactionMode === 'text' && voice.error && <div className="training-voice-error training-voice-text-error" role="alert"><Info size={16} /><div><p>{voice.error}</p><span>文字回应仍可正常发送，也可稍后重新播放客户语音。</span></div><button type="button" className="studio-icon-button" onClick={voice.clearError} aria-label="关闭语音提示"><X size={15} /></button></div>}
         {interactionMode === 'voice' && session && <><div className="training-transport-switch" role="group" aria-label="语音连接方式"><button type="button" aria-pressed={voiceTransport==='duplex'} onClick={()=>changeTransport('duplex')}>实时语音</button><button type="button" aria-pressed={voiceTransport==='browser'} onClick={()=>changeTransport('browser')}>兼容模式</button></div>{voiceTransport==='duplex'?<DuplexVoiceControls voice={duplex} configured={gatewayConfigured} configurationError={gatewayError} customer={session ? customerLabel(session.customer) : undefined} active={session?.status==='active'} pending={voiceQueue.pending} onConnect={connectDuplex} onUseBrowser={()=>changeTransport('browser')}/>:<TrainingVoiceControls voice={voice} customer={session ? customerLabel(session.customer) : undefined} hasSession={Boolean(session)} active={session?.status === 'active'} busy={busy||voiceQueue.pending>0} autoSpeak={autoSpeak} onAutoSpeakChange={enabled => { setAutoSpeak(enabled); if (!enabled) voice.stopSpeaking(); }} onStartListening={startListening} onCancelListening={cancelListening} onUseText={() => changeMode('text')} />}</>}
         {voiceQueue.failed&&<div className="training-voice-error" role="alert"><Info size={16}/><div><p>语音暂未保存：{voiceQueue.error}</p><p>「{voiceQueue.failed.text}」</p><button type="button" onClick={()=>queueRef.current?.retry()}>直接重试保存</button><button type="button" style={{marginLeft:16}} onClick={()=>queueRef.current?.reset()}>舍弃全部待保存语音</button></div></div>}
@@ -297,7 +297,7 @@ export function KnowledgeView({ state, mutate, notify, canReviewSkills = state.r
     catch { setError('无法读取文件，请检查编码或直接粘贴文本。'); }
   };
   return <section className="studio-view">
-    <PageHeading title="知识与方法"><div className="studio-row">{manager && <button className="studio-btn studio-btn-secondary" onClick={() => { setForm('knowledge'); setError(''); }}><Upload size={16} />导入知识</button>}{canSubmitExperience && <button className="studio-btn studio-btn-primary" onClick={() => { setForm('candidate'); setError(''); }}><Plus size={16} />提交经验</button>}</div></PageHeading>
+    <PageHeading title="知识库"><div className="studio-row">{manager && <button className="studio-btn studio-btn-secondary" onClick={() => { setForm('knowledge'); setError(''); }}><Upload size={16} />导入知识</button>}{canSubmitExperience && <button className="studio-btn studio-btn-primary" onClick={() => { setForm('candidate'); setError(''); }}><Plus size={16} />提交经验</button>}</div></PageHeading>
     {error && <Notice error>{error}</Notice>}
     <div className="studio-tabs" role="tablist" aria-label="知识与技能类型"><button role="tab" aria-selected={tab === 'knowledge'} className={tab === 'knowledge' ? 'studio-tab-active' : ''} onClick={() => switchTab('knowledge')}><BookOpen size={17} />知识库<span>{knowledgePool.length}</span></button><button role="tab" aria-selected={tab === 'skills'} className={tab === 'skills' ? 'studio-tab-active' : ''} onClick={() => switchTab('skills')}><Sparkles size={17} />Skill 库<span>{state.skills.filter(item => item.status === 'published').length}</span></button>{(canSubmitExperience || canReviewSkills) && <button role="tab" aria-selected={tab === 'review'} className={tab === 'review' ? 'studio-tab-active' : ''} onClick={() => switchTab('review')}><ShieldCheck size={17} />{canReviewSkills ? '审核中心' : '候选记录'}<span>{state.skills.filter(item => item.status === 'candidate').length}</span></button>}</div>
     {form ? <div className="studio-form-panel"><div className="studio-panel-heading"><div><h2>{form === 'knowledge' ? '导入团队知识' : '提交经验'}</h2><p>{form === 'knowledge' ? 'TXT / Markdown / 粘贴文本 · 导入后立即生效' : '保留原始证据，提交后由管理者审核。'}</p></div><button className="studio-icon-button" onClick={() => setForm(null)} aria-label="关闭表单" disabled={busy}><X size={19} /></button></div>

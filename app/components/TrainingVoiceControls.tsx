@@ -36,16 +36,16 @@ export function TrainingVoiceControls({ voice, customer, hasSession, active, bus
               : voice.phase === 'speaking'
                 ? { title: '客户正在播报', detail: '先听听客户的顾虑。点击「开始说话」可以打断播报。' }
                 : !hasSession
-                  ? { title: '准备好，再开口', detail: '选一个场景开始带练，客户说完就轮到你回应。' }
+                  ? { title: '准备好，再开口', detail: '选一个场景开始陪练，客户说完就轮到你回应。' }
                   : !active
                     ? { title: '回听这一次练习', detail: '点击每条客户对话下的播放按钮，重新听听当时的沟通。' }
                     : !voice.inputSupported
-                      ? { title: '用文字回应，也能听见客户', detail: '此浏览器不支持语音识别。你仍可输入文字，继续这次带练。' }
+                      ? { title: '用文字回应，也能听见客户', detail: '此浏览器不支持语音识别。你仍可输入文字，继续这次陪练。' }
                       : { title: '轮到你说', detail: '说出你的回应，识别完成后自动发送给客户。' };
   const StatusIcon = voice.phase === 'speaking' || voice.phase === 'preparing-speech' ? Volume2 : capturing ? Mic : Headphones;
   const animated = voice.phase !== 'idle' || busy;
 
-  return <section className="training-voice-panel" aria-label="语音带练控制">
+  return <section className="training-voice-panel" aria-label="语音陪练控制">
     <div className="training-voice-topline"><span className="training-voice-browser"><span />兼容模式 · 轮流对话</span></div>
     <div className="training-voice-stage">
       <div className={`training-voice-orb${animated ? ' training-voice-orb-active' : ''}${capturing ? ' training-voice-orb-listening' : ''}`} aria-hidden="true"><span /><div>{busy || voice.phase === 'requesting' || voice.phase === 'stopping' ? <Loader2 size={25} className="studio-spin" /> : <StatusIcon size={26} />}</div></div>
@@ -61,8 +61,8 @@ export function TrainingVoiceControls({ voice, customer, hasSession, active, bus
       <label className="training-voice-auto"><input type="checkbox" checked={autoSpeak} disabled={!voice.ready || !voice.outputSupported} onChange={event => onAutoSpeakChange(event.target.checked)} /><span>客户自动播报</span></label>
       <button type="button" className="studio-btn studio-btn-ghost training-voice-stop" disabled={!playing} onClick={voice.stopSpeaking}><Square size={12} />停止播报</button>
     </div>
-    {voice.error && <div className="training-voice-error" role="alert"><Info size={16} /><div><p>{voice.error}</p><button type="button" onClick={onUseText}>改用文字带练</button>{voice.outputSupported && <span>也可通过对话下方按钮手动播放。</span>}</div><button type="button" className="studio-icon-button" onClick={voice.clearError} aria-label="关闭语音提示"><X size={15} /></button></div>}
-    {voice.ready && (!voice.inputSupported || !voice.outputSupported) && <p className="training-voice-capability"><Info size={14} />{!voice.inputSupported && !voice.outputSupported ? '此浏览器暂不支持语音识别和语音播放，可切换到文字带练继续。' : !voice.inputSupported ? '语音识别不可用；客户语音仍可播放，你可以输入文字回应。' : '此浏览器暂不支持客户语音播放；语音识别和文字回应仍可使用。'}<button type="button" onClick={onUseText}>切换文字带练</button></p>}
+    {voice.error && <div className="training-voice-error" role="alert"><Info size={16} /><div><p>{voice.error}</p><button type="button" onClick={onUseText}>改用文字陪练</button>{voice.outputSupported && <span>也可通过对话下方按钮手动播放。</span>}</div><button type="button" className="studio-icon-button" onClick={voice.clearError} aria-label="关闭语音提示"><X size={15} /></button></div>}
+    {voice.ready && (!voice.inputSupported || !voice.outputSupported) && <p className="training-voice-capability"><Info size={14} />{!voice.inputSupported && !voice.outputSupported ? '此浏览器暂不支持语音识别和语音播放，可切换到文字陪练继续。' : !voice.inputSupported ? '语音识别不可用；客户语音仍可播放，你可以输入文字回应。' : '此浏览器暂不支持客户语音播放；语音识别和文字回应仍可使用。'}<button type="button" onClick={onUseText}>切换文字陪练</button></p>}
     <p className="training-voice-privacy">语音识别由浏览器语音服务完成，可能联网。本平台仅保留文字对话，不保存原始音频。</p>
   </section>;
 }

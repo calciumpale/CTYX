@@ -8,11 +8,11 @@ export type Role = 'sales' | 'manager';
 export type View = 'home' | 'deals' | 'training' | 'knowledge' | 'talktracks' | 'contracts' | 'approvals' | 'reports' | 'studio' | 'runs' | 'settings' | 'members' | 'rules' | 'meetings' | 'prospecting';
 export type AgentId = 'insight' | 'strategy' | 'opportunity' | 'risk' | 'coach';
 export const AGENTS: {id: AgentId; name: string; description: string; starter: string}[] = [
-  {id:'insight',name:'客户洞察',description:'读懂客户，找到沟通的切入点',starter:'帮我梳理当前项目的客户需求和关键决策人'},
-  {id:'strategy',name:'策略方案',description:'把客户需求，变成可执行方案',starter:'为当前项目准备一次拜访方案和开场话术'},
-  {id:'opportunity',name:'商机预测',description:'找到值得推进的下一步',starter:'本周哪些商机最值得优先跟进？请说明依据'},
-  {id:'risk',name:'商务风控',description:'初审合同、标注风险条款并给出修改建议',starter:'帮我梳理当前项目的合同风险和需要修改的条款'},
-  {id:'coach',name:'培训带练',description:'在真实沟通之前，先练习一次',starter:'陪我练习客户提出采购价格异议时如何回应'},
+  {id:'insight',name:'AI 客户洞察',description:'读懂客户，找到沟通的切入点',starter:'帮我梳理当前项目的客户需求和关键决策人'},
+  {id:'strategy',name:'AI 策略方案',description:'把客户需求，变成可执行方案',starter:'为当前项目准备一次拜访方案和开场话术'},
+  {id:'opportunity',name:'AI 商机预测',description:'找到值得推进的下一步',starter:'本周哪些商机最值得优先跟进？请说明依据'},
+  {id:'risk',name:'AI 商务风控',description:'初审合同、标注风险条款并给出修改建议',starter:'帮我梳理当前项目的合同风险和需要修改的条款'},
+  {id:'coach',name:'AI 销售陪练',description:'在真实沟通之前，先练习一次',starter:'陪我练习客户提出采购价格异议时如何回应'},
 ];
 export const STAGES = ['线索','商机','方案','合同','回款'] as const;
 export interface FollowupRecording {id:string;name:string;size:number;mimeType:string;}

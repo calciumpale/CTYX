@@ -1,9 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { canOpenWorkspaceView, readWorkspaceRoute, workspaceSearch, workspaceNavigation } from '../app/lib/workspace-navigation.ts';
+import { canOpenWorkspaceView, readWorkspaceRoute, workspaceSearch, workspaceNavigation, workspaceSection, workspaceProjectNavigation, workspaceManagementNavigation } from '../app/lib/workspace-navigation.ts';
 
-test('each role keeps its existing pages and has stable primary navigation', () => {
-  assert.deepEqual(workspaceNavigation('sales').map(item => item.id), ['home','deals','meetings','prospecting','knowledge','training']);
+test('business navigation has the four requested sections without changing role access', () => {
+  const expected=[{id:'prospecting',label:'抖音获客'},{id:'deals',label:'项目跟进'},{id:'training',label:'培训提升'},{id:'knowledge',label:'知识库'}];
+  assert.deepEqual(workspaceNavigation('sales'), expected);
+  assert.deepEqual(workspaceNavigation('manager'), expected);
+  assert.deepEqual(workspaceNavigation('admin'), [{id:'knowledge',label:'知识库'}]);
   assert.equal(canOpenWorkspaceView('sales','settings'), false);
   assert.equal(canOpenWorkspaceView('admin','deals'), false);
   assert.equal(canOpenWorkspaceView('manager','reports'), true);
@@ -28,4 +31,31 @@ test('unknown or forbidden views cannot bypass role access and old context is cl
   assert.deepEqual(readWorkspaceRoute('?view=deals&deal=%3Cscript%3E','sales'),{view:'deals'});
   const next=workspaceSearch('?view=meetings&embed=tencent&deal=old&approval=old&contract=old&focus=old',{view:'settings'});
   assert.equal(next,'?view=settings');
+  assert.equal(workspaceSearch('?view=deals&intent=followup',{view:'knowledge'}),'?view=knowledge');
+});
+
+
+test('followup and intake entry links preserve valid intent only inside projects', () => {
+  for (const intent of ['create','followup'] as const) {
+    const route={view:'deals' as const,intent};
+    assert.deepEqual(readWorkspaceRoute(workspaceSearch('',route),'sales'),route);
+  }
+  assert.deepEqual(readWorkspaceRoute('?view=deals&intent=delete','sales'),{view:'deals'});
+  assert.deepEqual(readWorkspaceRoute('?view=meetings&intent=followup','manager'),{view:'meetings'});
+});
+
+
+test('project pages share one section while administration stays permission scoped', () => {
+  for (const view of ['home','deals','meetings','approvals','contracts','reports'] as const) {
+    assert.equal(workspaceSection(view,'manager'),'deals');
+  }
+  assert.equal(workspaceSection('talktracks','sales'),'knowledge');
+  assert.equal(workspaceSection('home','admin'),undefined);
+  assert.equal(workspaceSection('deals','admin'),undefined);
+  assert.equal(workspaceSection('settings','sales'),undefined);
+  assert.deepEqual(workspaceProjectNavigation('sales').map(item=>item.id),['home','deals','meetings','approvals','contracts']);
+  assert.deepEqual(workspaceProjectNavigation('admin'),[]);
+  assert.deepEqual(workspaceManagementNavigation('sales'),[]);
+  assert.deepEqual(workspaceManagementNavigation('manager'),[]);
+  assert.deepEqual(workspaceManagementNavigation('admin').map(item=>item.id),['home','members','rules','settings','studio','runs','meetings']);
 });

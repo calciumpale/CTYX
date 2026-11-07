@@ -32,7 +32,7 @@ export default function WorkspaceLogin({ onLogin, error, busy }: WorkspaceLoginP
   };
 
   return <main className="workspace-login">
-    <div className="workspace-login-brand"><BrandMark small /><span>CTAI <span>营销工作台</span></span></div>
+    <div className="workspace-login-brand"><BrandMark small /><span>营销工作台</span></div>
     <section className="workspace-login-panel" aria-labelledby="workspace-login-title">
       <h1 id="workspace-login-title">登录</h1>
       <form onSubmit={submit} aria-busy={busy}>

@@ -165,7 +165,7 @@ export function RunsView({ state, mutate, notify, canExtract = true }: ViewProps
   };
 
   return <section className="studio-view run-history-view" data-detail-open={mobileDetail && !!selected ? 'true' : 'false'}>
-    <header className="run-history-heading"><h1>任务记录</h1></header>
+    <header className="run-history-heading"><h1>AI 任务记录</h1></header>
     <div className="run-history-toolbar" role="search" aria-label="筛选运行记录">
       <label className="run-history-search"><Search size={17} aria-hidden="true" /><span className="studio-sr-only">搜索任务、结果、专家或运行编号</span><input value={filters.search} onChange={event => { setFilters({ ...filters, search: event.target.value }); setMobileDetail(false); }} placeholder="搜索任务、结果、专家或编号" />{filters.search && <button type="button" onClick={() => setFilters({ ...filters, search: '' })} aria-label="清空搜索"><X size={16} /></button>}</label>
       <label className="run-history-filter"><span className="studio-sr-only">运行状态</span><select value={filters.status} onChange={event => { setFilters({ ...filters, status: event.target.value as RunFilters['status'] }); setMobileDetail(false); }}><option value="all">全部状态</option><option value="completed">已完成</option><option value="paused">待确认</option><option value="failed">执行失败</option><option value="rejected">已拒绝</option></select></label>

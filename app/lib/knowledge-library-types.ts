@@ -1,6 +1,8 @@
 export const KNOWLEDGE_FILE_LIMIT = 10 * 1024 * 1024;
-export const KNOWLEDGE_TEXT_LIMIT = 80_000;
-export const KNOWLEDGE_SEARCHABLE_LIMIT = 1_000;
+export const KNOWLEDGE_TEXT_LIMIT = 1_000_000;
+export const KNOWLEDGE_CHUNK_LIMIT = 6_000;
+export const KNOWLEDGE_SEARCHABLE_LIMIT = 6_000;
+export const KNOWLEDGE_REQUEST_LIMIT = 6 * KNOWLEDGE_TEXT_LIMIT + 64 * 1024;
 export const KNOWLEDGE_UPLOAD_ACCEPT = '.xlsx,.xls,.pdf,.docx,.txt,.md,.markdown,.csv';
 
 export type KnowledgeChunkStrategy = 'flat' | 'parent-child';

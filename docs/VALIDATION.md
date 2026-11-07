@@ -84,3 +84,10 @@ Sites 返回 succeeded，生产地址：https://ctai-marketing-workbench-2026102
 - 用户截图的通用解析器错误对应 Worker.onerror。生产父加载器把 import.meta.url 固化为 file:///ROOT/app/lib/knowledge-excel.ts，导致 Worker 地址为 file:///_next/static/...，无法由 HTTPS 页面加载。
 - 新增生产产物检查 scripts/checks/excel-worker-url.mjs，实际执行父加载器与 Worker factory，捕获 Worker 构造参数，验证 HTTPS 同源、模块类型、资产存在与消息返回。原 v43 产物明确复现 file: !== https:；旧的 Node fallback 与直接 Worker 资产测试覆盖不到这一问题。
 - 修复采用按需导入 Vite ?worker factory，Node 无 Worker 时保留原解析路径。仅修改 Worker 加载方式，未改 Excel 解析规则、知识库数据或权限。
+
+## 2026-11-07 知识资料容量扩展
+
+- 单份知识正文由80,000提升至1,000,000字符，请求字节限制、文本/Excel/DOCX/PDF解析、普通/父子切块和存储校验同步。文件上限10MB及归档安全检查保留，合同默认80,000字符保持。
+- 单文档最多6,000片段，检索扫描范围同步6,000；批量JSON入库仍为原子事务，故障注入验证无半成品。向量每页40条、每批最多160条，尾部第6,000片段可命中，预览不读取向量字段；切片预览每页40条。
+- 真实本地HTTP接口完成1,000,000字符中文正文上传（JSON正文约2,874,984字节）、1,330切片持久化和尾部特有标记检索，约1秒；本地测试文档与会话已清理。真实SQLite验证父子策略的100万字符尾部保留、UTF8绑定大小和事务回滚。
+- 类型检查通过，ESLint零错误、3条既有警告。生产构建验收继续执行Worker同源加载检查和独立浏览器XLSX/XLS及超60万字符Excel检查；不调用真实付费模型。

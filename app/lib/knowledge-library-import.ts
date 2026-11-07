@@ -17,8 +17,7 @@ export async function importKnowledgeFile(file: File): Promise<{ text: string; f
   // Reuse the existing bounded decoding, ZIP/CRC validation and PDF worker.
   const input = ['md', 'markdown', 'csv'].includes(extension) ? new File([file], `${file.name}.txt`, { type: 'text/plain' }) : file;
   try {
-    const result = await importContractFile(input);
-    if (result.text.length > KNOWLEDGE_TEXT_LIMIT) throw new Error('文档文字超过 80,000 字符，请拆分后重新导入。');
+    const result = await importContractFile(input, { textLimit: KNOWLEDGE_TEXT_LIMIT, docxXmlLimit: 8 * 1024 * 1024 });
     return { text: result.text, fileName: file.name, warnings: result.warnings.map(documentWording) };
   } catch (error) {
     throw new Error(documentWording(error instanceof Error ? error.message : '文件无法读取，请检查文档格式。'));

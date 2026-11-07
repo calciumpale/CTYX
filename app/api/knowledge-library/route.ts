@@ -6,7 +6,7 @@ import { effectiveEmbedding } from '../../lib/embedding-store.ts';
 import { splitKnowledgeText } from '../../lib/knowledge-library-chunks.ts';
 import { knowledgeModelKey } from '../../lib/knowledge-library-runtime.ts';
 import { createKnowledgeLibraryStore } from '../../lib/knowledge-library-store.ts';
-import { KNOWLEDGE_TEXT_LIMIT } from '../../lib/knowledge-library-types.ts';
+import { KNOWLEDGE_REQUEST_LIMIT, KNOWLEDGE_TEXT_LIMIT } from '../../lib/knowledge-library-types.ts';
 import { readMeetingBody as readJsonObject } from '../../lib/meeting-import-validation.ts';
 import { assertKnowledgeLibraryAction, assertMemberApi, requireMemberRole } from '../../lib/member-policy.ts';
 import { requireUserId } from '../../lib/server.ts';
@@ -67,7 +67,7 @@ export async function POST(request: Request) {
   try {
     const { ownerId, role, url, store } = context(request);
     assertSameOrigin(request);
-    const input = await readJsonObject(request, 512 * 1024);
+    const input = await readJsonObject(request, KNOWLEDGE_REQUEST_LIMIT);
     const action = text(input.action, '操作名称', 40);
     assertKnowledgeLibraryAction(role, action);
     switch (action) {

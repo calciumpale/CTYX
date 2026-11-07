@@ -31,6 +31,11 @@ for (const format of ['xlsx', 'xls']) {
   })));
 }
 
+const largeBook=XLSX.utils.book_new();
+const largeRows=Array.from({length:40},()=>['容量资料。'.repeat(3000)]);largeRows.push(['大文件末尾专用标记']);
+XLSX.utils.book_append_sheet(largeBook,XLSX.utils.aoa_to_sheet(largeRows),'容量验证');
+fixtures.set('/__excel-fixtures__/large.xlsx',Buffer.from(XLSX.write(largeBook,{bookType:'xlsx',type:'buffer'})));
+
 const server = http.createServer(async (request, response) => {
   try {
     const pathname = decodeURIComponent(new URL(request.url, 'http://127.0.0.1').pathname);
@@ -105,10 +110,17 @@ try {
       const result = await importKnowledgeExcel(file, format);
       results.push({ format, ...result });
     }
+    const largeResponse=await fetch('/__excel-fixtures__/large.xlsx');
+    if(!largeResponse.ok)throw new Error('Large fixture request failed');
+    const large=await importKnowledgeExcel(new File([await largeResponse.arrayBuffer()],'large.xlsx'),'xlsx');
+    results.push({format:'large.xlsx',...large});
     return results;
   }, entry);
 
-  for (const result of results) {
+  const large=results.find(result=>result.format==='large.xlsx');
+  assert.ok(large.text.length>600_000&&large.text.length<=1_000_000);
+  assert.match(large.text,/大文件末尾专用标记/);
+  for (const result of results.filter(result=>result.format!=='large.xlsx')) {
     assert.match(result.text, /## 工作表：产品资料/);
     assert.ok(result.text.includes(`第2行：A2=浏览器验收-${result.format}；B2=42；C2=FALSE`), `${result.format}: preserve row addresses and cell values`);
     assert.match(result.text, /第4行：A4=中文末行；B4=0；C4=TRUE/);
@@ -117,7 +129,7 @@ try {
     assert.ok(Array.isArray(result.warnings));
   }
   const workerURLs = await page.evaluate(() => globalThis.__excelWorkerURLs);
-  assert.equal(workerURLs.length, 2, 'Both formats must use a real browser Worker');
+  assert.equal(workerURLs.length, 3, 'Both formats and the large document must use real browser Workers');
   for (const worker of workerURLs) {
     const url = new URL(worker.url);
     assert.equal(url.origin, origin, 'Worker URL must resolve to the page origin');

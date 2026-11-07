@@ -62,7 +62,7 @@ function passages(text: string, size: ChunkSize): string[] {
 
 /** Every chunk is a contiguous passage from the source, including its wording and punctuation. */
 export function splitKnowledgeText(text: string, strategy: KnowledgeChunkStrategy): KnowledgeChunkDraft[] {
-  if (typeof text !== 'string' || text.length > KNOWLEDGE_TEXT_LIMIT) throw new Error('知识正文最多支持 80,000 字符，请拆分文档后导入。');
+  if (typeof text !== 'string' || text.length > KNOWLEDGE_TEXT_LIMIT) throw new Error(`知识正文最多支持 ${KNOWLEDGE_TEXT_LIMIT.toLocaleString('en-US')} 字符，请拆分文档后导入。`);
   if (strategy !== 'flat' && strategy !== 'parent-child') throw new Error('不支持的知识分段方式。');
   const result: KnowledgeChunkDraft[] = [];
   const append = (kind: KnowledgeChunkDraft['kind'], content: string, heading: string, parentOrdinal: number | null) => {

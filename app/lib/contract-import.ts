@@ -1,13 +1,16 @@
 /** Contract files stay in the browser. Only the explicitly extracted text is sent for review. */
 export interface ImportedContract {text:string;fileName:string;format:'txt'|'docx'|'pdf';pages?:number;warnings:string[];}
+export interface ContractImportOptions {textLimit?:number;docxXmlLimit?:number;}
 export const CONTRACT_FILE_LIMIT=10*1024*1024;
 export const CONTRACT_TEXT_LIMIT=80_000;
 const XML_LIMIT=2*1024*1024;
 
-function checkedText(raw:string):string {
+const textLimitMessage=(textLimit:number)=>`合同文字超过 ${textLimit.toLocaleString('en-US')} 字符，请拆分合同后分别审核。`;
+
+function checkedText(raw:string,textLimit:number):string {
   const text=raw.replace(/^\uFEFF/,'').replace(/\r\n?/g,'\n').trim();
   if(!text)throw new Error('合同没有可读取的文字，请检查文件内容。');
-  if(text.length>CONTRACT_TEXT_LIMIT)throw new Error('合同文字超过 80,000 字符，请拆分合同后分别审核。');
+  if(text.length>textLimit)throw new Error(textLimitMessage(textLimit));
   if(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFD\uFFFE\uFFFF]/.test(text))throw new Error('文件包含二进制内容或编码乱码，请转换为 UTF-8 TXT 后重试。');
   const privateChars=(text.match(/[\uE000-\uF8FF]/g)||[]).length;
   if(privateChars>Math.max(2,text.length*.02))throw new Error('文件文字编码无法可靠识别，可能存在乱码。请复制可读文字或转换文件后重试。');
@@ -55,13 +58,13 @@ function zipParts(bytes:Uint8Array):ZipPart[] {
 
 const crcTable=Array.from({length:256},(_,value)=>{let c=value;for(let i=0;i<8;i++)c=(c&1)?0xedb88320^(c>>>1):c>>>1;return c>>>0;});
 function crc32(bytes:Uint8Array):number{let crc=0xffffffff;for(const b of bytes)crc=crcTable[(crc^b)&255]^(crc>>>8);return (crc^0xffffffff)>>>0;}
-async function inflatePart(bytes:Uint8Array,part:ZipPart):Promise<string> {
-  if(part.size>XML_LIMIT||part.size>Math.max(64*1024,part.compressed*200))throw new Error('DOCX 正文解压大小或压缩比异常，请拆分或重新导出文件。');
+async function inflatePart(bytes:Uint8Array,part:ZipPart,xmlLimit:number):Promise<string> {
+  if(part.size>xmlLimit||part.size>Math.max(64*1024,part.compressed*200))throw new Error('DOCX 正文解压大小或压缩比异常，请拆分或重新导出文件。');
   const input=bytes.subarray(part.offset,part.offset+part.compressed);let output:Uint8Array;
   if(part.method===0)output=input;
   else if(part.method===8){
     const {Inflate}=await import('fflate');const chunks:Uint8Array[]=[];let size=0;
-    const inflater=new Inflate(chunk=>{size+=chunk.length;if(size>XML_LIMIT||size>part.size)throw new Error('DOCX 正文解压大小异常，已停止读取。');chunks.push(chunk);});
+    const inflater=new Inflate(chunk=>{size+=chunk.length;if(size>xmlLimit||size>part.size)throw new Error('DOCX 正文解压大小异常，已停止读取。');chunks.push(chunk);});
     // Small input chunks bound the memory needed even when central-directory sizes are forged.
     for(let at=0;at<input.length;at+=1024)inflater.push(input.subarray(at,at+1024),at+1024>=input.length);
     output=new Uint8Array(size);let at=0;for(const chunk of chunks){output.set(chunk,at);at+=chunk.length;}
@@ -108,22 +111,22 @@ function wordText(xml:string):{text:string;revisions:boolean} {
   return {text:out.join('').replace(/[ \t]+\n/g,'\n').replace(/\n{3,}/g,'\n\n').trim(),revisions};
 }
 
-async function extractDocx(bytes:Uint8Array):Promise<{text:string;warnings:string[]}> {
+async function extractDocx(bytes:Uint8Array,textLimit:number,xmlLimit:number):Promise<{text:string;warnings:string[]}> {
   if(bytes[0]!==80||bytes[1]!==75)throw new Error('文件不是可读取的 DOCX，可能已加密或属于旧版 Word。请解除密码后另存为 DOCX。');
   const parts=zipParts(bytes),main=parts.find(part=>part.name==='word/document.xml');
   if(!main)throw new Error('DOCX 中没有找到合同正文，请检查文件格式。');
   const selected=[main,...parts.filter(part=>/^word\/(?:header\d*|footer\d*|footnotes|endnotes|comments)\.xml$/.test(part.name)).sort((a,b)=>a.name.localeCompare(b.name))];
   if(selected.length>64||selected.reduce((sum,part)=>sum+part.size,0)>8*1024*1024)throw new Error('DOCX 文字附件解压后过大，请拆分合同。');
   const blocks:string[]=[],warnings:string[]=[];let revisions=false;
-  for(const part of selected){const extracted=wordText(await inflatePart(bytes,part));if(part===main&&!extracted.text)throw new Error('DOCX 没有可读取的合同正文，可能是图片扫描件。请先 OCR 或补充正文。');revisions||=extracted.revisions;if(extracted.text)blocks.push(part===main?extracted.text:`【${part.name.includes('header')?'页眉':part.name.includes('footer')?'页脚':part.name.includes('comments')?'批注':part.name.includes('endnotes')?'尾注':'脚注'}】\n${extracted.text}`);}
+  for(const part of selected){const extracted=wordText(await inflatePart(bytes,part,xmlLimit));if(part===main&&!extracted.text)throw new Error('DOCX 没有可读取的合同正文，可能是图片扫描件。请先 OCR 或补充正文。');revisions||=extracted.revisions;if(extracted.text)blocks.push(part===main?extracted.text:`【${part.name.includes('header')?'页眉':part.name.includes('footer')?'页脚':part.name.includes('comments')?'批注':part.name.includes('endnotes')?'尾注':'脚注'}】\n${extracted.text}`);}
   if(revisions)warnings.push('合同含有修订记录；删除修订已以文字标识保留，请确认最终生效版本。');
   if(parts.some(part=>/^word\/(?:media|embeddings)\//.test(part.name)))warnings.push('图片、扫描附件和嵌入对象没有可提取的文字，请补充其正文后再判断相关条款。');
-  return {text:checkedText(blocks.join('\n\n')),warnings};
+  return {text:checkedText(blocks.join('\n\n'),textLimit),warnings};
 }
 
 interface TextPdfPage {getTextContent():Promise<{items:Array<{str?:string;hasEOL?:boolean}|unknown>}>;cleanup():void;}
 export interface ContractTextPdf {numPages:number;getPage(page:number):Promise<TextPdfPage>;}
-export async function collectContractPdfText(document:ContractTextPdf):Promise<{text:string;pages:number;warnings:string[]}> {
+export async function collectContractPdfText(document:ContractTextPdf,{textLimit=CONTRACT_TEXT_LIMIT}:Pick<ContractImportOptions,'textLimit'>={}):Promise<{text:string;pages:number;warnings:string[]}> {
   if(!Number.isInteger(document.numPages)||document.numPages<1||document.numPages>200)throw new Error('PDF 最多支持 200 页，请拆分后分别审核。');
   const blocks:string[]=[],sparse:number[]=[];let characters=0;
   for(let number=1;number<=document.numPages;number++){
@@ -131,18 +134,18 @@ export async function collectContractPdfText(document:ContractTextPdf):Promise<{
     try{
       const content=await page.getTextContent();const text=content.items.map(item=>{if(!item||typeof item!=='object'||!('str' in item)||typeof item.str!=='string')return '';return item.str+('hasEOL' in item&&item.hasEOL?'\n':' ');}).join('').replace(/[ \t]+\n/g,'\n').trim();
       if(!text)throw new Error(`PDF 第 ${number} 页没有可提取的文字，可能是扫描件或空白页。请先 OCR 或移除空白页后重试；本次不会审核不完整合同。`);
-      checkedText(text);if(text.replace(/\s/g,'').length<20)sparse.push(number);
+      checkedText(text,textLimit);if(text.replace(/\s/g,'').length<20)sparse.push(number);
       const block=`【第 ${number} 页】\n${text}`;characters+=block.length+(blocks.length?2:0);
-      if(characters>CONTRACT_TEXT_LIMIT)throw new Error('合同文字超过 80,000 字符，请拆分合同后分别审核。');
+      if(characters>textLimit)throw new Error(textLimitMessage(textLimit));
       blocks.push(block);
     }finally{page.cleanup();}
   }
   const warnings=['PDF 仅提取可复制的文字层，图片内容、手写签名和批注不参与初审。'];
   if(sparse.length)warnings.push(`第 ${sparse.join('、')} 页可提取文字较少，请核对是否有扫描图片或遗漏内容。`);
-  return {text:checkedText(blocks.join('\n\n')),pages:document.numPages,warnings};
+  return {text:checkedText(blocks.join('\n\n'),textLimit),pages:document.numPages,warnings};
 }
 
-async function extractPdf(bytes:Uint8Array):Promise<{text:string;pages:number;warnings:string[]}> {
+async function extractPdf(bytes:Uint8Array,textLimit:number):Promise<{text:string;pages:number;warnings:string[]}> {
   if(!new TextDecoder().decode(bytes.subarray(0,1024)).includes('%PDF-'))throw new Error('文件不是有效的 PDF，请检查格式。');
   if(typeof window==='undefined')throw new Error('请在浏览器中导入 PDF。');
   const [pdf,worker,assets]=await Promise.all([import('pdfjs-dist'),import('pdfjs-dist/build/pdf.worker.min.mjs?url'),import('./contract-pdf-assets')]);
@@ -151,7 +154,7 @@ async function extractPdf(bytes:Uint8Array):Promise<{text:string;pages:number;wa
   let timeout:ReturnType<typeof setTimeout>|undefined;
   try{
     const result=await Promise.race([
-      task.promise.then(document=>collectContractPdfText(document)),
+      task.promise.then(document=>collectContractPdfText(document,{textLimit})),
       new Promise<never>((_,reject)=>{timeout=setTimeout(()=>{reject(new Error('PDF 读取超时，请拆分或转换为 TXT 后重试。'));void task.destroy().catch(()=>{});},45_000);}),
     ]);
     return result;
@@ -162,13 +165,13 @@ async function extractPdf(bytes:Uint8Array):Promise<{text:string;pages:number;wa
   }finally{if(timeout)clearTimeout(timeout);await task.destroy().catch(()=>{});}
 }
 
-export async function importContractFile(file:File):Promise<ImportedContract> {
+export async function importContractFile(file:File,{textLimit=CONTRACT_TEXT_LIMIT,docxXmlLimit=XML_LIMIT}:ContractImportOptions={}):Promise<ImportedContract> {
   if(!file.size)throw new Error('文件为空，请选择包含合同正文的文件。');
   if(file.size>CONTRACT_FILE_LIMIT)throw new Error('合同文件不能超过 10 MB，请压缩或拆分后重试。');
   const extension=file.name.split('.').pop()?.toLowerCase();
   if(!['txt','docx','pdf'].includes(extension||''))throw new Error('支持 TXT、DOCX 和可复制文字的 PDF；旧版 DOC 请另存为 DOCX。');
   const bytes=new Uint8Array(await file.arrayBuffer());
-  if(extension==='txt'){const result=decodeText(bytes);return {text:checkedText(result.text),warnings:result.warnings,fileName:file.name,format:'txt'};}
-  if(extension==='docx'){const result=await extractDocx(bytes);return {...result,fileName:file.name,format:'docx'};}
-  const result=await extractPdf(bytes);return {...result,fileName:file.name,format:'pdf'};
+  if(extension==='txt'){const result=decodeText(bytes);return {text:checkedText(result.text,textLimit),warnings:result.warnings,fileName:file.name,format:'txt'};}
+  if(extension==='docx'){const result=await extractDocx(bytes,textLimit,docxXmlLimit);return {...result,fileName:file.name,format:'docx'};}
+  const result=await extractPdf(bytes,textLimit);return {...result,fileName:file.name,format:'pdf'};
 }

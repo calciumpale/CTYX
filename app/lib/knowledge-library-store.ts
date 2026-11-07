@@ -1,18 +1,31 @@
 import { DomainError } from './domain.ts';
 import { tokenizeKnowledge } from './knowledge-library-chunks.ts';
 import { cosineSimilarity, validateVectors } from './talktrack-vectors.ts';
-import { KNOWLEDGE_SEARCHABLE_LIMIT, KNOWLEDGE_TEXT_LIMIT } from './knowledge-library-types.ts';
+import { KNOWLEDGE_CHUNK_LIMIT, KNOWLEDGE_SEARCHABLE_LIMIT, KNOWLEDGE_TEXT_LIMIT } from './knowledge-library-types.ts';
 import type { KnowledgeChunk, KnowledgeChunkDraft, KnowledgeChunkStrategy, KnowledgeDocument, KnowledgeHit, KnowledgeLibrary, KnowledgeLibrarySnapshot, KnowledgeRetrievalMode, KnowledgeSearchResult } from './knowledge-library-types.ts';
 
 interface DocumentRow { id:string;owner_id:string;library_id:string;title:string;file_name:string;strategy:KnowledgeChunkStrategy;status:KnowledgeDocument['status'];chunk_count:number;indexed_count:number;error:string|null;model_key:string|null;generation:number;dimension:number|null;index_token:string|null;index_until:string|null;updated_at:string }
 interface ChunkRow { id:string;owner_id:string;document_id:string;ordinal:number;parent_ordinal:number|null;kind:KnowledgeChunkDraft['kind'];text:string;heading:string;vector_json:string|null;vector_model:string|null }
+type PublicChunkRow=Pick<ChunkRow,'id'|'ordinal'|'parent_ordinal'|'kind'|'text'|'heading'>;
 interface CandidateRow extends ChunkRow {title:string;file_name:string;library_name:string;updated_at:string;context:string|null;rank?:number}
+type CandidateKey=Pick<CandidateRow,'id'|'document_id'|'ordinal'|'parent_ordinal'|'rank'>;
+interface ScanRow {id:string;title:string;heading:string;text:string;vector_json:string|null}
+// Keep each JSON binding well below D1's 2 MB string limit, including CJK UTF-8 expansion.
+function jsonPages(rows:unknown[]):string[]{
+ const pages:string[]=[],encoder=new TextEncoder();let items:string[]=[],bytes=2;
+ for(const row of rows){const item=JSON.stringify(row),size=encoder.encode(item).byteLength+1;
+  if(items.length&&bytes+size>750_000){pages.push(`[${items.join(',')}]`);items=[];bytes=2;}
+  items.push(item);bytes+=size;
+ }
+ if(items.length)pages.push(`[${items.join(',')}]`);return pages;
+}
 const stamp=()=>new Date().toISOString();
 const clean=(value:unknown,max:number,label:string)=>{if(typeof value!=='string'||!value.trim()||value.length>max||/[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(value))throw new DomainError(`${label}格式无效`);return value.trim();};
 const compact=(value:string)=>value.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]/gu,'');
-const publicChunk=(row:ChunkRow):KnowledgeChunk=>({id:row.id,ordinal:row.ordinal,parentOrdinal:row.parent_ordinal,kind:row.kind,text:row.text,heading:row.heading});
+const publicChunk=(row:PublicChunkRow):KnowledgeChunk=>({id:row.id,ordinal:row.ordinal,parentOrdinal:row.parent_ordinal,kind:row.kind,text:row.text,heading:row.heading});
 const publicDocument=(row:DocumentRow,modelKey?:string|null):KnowledgeDocument=>{const outdated=!!modelKey&&!!row.model_key&&row.model_key!==modelKey;return{id:row.id,libraryId:row.library_id,title:row.title,fileName:row.file_name,strategy:row.strategy,status:outdated?'pending':row.status,chunkCount:row.chunk_count,indexedCount:outdated?0:row.indexed_count,error:outdated?'向量模型已变化，请重新建立索引':row.error,updatedAt:row.updated_at};};
 const candidateSelect="SELECT c.id,c.owner_id,c.document_id,c.ordinal,c.parent_ordinal,c.kind,c.text,c.heading,d.title,d.file_name,d.updated_at,l.name AS library_name,p.text AS context FROM workbench_knowledge_chunks c JOIN workbench_knowledge_documents d ON d.id=c.document_id AND d.owner_id=c.owner_id JOIN workbench_knowledge_libraries l ON l.id=d.library_id AND l.owner_id=d.owner_id LEFT JOIN workbench_knowledge_chunks p ON p.owner_id=c.owner_id AND p.document_id=c.document_id AND p.ordinal=c.parent_ordinal AND p.kind='parent'";
+const candidateKeySelect='SELECT c.id,c.document_id,c.ordinal,c.parent_ordinal FROM workbench_knowledge_chunks c JOIN workbench_knowledge_documents d ON d.id=c.document_id AND d.owner_id=c.owner_id';
 
 export function createKnowledgeLibraryStore(db:D1Database,ownerId:string){
  if(!ownerId)throw new DomainError('请先登录',401);
@@ -27,20 +40,21 @@ export function createKnowledgeLibraryStore(db:D1Database,ownerId:string){
  async function renameLibrary(id:string,name:string){await ownLibrary(id);const normalized=clean(name,100,'知识库名称');const result=await db.prepare('UPDATE workbench_knowledge_libraries SET name=? WHERE owner_id=? AND id=?').bind(normalized,ownerId,id).run();if(!result.meta.changes)throw new DomainError('知识库不存在',404);}
  async function addDocument(input:{libraryId:string;title:string;fileName:string;strategy:KnowledgeChunkStrategy;chunks:KnowledgeChunkDraft[]}):Promise<KnowledgeDocument>{
   await ownLibrary(input.libraryId);const title=clean(input.title,200,'文档名称'),fileName=clean(input.fileName,255,'文件名');
-  if(!['flat','parent-child'].includes(input.strategy)||!Array.isArray(input.chunks)||!input.chunks.length||input.chunks.length>400)throw new DomainError('切分策略或片段数量无效，每份文档最多400个片段');
-  const ordinals=new Map<number,KnowledgeChunkDraft>();let size=0;
-  for(const chunk of input.chunks){if(!chunk||!Number.isSafeInteger(chunk.ordinal)||chunk.ordinal<0||ordinals.has(chunk.ordinal)||!['flat','parent','child'].includes(chunk.kind)||typeof chunk.heading!=='string'||chunk.heading.length>300)throw new DomainError('文档片段格式无效');clean(chunk.text,16000,'片段正文');size+=chunk.text.length;ordinals.set(chunk.ordinal,chunk);}
+  if(!['flat','parent-child'].includes(input.strategy)||!Array.isArray(input.chunks)||!input.chunks.length||input.chunks.length>KNOWLEDGE_CHUNK_LIMIT)throw new DomainError(`切分策略或片段数量无效，每份文档最多${KNOWLEDGE_CHUNK_LIMIT}个片段`);
+  const ordinals=new Map<number,KnowledgeChunkDraft>(),parentsWithChildren=new Set<number>();let size=0;
+  for(const chunk of input.chunks){if(!chunk||!Number.isSafeInteger(chunk.ordinal)||chunk.ordinal<0||ordinals.has(chunk.ordinal)||!['flat','parent','child'].includes(chunk.kind)||typeof chunk.heading!=='string'||chunk.heading.length>300)throw new DomainError('文档片段格式无效');clean(chunk.text,16000,'片段正文');size+=chunk.text.length;ordinals.set(chunk.ordinal,chunk);if(chunk.kind==='child'&&chunk.parentOrdinal!==null)parentsWithChildren.add(chunk.parentOrdinal);}
   if(size>KNOWLEDGE_TEXT_LIMIT*3)throw new DomainError('文档切分后的正文过长');
   for(const chunk of input.chunks){
    if(input.strategy==='flat'?(chunk.kind!=='flat'||chunk.parentOrdinal!==null):(chunk.kind==='flat'||chunk.kind==='parent'&&chunk.parentOrdinal!==null||chunk.kind==='child'&&(!Number.isSafeInteger(chunk.parentOrdinal)||ordinals.get(chunk.parentOrdinal!)?.kind!=='parent')))throw new DomainError('父子片段关系无效');
-   if(chunk.kind==='parent'&&!input.chunks.some(child=>child.kind==='child'&&child.parentOrdinal===chunk.ordinal))throw new DomainError('父片段缺少可检索的子片段');
+   if(chunk.kind==='parent'&&!parentsWithChildren.has(chunk.ordinal))throw new DomainError('父片段缺少可检索的子片段');
   }
   const id=`kd-${crypto.randomUUID()}`,time=stamp(),searchable=input.chunks.filter(chunk=>chunk.kind!=='parent');if(!searchable.length)throw new DomainError('文档没有可检索片段');
   const statements=[db.prepare("INSERT INTO workbench_knowledge_documents(id,owner_id,library_id,title,file_name,strategy,chunk_count,updated_at) SELECT ?,?,?,?,?,?,?,? WHERE EXISTS (SELECT 1 FROM workbench_knowledge_libraries WHERE owner_id=? AND id=?)").bind(id,ownerId,input.libraryId,title,fileName,input.strategy,searchable.length,time,ownerId,input.libraryId)];
-  for(const chunk of input.chunks){const chunkId=`kc-${crypto.randomUUID()}`;
-   statements.push(db.prepare('INSERT INTO workbench_knowledge_chunks(id,owner_id,document_id,ordinal,parent_ordinal,kind,text,heading) SELECT ?,?,?,?,?,?,?,? WHERE EXISTS (SELECT 1 FROM workbench_knowledge_documents WHERE owner_id=? AND id=?)').bind(chunkId,ownerId,id,chunk.ordinal,chunk.parentOrdinal,chunk.kind,chunk.text,chunk.heading,ownerId,id));
-   if(chunk.kind!=='parent')statements.push(db.prepare('INSERT INTO workbench_knowledge_fts(chunk_id,owner_id,tokens) SELECT ?,?,? WHERE EXISTS (SELECT 1 FROM workbench_knowledge_chunks WHERE owner_id=? AND id=?)').bind(chunkId,ownerId,tokenizeKnowledge(`${title} ${chunk.heading} ${chunk.text}`,{unique:false}).join(' '),ownerId,chunkId));
-  }
+  const chunkRows=input.chunks.map(chunk=>({id:`kc-${crypto.randomUUID()}`,ordinal:chunk.ordinal,parentOrdinal:chunk.parentOrdinal,kind:chunk.kind,text:chunk.text,heading:chunk.heading}));
+  for(const page of jsonPages(chunkRows))statements.push(db.prepare("INSERT INTO workbench_knowledge_chunks(id,owner_id,document_id,ordinal,parent_ordinal,kind,text,heading) SELECT json_extract(j.value,'$.id'),?,?,json_extract(j.value,'$.ordinal'),json_extract(j.value,'$.parentOrdinal'),json_extract(j.value,'$.kind'),json_extract(j.value,'$.text'),json_extract(j.value,'$.heading') FROM json_each(?) j WHERE EXISTS (SELECT 1 FROM workbench_knowledge_documents WHERE owner_id=? AND id=?)").bind(ownerId,id,page,ownerId,id));
+  const indexRows=chunkRows.filter(chunk=>chunk.kind!=='parent').map(chunk=>({id:chunk.id,tokens:tokenizeKnowledge(`${title} ${chunk.heading} ${chunk.text}`,{unique:false}).join(' ')}));
+  for(const page of jsonPages(indexRows))statements.push(db.prepare("INSERT INTO workbench_knowledge_fts(chunk_id,owner_id,tokens) SELECT json_extract(j.value,'$.id'),?,json_extract(j.value,'$.tokens') FROM json_each(?) j WHERE EXISTS (SELECT 1 FROM workbench_knowledge_chunks c WHERE c.owner_id=? AND c.document_id=? AND c.id=json_extract(j.value,'$.id'))").bind(ownerId,page,ownerId,id));
+  // D1 batches are transactional: chunks and FTS become visible together, or all are rolled back.
   await db.batch(statements);return publicDocument(await ownDocument(id));
  }
  async function removeDocument(id:string){await ownDocument(id);await db.batch([
@@ -48,7 +62,7 @@ export function createKnowledgeLibraryStore(db:D1Database,ownerId:string){
   db.prepare('DELETE FROM workbench_knowledge_chunks WHERE owner_id=? AND document_id=?').bind(ownerId,id),
   db.prepare('DELETE FROM workbench_knowledge_documents WHERE owner_id=? AND id=?').bind(ownerId,id),
  ]);}
- async function chunks(id:string):Promise<KnowledgeChunk[]>{await ownDocument(id);const rows=await db.prepare('SELECT * FROM workbench_knowledge_chunks WHERE owner_id=? AND document_id=? ORDER BY ordinal').bind(ownerId,id).all<ChunkRow>();return rows.results.map(publicChunk);}
+ async function chunks(id:string):Promise<KnowledgeChunk[]>{await ownDocument(id);const rows=await db.prepare('SELECT id,ordinal,parent_ordinal,kind,text,heading FROM workbench_knowledge_chunks WHERE owner_id=? AND document_id=? ORDER BY ordinal').bind(ownerId,id).all<PublicChunkRow>();return rows.results.map(publicChunk);}
 
  async function indexDocument(id:string,modelKey:string,embed:(texts:string[])=>Promise<number[][]>):Promise<KnowledgeDocument>{
   clean(modelKey,1024,'向量模型标识');let row=await ownDocument(id);const switched=row.model_key!==modelKey;
@@ -77,18 +91,18 @@ export function createKnowledgeLibraryStore(db:D1Database,ownerId:string){
  async function search(input:{query:string;libraryId?:string;mode:KnowledgeRetrievalMode;modelKey?:string;embed?:()=>Promise<number[]>;limit?:number}):Promise<KnowledgeSearchResult>{
   const query=clean(input.query,2000,'检索问题');if(!['hybrid','bm25','vector'].includes(input.mode))throw new DomainError('检索方式无效');if(input.libraryId)await ownLibrary(input.libraryId);
   const limit=Math.max(1,Math.min(20,Math.trunc(input.limit||5))),values=[ownerId,...(input.libraryId?[input.libraryId]:[])],scope=`c.owner_id=?${input.libraryId?' AND d.library_id=?':''} AND c.kind!='parent'`;
-  const corpusSelect=input.mode==='vector'?'SELECT c.id,c.document_id,c.ordinal,c.parent_ordinal FROM workbench_knowledge_chunks c JOIN workbench_knowledge_documents d ON d.id=c.document_id AND d.owner_id=c.owner_id':candidateSelect;
-  const corpus=(await db.prepare(`${corpusSelect} WHERE ${scope} ORDER BY d.updated_at DESC,c.document_id,c.ordinal LIMIT ?`).bind(...values,KNOWLEDGE_SEARCHABLE_LIMIT+1).all<CandidateRow>()).results;
-  const notices:string[]=[];if(corpus.length>KNOWLEDGE_SEARCHABLE_LIMIT)notices.push('当前范围超过1000个检索片段，向量和精确词匹配仅扫描最近1000个；可选择单个知识库缩小范围');
+  // Hold only lightweight keys for the corpus and FTS rankings; text and vectors are paged below.
+  const corpus=(await db.prepare(`${candidateKeySelect} WHERE ${scope} ORDER BY d.updated_at DESC,c.document_id,c.ordinal LIMIT ?`).bind(...values,KNOWLEDGE_SEARCHABLE_LIMIT+1).all<CandidateKey>()).results;
+  const notices:string[]=[];if(corpus.length>KNOWLEDGE_SEARCHABLE_LIMIT)notices.push(`当前范围超过${KNOWLEDGE_SEARCHABLE_LIMIT}个检索片段，向量和精确词匹配仅扫描最近${KNOWLEDGE_SEARCHABLE_LIMIT}个；可选择单个知识库缩小范围`);
   const candidates=new Map(corpus.slice(0,KNOWLEDGE_SEARCHABLE_LIMIT).map(row=>[row.id,row])),lexical=new Map<string,number>(),dense=new Map<string,number>();
-  let mode=input.mode;
+  const exactMatches=new Set<string>(),needle=compact(query);let mode=input.mode,queryVector:number[]|undefined;
   if(input.mode!=='vector'){
    const tokens=[...new Set(tokenizeKnowledge(query))].slice(0,64),expression=tokens.map(token=>`"${token.replaceAll('"','""')}"`).join(' OR ');
    if(expression){
-    const fts=(await db.prepare(`${candidateSelect.replace('SELECT c.id','SELECT -bm25(workbench_knowledge_fts) AS rank,c.id')} JOIN workbench_knowledge_fts ON workbench_knowledge_fts.chunk_id=c.id AND workbench_knowledge_fts.owner_id=c.owner_id WHERE workbench_knowledge_fts MATCH ? AND ${scope} ORDER BY bm25(workbench_knowledge_fts),c.id LIMIT ?`).bind(expression,...values,KNOWLEDGE_SEARCHABLE_LIMIT).all<CandidateRow>()).results;
+    // CROSS JOIN keeps FTS as the outer scan; otherwise SQLite may repeat MATCH for every chunk.
+    const fts=(await db.prepare(`SELECT -bm25(workbench_knowledge_fts) AS rank,c.id,c.document_id,c.ordinal,c.parent_ordinal FROM workbench_knowledge_fts CROSS JOIN workbench_knowledge_chunks c ON c.id=workbench_knowledge_fts.chunk_id AND c.owner_id=workbench_knowledge_fts.owner_id JOIN workbench_knowledge_documents d ON d.id=c.document_id AND d.owner_id=c.owner_id WHERE workbench_knowledge_fts MATCH ? AND ${scope} ORDER BY bm25(workbench_knowledge_fts),c.id LIMIT ?`).bind(expression,...values,KNOWLEDGE_SEARCHABLE_LIMIT).all<CandidateKey>()).results;
     for(const row of fts){candidates.set(row.id,row);lexical.set(row.id,row.rank??0);}
    }
-   const needle=compact(query);for(const row of candidates.values())if(needle&&compact(`${row.title} ${row.heading} ${row.text}`).includes(needle)&&!lexical.has(row.id))lexical.set(row.id,0);
   }
   if(input.mode!=='bm25'){
    if(!input.modelKey||!input.embed){notices.push('未配置向量服务，请在设置中配置并建立文档向量索引');if(input.mode==='hybrid')mode='bm25';}
@@ -96,21 +110,38 @@ export function createKnowledgeLibraryStore(db:D1Database,ownerId:string){
     const indexed=await db.prepare(`SELECT COUNT(*) AS total FROM workbench_knowledge_chunks c JOIN workbench_knowledge_documents d ON d.id=c.document_id AND d.owner_id=c.owner_id WHERE ${scope} AND c.vector_model=? AND d.model_key=? AND c.vector_json IS NOT NULL`).bind(...values,input.modelKey,input.modelKey).first<{total:number}>();
     if(!indexed?.total){notices.push('当前模型尚无可用文档向量，请建立或重建索引');if(input.mode==='hybrid')mode='bm25';}
     else try{
-    const queryVector=validateVectors([await input.embed()],1)[0];const ids=corpus.slice(0,KNOWLEDGE_SEARCHABLE_LIMIT).map(row=>row.id);let incompatible=false;
-    // Read vectors in small pages; 1000 large JSON vectors must not accumulate in worker memory.
-    for(let at=0;at<ids.length;at+=40){const batch=ids.slice(at,at+40);const vectors=await db.prepare(`SELECT c.id,c.vector_json FROM workbench_knowledge_chunks c JOIN workbench_knowledge_documents d ON d.id=c.document_id AND d.owner_id=c.owner_id WHERE c.owner_id=? AND c.vector_model=? AND d.model_key=? AND c.id IN (${batch.map(()=>'?').join(',')}) AND c.vector_json IS NOT NULL`).bind(ownerId,input.modelKey,input.modelKey,...batch).all<{id:string;vector_json:string}>();
-     for(const row of vectors.results){try{const score=cosineSimilarity(queryVector,JSON.parse(row.vector_json));if(score>0.15)dense.set(row.id,score);}catch{incompatible=true;}}
-    }
-    if(incompatible)notices.push('部分片段的向量维度不一致，请重建相应文档索引');
+    queryVector=validateVectors([await input.embed()],1)[0];
     if(indexed.total<corpus.length)notices.push('部分文档的向量尚未就绪；已完成片段可参与向量检索，关键词检索不受影响');
-    }catch{dense.clear();notices.push('向量服务暂不可用，请检查配置后重试');if(input.mode==='hybrid')mode='bm25';}
+    }catch{notices.push('向量服务暂不可用，请检查配置后重试');if(input.mode==='hybrid')mode='bm25';}
    }
   }
-  const exact=(id:string)=>{const row=candidates.get(id)!;const needle=compact(query);return needle&&compact(`${row.title} ${row.heading} ${row.text}`).includes(needle)?1:0;};
+  const ids=corpus.slice(0,KNOWLEDGE_SEARCHABLE_LIMIT).map(row=>row.id);let incompatible=false;
+  if(input.mode!=='vector'||queryVector)try{
+   // Four 40-row SELECTs per request: 6000 vectors fit the free-tier 50-query budget,
+   // while even 8192-dimensional vectors stay below D1's 50 MB response limit.
+   for(let at=0;at<ids.length;at+=160){
+    const statements=[];
+    for(let page=at;page<Math.min(at+160,ids.length);page+=40){const batch=ids.slice(page,page+40);
+     const textFields=input.mode==='vector'?"'' AS title,'' AS heading,'' AS text":'d.title,c.heading,c.text';
+     const vectorField=queryVector?'CASE WHEN c.vector_model=? AND d.model_key=? THEN c.vector_json END':'NULL';
+     statements.push(db.prepare(`SELECT c.id,${textFields},${vectorField} AS vector_json FROM workbench_knowledge_chunks c JOIN workbench_knowledge_documents d ON d.id=c.document_id AND d.owner_id=c.owner_id WHERE c.owner_id=? AND c.id IN (${batch.map(()=>'?').join(',')})`).bind(...(queryVector?[input.modelKey!,input.modelKey!]:[]),ownerId,...batch));
+    }
+    const pages=await db.batch<ScanRow>(statements);
+    for(const page of pages)for(const row of page.results){
+     if(input.mode!=='vector'&&needle&&compact(`${row.title} ${row.heading} ${row.text}`).includes(needle)){exactMatches.add(row.id);if(!lexical.has(row.id))lexical.set(row.id,0);}
+     if(queryVector&&row.vector_json)try{const score=cosineSimilarity(queryVector,JSON.parse(row.vector_json));if(score>0.15)dense.set(row.id,score);}catch{incompatible=true;}
+    }
+   }
+  }catch(error){
+   if(!queryVector)throw error;
+   dense.clear();notices.push('向量检索暂不可用，请检查配置后重试');if(input.mode==='hybrid')mode='bm25';
+  }
+  if(incompatible)notices.push('部分片段的向量维度不一致，请重建相应文档索引');
+  const exact=(id:string)=>exactMatches.has(id)?1:0;
   const keywordOrder=[...lexical].sort((a,b)=>exact(b[0])-exact(a[0])||b[1]-a[1]||a[0].localeCompare(b[0])).map(([id])=>id),vectorOrder=[...dense].sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0])).map(([id])=>id);
   const scores=new Map<string,number>();for(const order of mode==='bm25'?[keywordOrder]:mode==='vector'?[vectorOrder]:[keywordOrder,vectorOrder])order.forEach((id,i)=>scores.set(id,(scores.get(id)??0)+1/(60+i+1)));
   const selected:string[]=[],parents=new Set<string>();for(const [id] of [...scores].sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0]))){const row=candidates.get(id)!;const key=`${row.document_id}:${row.parent_ordinal??row.ordinal}`;if(parents.has(key))continue;parents.add(key);selected.push(id);if(selected.length>=limit)break;}
-  // Pure vector retrieval loads only winning text; this also removes concurrently deleted documents.
+  // Load full text and parent context only for winners; exclude concurrently deleted documents.
   const current=selected.length?(await db.prepare(`${candidateSelect} WHERE ${scope} AND c.id IN (${selected.map(()=>'?').join(',')})`).bind(...values,...selected).all<CandidateRow>()).results:[];
   const rows=new Map(current.map(row=>[row.id,row]));const hits:KnowledgeHit[]=selected.flatMap(id=>{const row=rows.get(id);return row?[{id:row.id,documentId:row.document_id,title:row.title,libraryName:row.library_name,fileName:row.file_name,heading:row.heading,ordinal:row.ordinal,matchedText:row.text,context:row.context??row.text,parent:row.parent_ordinal!==null,updatedAt:row.updated_at,bm25:lexical.get(id)??null,vector:dense.get(id)??null}]:[];});
   return{hits,mode,notice:notices.join('；')||null};

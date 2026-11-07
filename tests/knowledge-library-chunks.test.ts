@@ -54,7 +54,7 @@ test('page markers locate PDF evidence and code fences do not invent headings', 
   assert.equal(chunks.length, 2); assert.equal(chunks[0].heading, '【第 1 页】'); assert.equal(chunks[1].heading, '【第 2 页】');
   assert.ok(chunks[0].text.includes('# 这行是代码'));
   assert.deepEqual(splitKnowledgeText(' \n ', 'flat'), []);
-  assert.throws(() => splitKnowledgeText('字'.repeat(80_001), 'flat'), /80,000|80000/);
+  assert.throws(() => splitKnowledgeText('字'.repeat(1_000_001), 'flat'), /1,000,000|1000000/);
 });
 
 test('document and query tokenization normalize model IDs and retain Chinese fallback phrases', () => {
@@ -75,4 +75,28 @@ test('corpus tokens preserve actual term frequency without duplicating overlappi
   assert.equal(corpus.filter(token => token === 'ab12').length, 2);
   assert.deepEqual(tokenizeKnowledge(text), [...new Set(corpus)]);
   assert.deepEqual(tokenizeKnowledge('价格', { unique: false }), ['价格']);
+});
+
+
+test('million-character documents retain their tail in both split strategies',()=>{
+ const source='资料正文。'.repeat(199_996)+'尾部唯一标记。';
+ assert.ok(source.length>999_000&&source.length<=1_000_000);
+ for(const strategy of ['flat','parent-child'] as const){
+  const chunks=splitKnowledgeText(source,strategy);
+  assert.ok(chunks.length>400);assert.ok(chunks.length<=6000);
+  assert.ok(chunks.some(c=>c.text.endsWith('尾部唯一标记。')));
+  for(const child of chunks.filter(c=>c.kind==='child'))assert.ok(chunks.find(c=>c.ordinal===child.parentOrdinal)?.text.includes(child.text));
+ }
+});
+
+
+test('upload JSON accepts the full UTF-8 and escaped knowledge capacity and keeps a bounded request size',async()=>{
+ const {readMeetingBody}=await import('../app/lib/meeting-import-validation.ts');
+ const {KNOWLEDGE_REQUEST_LIMIT,KNOWLEDGE_TEXT_LIMIT}=await import('../app/lib/knowledge-library-types.ts');
+ for(const value of ['汉'.repeat(KNOWLEDGE_TEXT_LIMIT),'\\'.repeat(KNOWLEDGE_TEXT_LIMIT)]){
+  const request=new Request('https://workbench.test/api/knowledge-library',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'upload',text:value})});
+  const input=await readMeetingBody(request,KNOWLEDGE_REQUEST_LIMIT);assert.equal(input.text,value);
+ }
+ const tooBig=new Request('https://workbench.test/api/knowledge-library',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:'x'.repeat(KNOWLEDGE_REQUEST_LIMIT)})});
+ await assert.rejects(readMeetingBody(tooBig,KNOWLEDGE_REQUEST_LIMIT),{status:413});
 });

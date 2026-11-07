@@ -12,6 +12,7 @@ import './knowledge-libraries.css';
 
 const endpoint = '/api/knowledge-library';
 const titleLimit = 150;
+const previewPageSize = 40;
 const strategies: Record<KnowledgeChunkStrategy, { name: string; detail: string }> = {
   flat: { name: '普通分块', detail: '把资料切成独立片段，直接检索并返回命中的片段。' },
   'parent-child': { name: '父子分块', detail: '用较小的子块检索，命中后返回所在父块，保留上下文。' },
@@ -46,6 +47,7 @@ export function KnowledgeLibraries({ notify }: { notify: (message: string) => vo
   const [draft, setDraft] = useState<ImportDraft>(emptyDraft);
   const [importMode, setImportMode] = useState<'file' | 'text'>('file');
   const [chunks, setChunks] = useState<KnowledgeChunk[]>([]);
+  const [previewPage, setPreviewPage] = useState(0);
   const [query, setQuery] = useState('');
   const [scope, setScope] = useState('');
   const [mode, setMode] = useState<KnowledgeRetrievalMode>('hybrid');
@@ -195,7 +197,7 @@ export function KnowledgeLibraries({ notify }: { notify: (message: string) => vo
     }, true);
   }
   function preview(document: KnowledgeDocument) {
-    setChunks([]);
+    setChunks([]);setPreviewPage(0);
     openDialog({ kind: 'preview', document });
     void run('preview', async signal => {
       const result = await request<{ chunks: KnowledgeChunk[] }>(signal, undefined, new URLSearchParams({ documentId: document.id }).toString());
@@ -272,7 +274,7 @@ export function KnowledgeLibraries({ notify }: { notify: (message: string) => vo
       {dialog.kind === 'upload' && <form className="knowledge-form" onSubmit={saveDocument}>
         <p className="knowledge-dialog-description">{current?.name} · 保存解析正文和文件名</p>
         <div className="knowledge-local-tabs" aria-label="资料来源"><button type="button" aria-pressed={importMode === 'file'} disabled={Boolean(busy)} onClick={() => { setImportMode('file'); setDraft(previous => ({ ...previous, text: '', fileName: '', warnings: [] })); setDialogError(''); }}><Upload size={15} />上传文件</button><button type="button" aria-pressed={importMode === 'text'} disabled={Boolean(busy)} onClick={() => { setImportMode('text'); setDraft(previous => ({ ...previous, text: '', fileName: '', warnings: [] })); setDialogError(''); }}><FileText size={15} />粘贴文本</button></div>
-        {importMode === 'file' ? <label>选择文档<input type="file" accept={KNOWLEDGE_UPLOAD_ACCEPT} disabled={Boolean(busy)} onChange={event => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ''; readFile(file); }} /><small>Excel（XLSX / XLS）/ PDF / DOCX / TXT / Markdown / CSV · 最大 10 MB</small>{busy === 'parse' ? <small role="status">正在解析文件…</small> : draft.fileName && <small role="status">{draft.fileName} · 已提取 {draft.text.length.toLocaleString()} 字符</small>}</label> :
+        {importMode === 'file' ? <label>选择文档<input type="file" accept={KNOWLEDGE_UPLOAD_ACCEPT} disabled={Boolean(busy)} onChange={event => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ''; readFile(file); }} /><small>Excel（XLSX / XLS）/ PDF / DOCX / TXT / Markdown / CSV · 最大 10 MB · 正文最多 100 万字符</small>{busy === 'parse' ? <small role="status">正在解析文件…</small> : draft.fileName && <small role="status">{draft.fileName} · 已提取 {draft.text.length.toLocaleString()} 字符</small>}</label> :
           <label>正文<textarea rows={6} maxLength={KNOWLEDGE_TEXT_LIMIT} value={draft.text} onChange={event => setDraft(previous => ({ ...previous, text: event.target.value }))} disabled={Boolean(busy)} required placeholder="粘贴政策、话术或说明正文" /><small>{draft.text.length.toLocaleString()} / {KNOWLEDGE_TEXT_LIMIT.toLocaleString()} 字符</small></label>}
         {draft.warnings.map(warning => <p key={warning} className="knowledge-feedback"><CircleAlert size={16} />{warning}</p>)}
         <label>资料标题<input value={draft.title} maxLength={titleLimit} onChange={event => setDraft(previous => ({ ...previous, title: event.target.value }))} disabled={Boolean(busy)} required /></label>
@@ -280,7 +282,8 @@ export function KnowledgeLibraries({ notify }: { notify: (message: string) => vo
         <div className="knowledge-actions knowledge-dialog-actions"><button type="button" className="button secondary" disabled={Boolean(busy)} onClick={closeDialog}>取消</button><button className="button primary" disabled={Boolean(busy) || !draft.title.trim() || !draft.text.trim() || (importMode === 'file' && !draft.fileName)}>{busy === 'upload' ? '正在导入…' : '导入资料'}</button></div>
       </form>}
       {dialog.kind === 'preview' && <div className="knowledge-preview"><p className="knowledge-dialog-description">{dialog.document.title} · {strategies[dialog.document.strategy].name} · {dialog.document.chunkCount} 个可检索切片</p>
-        {busy === 'preview' ? <p className="knowledge-feedback" role="status"><Loader2 size={17} className="spin" />正在读取切片…</p> : chunks.length ? chunks.map((chunk, index) => <details key={chunk.id} open={index === 0 || undefined}><summary><ChevronRight size={16} /><span>切片 {chunk.ordinal} · {chunkLabels[chunk.kind]}{chunk.heading ? ' · ' + chunk.heading : ''}{chunk.parentOrdinal !== null ? ' · 父块 ' + chunk.parentOrdinal : ''}</span></summary><p>{chunk.text}</p></details>) : !dialogError && <p>暂无可预览切片。</p>}
+        {busy === 'preview' ? <p className="knowledge-feedback" role="status"><Loader2 size={17} className="spin" />正在读取切片…</p> : chunks.length ? chunks.slice(previewPage * previewPageSize, (previewPage + 1) * previewPageSize).map((chunk, index) => <details key={chunk.id} open={index === 0 || undefined}><summary><ChevronRight size={16} /><span>切片 {chunk.ordinal} · {chunkLabels[chunk.kind]}{chunk.heading ? ' · ' + chunk.heading : ''}{chunk.parentOrdinal !== null ? ' · 父块 ' + chunk.parentOrdinal : ''}</span></summary><p>{chunk.text}</p></details>) : !dialogError && <p>暂无可预览切片。</p>}
+        {chunks.length > previewPageSize && <nav className="knowledge-actions" aria-label="切片分页"><button type="button" className="button secondary" disabled={previewPage === 0} onClick={() => setPreviewPage(page => page - 1)}>上一页</button><span>第 {previewPage + 1} / {Math.ceil(chunks.length / previewPageSize)} 页</span><button type="button" className="button secondary" disabled={(previewPage + 1) * previewPageSize >= chunks.length} onClick={() => setPreviewPage(page => page + 1)}>下一页</button></nav>}
       </div>}
       {dialog.kind === 'remove' && <div className="knowledge-form"><p className="knowledge-dialog-description">删除「{dialog.document.title}」后，正文、切片及索引都会移除。这项操作无法撤销。</p><div className="knowledge-actions knowledge-dialog-actions"><button className="button secondary" data-dialog-initial-focus disabled={Boolean(busy)} onClick={closeDialog}>保留资料</button><button className="button danger" disabled={Boolean(busy)} onClick={() => removeDocument(dialog.document)}>{busy === 'remove' ? '正在删除…' : '确认删除'}</button></div></div>}
     </Overlay>}

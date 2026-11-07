@@ -52,7 +52,7 @@ test('empty, malformed, disguised, oversize and overlong workbooks fail without 
   await assert.rejects(importKnowledgeFile(new File(['A,B\n1,2'],'伪装.xlsx')),/Excel|XLSX|格式/);
   await assert.rejects(importKnowledgeFile(new File(['not an XLS'],'伪装.xls')),/Excel|XLS|格式/);
   await assert.rejects(importKnowledgeFile(new File([new Uint8Array(10*1024*1024+1)],'过大.xlsx')),/10\s?MB/);
-  await assert.rejects(importKnowledgeFile(file([['很长',XLSX.utils.aoa_to_sheet(Array.from({length:5},()=>['字'.repeat(20000)]))]])),/80,000|80000/);
+  await assert.rejects(importKnowledgeFile(file([['很长',XLSX.utils.aoa_to_sheet(Array.from({length:51},()=>['字'.repeat(20000)]))]])),/1,000,000|1000000/);
 });
 
 test('large sparse dimensions fail promptly without trusting workbook ranges or importing a prefix',async()=>{
@@ -70,14 +70,15 @@ test('both chunk strategies keep each worksheet as a separate retrievable source
   }
 });
 
-test('the cumulative 80,000 character boundary includes sheet, row and cell location metadata',async()=>{
-  const baseline=await importKnowledgeFile(file([['边界',XLSX.utils.aoa_to_sheet([['a','b','c']])]]));
-  const overhead=baseline.text.length-3;
-  const values=['界'.repeat(30000),'字'.repeat(30000),'末'.repeat(80000-overhead-60000)];
-  const exact=await importKnowledgeFile(file([['边界',XLSX.utils.aoa_to_sheet([values])]]));
-  assert.equal(exact.text.length,80000);assert.ok(exact.text.endsWith(values[2]));
-  values[2]+='超';
-  await assert.rejects(importKnowledgeFile(file([['边界',XLSX.utils.aoa_to_sheet([values])]])),/80,000|80000/);
+test('the cumulative million-character boundary includes sheet, row and cell location metadata',async()=>{
+  const empty=Array.from({length:34},()=>['a']);
+  const baseline=await importKnowledgeFile(file([['边界',XLSX.utils.aoa_to_sheet(empty)]]));
+  const overhead=baseline.text.length-34;
+  const rows=Array.from({length:33},()=>['界'.repeat(30000)]);rows.push(['末'.repeat(1_000_000-overhead-990_000)]);
+  const exact=await importKnowledgeFile(file([['边界',XLSX.utils.aoa_to_sheet(rows)]]));
+  assert.equal(exact.text.length,1_000_000);assert.ok(exact.text.endsWith(rows[33][0]));
+  rows[33][0]+='超';
+  await assert.rejects(importKnowledgeFile(file([['边界',XLSX.utils.aoa_to_sheet(rows)]])),/1,000,000|1000000/);
 });
 
 test('values hidden by an Excel number format are retained with a notice',async()=>{

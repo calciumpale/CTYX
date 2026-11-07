@@ -32,7 +32,7 @@ export async function extractKnowledgeExcel(bytes: Uint8Array, format: ExcelForm
   let characters=0,populated=0,formulas=false,missing=false,merged=false,hidden=false,errors=false,hiddenValues=false;
   const append = (text:string) => {
     characters += text.length + (blocks.length ? 1 : 0);
-    if (characters > KNOWLEDGE_TEXT_LIMIT) throw new Error('Excel 文字超过 80,000 字符，请拆分工作表后分别导入。');
+    if (characters > KNOWLEDGE_TEXT_LIMIT) throw new Error(`Excel 文字超过 ${KNOWLEDGE_TEXT_LIMIT.toLocaleString('en-US')} 字符，请拆分工作表后分别导入。`);
     blocks.push(text);
   };
   for (let index=0;index<book.SheetNames.length;index++) {

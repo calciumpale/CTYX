@@ -1,14 +1,17 @@
 'use client';
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type FormEvent } from 'react';
-import { AlertCircle, ArrowRight, CalendarDays, CalendarPlus, Check, CheckCircle2, ChevronLeft, ChevronRight, Clock3, ListTodo, Loader2, MapPin, Plus, RefreshCw, Send, Sparkles, Trash2, Undo2, Users, Video, X } from 'lucide-react';
+import { AlarmClock, AlertCircle, ArrowRight, CalendarDays, CalendarPlus, Check, CheckCircle2, ChevronLeft, ChevronRight, ClipboardCheck, Clock3, ListTodo, Loader2, MapPin, Plus, RefreshCw, Send, Sparkles, Trash2, Undo2, Users, X } from 'lucide-react';
 import type { MemberSession } from '../lib/member-types';
 import type { View, WorkbenchState } from '../lib/types';
 import type { ScheduleAction, ScheduleDraft, ScheduleItem, ScheduleKind, ScheduleList, ScheduleSuggestion, ScheduleUnscheduledPage } from '../lib/schedule-types';
 import { addCalendarDays, addCalendarMonths, calendarDateLabel, calendarRange, intervalLabel, occursOnDate, shanghaiDate, shanghaiInstant, shanghaiTime, type CalendarMode } from '../lib/schedule-calendar';
+import { deriveProjectReminders } from '../lib/workspace-reminders';
+import { urgencyLabel } from '../lib/project-deadline';
+import { useBusinessSettings } from './BusinessSettingsContext';
 import './schedule-workspace.css';
 
-type Props = { state: WorkbenchState; member: MemberSession; notify: (message: string) => void; onNavigate: (view: View, id?: string) => void; onBusyChange?: (busy: boolean) => void; onDirtyChange?: (dirty: boolean) => void };
+type Props = { state: WorkbenchState; member: MemberSession; notify: (message: string) => void; onNavigate: (view: View, id?: string) => void; onBusyChange?: (busy: boolean) => void; onDirtyChange?: (dirty: boolean) => void; pendingApprovals?: number };
 type Panel = 'editor' | 'assistant' | 'unscheduled' | null;
 type EditValues = { kind: ScheduleKind; title: string; date: string; startTime: string; endDate: string; endTime: string; allDay: boolean; unscheduled: boolean; dealId: string; location: string; notes: string };
 type Editor = { item: ScheduleItem | null; values: EditValues; baseline: string; requestId: string; sourceIndex: number | null };
@@ -19,6 +22,7 @@ const WEEKDAYS = ['周一', '周二', '周三', '周四', '周五', '周六', '�
 const statusLabel = { pending: '待完成', completed: '已完成', cancelled: '已取消' };
 const signature = (value: unknown) => JSON.stringify(value);
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : '操作未完成，请重试。';
+const reminderDeadlineFormat = new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
 class ScheduleClientError extends Error { constructor(message: string, public status: number) { super(message); } }
 async function body<T>(response: Response): Promise<T> {
   let value: T & { error?: string };
@@ -89,8 +93,11 @@ function useUnscheduledPage(kind: 'task' | 'visit', scope: 'mine' | 'team', refr
   return { ...(page.key === key ? page : emptyUnscheduled(key)), retry: () => void load(page.loaded && Boolean(page.nextCursor)), more: () => void load(true) };
 }
 
-export function ScheduleWorkspace({ state, member, notify, onNavigate, onBusyChange, onDirtyChange }: Props) {
+export function ScheduleWorkspace({ state, member, notify, onNavigate, onBusyChange, onDirtyChange, pendingApprovals = 0 }: Props) {
   const prefix = useId();
+  const { rules } = useBusinessSettings();
+  const [reminderNow, setReminderNow] = useState(() => Date.now());
+  const reminders = useMemo(() => deriveProjectReminders(state.deals, reminderNow, rules), [state.deals, reminderNow, rules]);
   const [today, setToday] = useState(() => shanghaiDate());
   const [anchor, setAnchor] = useState(() => shanghaiDate());
   const [mode, setMode] = useState<CalendarMode>('week');
@@ -142,8 +149,10 @@ export function ScheduleWorkspace({ state, member, notify, onNavigate, onBusyCha
     const media = window.matchMedia('(max-width: 760px)');
     const update = () => { if (!modeChosen.current) setMode(media.matches ? 'list' : 'week'); };
     update(); media.addEventListener('change', update);
-    const timer = window.setInterval(() => setToday(shanghaiDate()), 30_000);
-    return () => { media.removeEventListener('change', update); window.clearInterval(timer); };
+    const refreshDay = () => { setToday(shanghaiDate()); setReminderNow(Date.now()); };
+    const timer = window.setInterval(refreshDay, 30_000);
+    window.addEventListener('focus', refreshDay);
+    return () => { media.removeEventListener('change', update); window.clearInterval(timer); window.removeEventListener('focus', refreshDay); };
   }, []);
   useEffect(() => {
     if (member.role === 'admin') return;
@@ -255,11 +264,16 @@ export function ScheduleWorkspace({ state, member, notify, onNavigate, onBusyCha
     </button>;
   };
 
-  if (member.role === 'admin') return <section className="schedule-workspace"><h1>智能日程安排</h1><p>此功能仅对销售人员与销售管理者开放。</p></section>;
+  if (member.role === 'admin') return <section className="schedule-workspace"><h1>提醒及日程</h1><p>此功能仅对销售人员与销售管理者开放。</p></section>;
   return <section className={`schedule-workspace ${panel ? 'schedule-with-panel' : ''}`} aria-labelledby={`${prefix}-title`}>
-    <header className="schedule-heading"><div><h1 id={`${prefix}-title`}>智能日程安排</h1><p className="schedule-summary">{mode === 'month' ? `${anchor.slice(0, 4)}年${Number(anchor.slice(5, 7))}月` : `${calendarDateLabel(range.from, true)} — ${calendarDateLabel(addCalendarDays(range.to, -1))}`}<span className="schedule-summary-counts">今天 {loading || !counts ? '—' : counts.task} 个待办任务 · {loading || !counts ? '—' : counts.event} 场日程 · {loading || !counts ? '—' : counts.visit} 条拜访计划</span></p></div>
-      <div className="schedule-heading-actions"><button type="button" className="schedule-button" aria-expanded={panel === 'unscheduled'} onClick={() => guardEditor(() => { setEditor(null); openPanel(panel === 'unscheduled' ? null : 'unscheduled'); })}><CalendarPlus size={16} /><span>待安排拜访</span><span className="schedule-count">{pendingVisitCount ?? '—'}</span></button><button type="button" className="schedule-button schedule-primary" disabled={Boolean(busy)} onClick={() => openNew()}><Plus size={17} />新建</button></div>
+    <header className="schedule-heading"><div><h1 id={`${prefix}-title`}>提醒及日程</h1><p className="schedule-summary">{mode === 'month' ? `${anchor.slice(0, 4)}年${Number(anchor.slice(5, 7))}月` : `${calendarDateLabel(range.from, true)} — ${calendarDateLabel(addCalendarDays(range.to, -1))}`}<span className="schedule-summary-counts">今天 {loading || !counts ? '—' : counts.task} 个待办任务 · {loading || !counts ? '—' : counts.event} 场日程 · {loading || !counts ? '—' : counts.visit} 条拜访计划</span></p></div>
+      <div className="schedule-heading-actions">{member.role === 'manager' && <button type="button" className="schedule-button" onClick={() => onNavigate('reports')}>销售日报<ArrowRight size={15} /></button>}<button type="button" className="schedule-button" aria-expanded={panel === 'unscheduled'} onClick={() => guardEditor(() => { setEditor(null); openPanel(panel === 'unscheduled' ? null : 'unscheduled'); })}><CalendarPlus size={16} /><span>待安排拜访</span><span className="schedule-count">{pendingVisitCount ?? '—'}</span></button><button type="button" className="schedule-button schedule-primary" disabled={Boolean(busy)} onClick={() => openNew()}><Plus size={17} />新建</button></div>
     </header>
+
+    <section className="schedule-reminders" aria-labelledby={`${prefix}-reminders-title`}>
+      <div className="schedule-reminders-heading"><h2 id={`${prefix}-reminders-title`}><AlarmClock size={16} />项目截止提醒<span className="schedule-count">{reminders.counts.total}</span></h2><div>{reminders.counts.overdue > 0 && <span className="schedule-reminder-overdue-count">{reminders.counts.overdue} 项已逾期</span>}{member.role === 'manager' && pendingApprovals > 0 && <button type="button" className="schedule-button" onClick={() => onNavigate('approvals')}><ClipboardCheck size={15} />待审批<span className="schedule-count">{pendingApprovals}</span><ArrowRight size={14} /></button>}</div></div>
+      {reminders.items.length ? <ul className="schedule-reminder-list">{reminders.items.map(reminder => <li key={reminder.dealId}><button type="button" className="schedule-reminder" onClick={() => onNavigate('deals', reminder.dealId)}><span className={`schedule-reminder-status schedule-reminder-${reminder.urgency}`}>{urgencyLabel(reminder.urgency, rules)}</span><span className="schedule-reminder-content"><strong>{reminder.title}</strong>{reminder.company !== reminder.title && <span>{reminder.company}</span>}{reminder.nextAction && <span>{reminder.nextAction}</span>}</span><time dateTime={reminder.deadline}>{reminderDeadlineFormat.format(new Date(reminder.deadline))}</time><ArrowRight size={15} /></button></li>)}</ul> : <p className="schedule-no-reminders"><CheckCircle2 size={16} />近期没有项目截止提醒</p>}
+    </section>
 
     {pendingChange && <div className="schedule-inline-confirm" role="alert"><div><strong>放弃尚未保存的内容？</strong><p>当前修改尚未保存，继续操作会丢弃这些内容。</p></div><div className="schedule-actions"><button className="schedule-button" type="button" autoFocus onClick={() => { setPendingChange(null); if (panel === 'editor') titleInput.current?.focus(); else panelHeading.current?.focus(); }}>继续编辑</button><button className="schedule-button schedule-danger" type="button" onClick={() => { const next = pendingChange; setPendingChange(null); setUncertainCreate(false); next(); }}>放弃更改</button></div></div>}
     {undo && <div className="schedule-feedback" role="status"><span>已删除“{undo.title}”</span><button className="schedule-text-button" type="button" disabled={Boolean(busy)} onClick={() => void restoreItem()}><Undo2 size={14} />撤销</button><button type="button" className="schedule-icon-button" aria-label="关闭撤销提示" onClick={() => setUndo(null)}><X size={15} /></button></div>}
@@ -280,7 +294,7 @@ export function ScheduleWorkspace({ state, member, notify, onNavigate, onBusyCha
         </div>}
         {((currentData?.unscheduledCounts?.task ?? 0) > 0 || tasksOpen) && <details className="schedule-unscheduled-tasks" open={tasksOpen} onToggle={event => setTasksOpen(event.currentTarget.open)}><summary>未安排时间的任务 · {taskTotalCount ?? '—'}</summary><div className="schedule-unscheduled-list">{taskPage.items.map(item => itemCard(item))}{taskPage.loading && <p role="status">正在读取任务…</p>}{taskPage.error && <div className="schedule-error" role="alert"><span>{taskPage.error}</span><button className="schedule-text-button" type="button" onClick={taskPage.retry}>重试</button></div>}{!taskPage.loading && !taskPage.error && taskPage.loaded && taskPage.items.length === 0 && <p>暂无未安排时间的任务</p>}{taskPage.nextCursor && <button className="schedule-button" type="button" disabled={taskPage.loading} onClick={taskPage.more}>{taskPage.loading ? '正在读取…' : '加载更多任务'}</button>}</div></details>}
       </>}
-      <footer className="schedule-footer"><span>{!loading && !listError && !items.length ? `${filters.length ? '当前范围暂无安排' : '请选择查看类型'} · ` : ''}北京时间 · Asia/Shanghai{scope === 'team' ? ' · 团队成员记录仅可查看' : ''}</span><button type="button" className="schedule-text-button" onClick={() => onNavigate('meetings')}><Video size={14} />会议记录<ArrowRight size={13} /></button></footer>
+      <footer className="schedule-footer"><span>{!loading && !listError && !items.length ? `${filters.length ? '当前范围暂无安排' : '请选择查看类型'} · ` : ''}北京时间 · Asia/Shanghai{scope === 'team' ? ' · 团队成员记录仅可查看' : ''}</span></footer>
     </div>
 
     {panel && <aside className="schedule-panel" aria-labelledby={`${prefix}-panel-title`} onKeyDown={event => { if (event.key === 'Escape' && !busyRef.current) { event.stopPropagation(); closePanel(); } }}><div className="schedule-panel-heading"><h2 id={`${prefix}-panel-title`} ref={panelHeading} tabIndex={-1}>{panel === 'assistant' ? <><Sparkles size={17} />AI 日程助手</> : panel === 'unscheduled' ? <>待安排拜访<span className="schedule-count">{visitTotalCount ?? '—'}</span></> : editor?.item ? `${KIND[editor.values.kind]}详情` : '新建安排'}</h2><button type="button" className="schedule-icon-button" disabled={Boolean(busy)} aria-label="关闭详情面板" onClick={closePanel}><X size={18} /></button></div>

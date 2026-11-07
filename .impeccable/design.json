@@ -554,7 +554,7 @@
       "kind": "nav",
       "refersTo": "navigation-selected",
       "description": "通过中性背景与字重标识当前位置。",
-      "html": "<nav aria-label=\"业务导航\"><a class=\"ds-nav\" href=\"?view=prospecting\">抖音获客</a><a class=\"ds-nav\" aria-current=\"page\" href=\"?view=deals\">项目跟进</a><a class=\"ds-nav\" href=\"?view=training\">培训提升</a><a class=\"ds-nav\" href=\"?view=knowledge\">知识库</a></nav>",
+      "html": "<nav aria-label=\"业务导航\"><a class=\"ds-nav\" href=\"?view=prospecting\">社交平台获客</a><a class=\"ds-nav\" aria-current=\"page\" href=\"?view=deals\">项目跟进</a><a class=\"ds-nav\" href=\"?view=schedule\">提醒及日程</a><a class=\"ds-nav\" href=\"?view=contracts\">合同及审批</a><a class=\"ds-nav\" href=\"?view=training\">培训提升</a><a class=\"ds-nav\" href=\"?view=knowledge\">知识库</a></nav>",
       "css": ".ds-nav{display:flex;align-items:center;gap:12px;min-height:36px;border:0;border-radius:7px;padding:9px 12px;font-family:system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei\", sans-serif;font-size:13px;text-decoration:none;color:var(--cds-text-secondary, #62626b);background:transparent}.ds-nav:hover{background:var(--cds-fill-ghost-hover, #f3f3f5)}.ds-nav[aria-current=page]{background:var(--cds-fill-ghost-selected, #eaeaec);color:var(--cds-text-primary, #202024);font-weight:550}.ds-nav:focus-visible{outline:2px solid var(--cds-clay, #45454c);outline-offset:4px}"
     },
     {
@@ -616,7 +616,7 @@
       },
       {
         "name": "Navigation and Naming",
-        "body": "产品名称统一为营销工作台，不附加口号。业务主导航依次为抖音获客、项目跟进、日程、培训提升、知识库，主分类不加 AI 前缀。项目跟进组织项目列表、记录跟进、会议、审批、AI 合同初审和仅管理者可见的销售日报；概览通过品牌及项目子导航进入。人员权限、业务规则、服务连接、搭建中心和任务记录归入系统管理，保留现有岗位边界。具体能力使用 AI 客户洞察、AI 策略方案、AI 商机预测、AI 合同初审、AI 销售陪练、AI 会议纪要，内部 ID 不变。",
+        "body": "产品名称为营销工作台。业务主导航依次为社交平台获客、项目跟进、提醒及日程、合同及审批、培训提升、知识库。项目跟进使用企业通讯录、项目 AI 对话和画像三栏。社交平台获客分新建任务、筛选线索、留资对接，当前支持抖音。提醒归入日程；销售日报仅管理者可见。旧业务概览映射项目跟进，普通会议地址映射提醒及日程，腾讯嵌入地址保留。岗位权限和统一控件尺寸不变。",
         "section": "components"
       }
     ],

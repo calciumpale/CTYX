@@ -1,4 +1,4 @@
-.prospect-workspace { max-width: 1440px; margin: 0 auto; padding: 24px 28px 48px; color: var(--cds-text-primary); font-size: 13px; line-height: 1.6; }
+.prospect-workspace { display: grid; grid-template-columns: 220px minmax(0, 1fr); min-height: 100%; width: 100%; color: var(--cds-text-primary); font-size: 13px; line-height: 1.6; }
 .prospect-workspace *, .prospect-workspace *::before, .prospect-workspace *::after { box-sizing: border-box; min-width: 0; }
 .prospect-workspace h1, .prospect-workspace h2, .prospect-workspace h3, .prospect-workspace p { margin: 0; }
 .prospect-workspace h1 { font-size: 22px; line-height: 1.4; text-wrap: balance; }
@@ -144,8 +144,8 @@
 .prospect-jobs strong { font-weight: 500; }
 .prospect-jobs time { margin-left: auto; color: var(--cds-text-secondary); font-size: 12px; font-variant-numeric: tabular-nums; }
 .prospect-jobs p { margin-top: 8px; font-size: 13px; color: var(--cds-text-secondary); overflow-wrap: anywhere; }
-@media(max-width:1000px) { .prospect-workspace { padding: 30px 28px 52px; } .prospect-section-heading { flex-wrap: wrap; gap: 14px; } }
-@media(max-width:600px) { .prospect-workspace { padding: 26px 20px 40px; } .prospect-heading { gap: 14px; flex-wrap: wrap; } .prospect-heading h1 { font-size: 25px; } .prospect-path { gap: 12px 17px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); font-size: 12px; } .prospect-connection > summary { padding: 15px 13px; gap: 10px; } .prospect-connection-body { padding: 0 14px 18px; } .prospect-connect-form { flex-direction: column; align-items: stretch; } .prospect-connect-form .prospect-field { width: 100%; } .prospect-workspace textarea, .prospect-workspace input, .prospect-workspace select { font-size: 16px; } .prospect-credentials > textarea { font-size: 12px; } .prospect-task-picker { flex-wrap: wrap; gap: 7px; } .prospect-task-picker > label { width: 100%; } .prospect-campaign-summary { gap: 15px; flex-direction: column; } .prospect-number-fields { grid-template-columns: 1fr; gap: 20px; } .prospect-number-fields .prospect-field { display: grid; grid-template-columns: 1fr 90px; gap: 6px 16px; align-items: center; } .prospect-number-fields .prospect-field > label { margin: 0; } .prospect-number-fields small { grid-column: 1 / -1; } .prospect-tabs { gap: 17px; margin-bottom: 25px; } .prospect-tabs button { font-size: 13px; gap: 5px; } .prospect-form-footer { align-items: stretch; flex-direction: column; } .prospect-form-footer > .button { width: 100%; } .prospect-review-toolbar { gap: 9px 12px; } .prospect-review-toolbar > label:first-child { width: 100%; } .prospect-review-toolbar select { flex: 1; } .prospect-review-toolbar > .button { margin-left: auto; } .prospect-candidate { padding: 18px 9px; } .prospect-candidate-detail { margin-left: 29px; } .prospect-empty { padding: 32px 17px; } .prospect-lead > header { gap: 8px; } .prospect-score { font-size: 11px; } .prospect-lead blockquote { padding: 12px 13px; } .prospect-lead footer .button { flex: 1; } .prospect-jobs time { width: 100%; margin: 0; } }
+@media(max-width:1000px) { .prospect-section-heading { flex-wrap: wrap; gap: 14px; } }
+@media(max-width:600px) { .prospect-heading { gap: 14px; flex-wrap: wrap; } .prospect-heading h1 { font-size: 25px; } .prospect-path { gap: 12px 17px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); font-size: 12px; } .prospect-connection > summary { padding: 15px 13px; gap: 10px; } .prospect-connection-body { padding: 0 14px 18px; } .prospect-connect-form { flex-direction: column; align-items: stretch; } .prospect-connect-form .prospect-field { width: 100%; } .prospect-workspace textarea, .prospect-workspace input, .prospect-workspace select { font-size: 16px; } .prospect-credentials > textarea { font-size: 12px; } .prospect-task-picker { flex-wrap: wrap; gap: 7px; } .prospect-task-picker > label { width: 100%; } .prospect-campaign-summary { gap: 15px; flex-direction: column; } .prospect-number-fields { grid-template-columns: 1fr; gap: 20px; } .prospect-number-fields .prospect-field { display: grid; grid-template-columns: 1fr 90px; gap: 6px 16px; align-items: center; } .prospect-number-fields .prospect-field > label { margin: 0; } .prospect-number-fields small { grid-column: 1 / -1; } .prospect-tabs { gap: 17px; margin-bottom: 25px; } .prospect-tabs button { font-size: 13px; gap: 5px; } .prospect-form-footer { align-items: stretch; flex-direction: column; } .prospect-form-footer > .button { width: 100%; } .prospect-review-toolbar { gap: 9px 12px; } .prospect-review-toolbar > label:first-child { width: 100%; } .prospect-review-toolbar select { flex: 1; } .prospect-review-toolbar > .button { margin-left: auto; } .prospect-candidate { padding: 18px 9px; } .prospect-candidate-detail { margin-left: 29px; } .prospect-empty { padding: 32px 17px; } .prospect-lead > header { gap: 8px; } .prospect-score { font-size: 11px; } .prospect-lead blockquote { padding: 12px 13px; } .prospect-lead footer .button { flex: 1; } .prospect-jobs time { width: 100%; margin: 0; } }
 @media(prefers-reduced-motion:reduce) { .prospect-workspace * { animation-duration: .01ms!important; transition-duration: .01ms!important; } }
 
 .prospect-draft-conflict { margin: 14px 0; padding: 14px 16px; border: 1px solid var(--cds-border-strong); border-radius: 8px; font-size: 13px; }
@@ -167,9 +167,8 @@
 .prospect-candidate-detail summary { color: var(--cds-text-secondary); }
 .prospect-candidate-detail summary span { font-variant-numeric: tabular-nums; }
 .prospect-candidate-detail[open] > summary { margin-bottom: 8px; }
-@media (max-width: 1000px) { .prospect-workspace { padding: 22px 24px 44px; } }
 @media (max-width: 600px) {
-  .prospect-workspace { padding: 20px 16px 36px; }
+
   .prospect-workspace h1 { font-size: 20px; }
   .prospect-workspace .button, .prospect-workspace input:not([type=checkbox]):not([type=radio]), .prospect-workspace select { min-height: 44px; }
   .prospect-heading { gap: 12px; }
@@ -185,4 +184,50 @@
   .prospect-candidate-detail summary { min-height: 44px; }
   .prospect-tabs { margin-bottom: 18px; }
   .prospect-tabs > button { min-height: 44px; }
+}
+
+
+/* Secondary navigation shares the shell's quiet surfaces and control geometry. */
+.prospect-sidebar { padding: 24px 12px; background: var(--cds-surface-0); border-right: 1px solid var(--cds-border); }
+.prospect-sidebar-title { padding: 0 10px 18px; color: var(--cds-text-secondary); font-size: 12px; font-weight: 550; }
+.prospect-sidebar nav { display: flex; flex-direction: column; gap: 4px; }
+.prospect-sidebar nav > a { display: flex; align-items: center; gap: 9px; min-height: var(--control-height); padding: 6px 10px; color: var(--cds-text-secondary); border-radius: var(--control-radius); text-decoration: none; white-space: nowrap; }
+.prospect-sidebar nav > a > svg { flex: none; margin: 0; }
+.prospect-sidebar nav > a:hover { background: var(--cds-fill-ghost-hover); color: var(--cds-text-primary); }
+.prospect-sidebar nav > a[aria-current=page] { background: var(--cds-fill-ghost-selected); color: var(--cds-text-primary); font-weight: 550; }
+.prospect-sidebar-platform { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 24px 10px 0; padding-top: 14px; border-top: 1px solid var(--cds-border); color: var(--cds-text-secondary); font-size: 12px; }
+.prospect-sidebar-platform strong { color: var(--cds-text-primary); font-weight: 500; }
+.prospect-content { width: 100%; min-width: 0; padding: 24px 28px 48px; }
+.prospect-heading .prospect-section-label { margin-top: 4px; font-size: 12px; }
+.prospect-platform-status { display: inline-flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 7px; color: var(--cds-text-secondary); font-size: 12px; }
+.prospect-task-details { margin: 16px 0 24px; padding-block: 12px; border-block: 1px solid var(--cds-border); }
+.prospect-task-details > summary { display: flex; align-items: center; gap: 8px; min-height: var(--control-height); font-weight: 500; cursor: pointer; list-style: none; }
+.prospect-task-details > summary::-webkit-details-marker { display: none; }
+.prospect-task-details > summary > span { margin-left: auto; color: var(--cds-text-secondary); font-size: 12px; font-weight: 400; }
+.prospect-task-details[open] > summary { margin-bottom: 14px; }
+.prospect-task-details[open] > summary > svg { transform: rotate(180deg); }
+.prospect-task-details > .prospect-section { margin-top: 20px; }
+.prospect-content > [hidden], .prospect-task-details[hidden] { display: none; }
+.prospect-content > div:has(> .prospect-create):not([hidden]) + .prospect-task-picker { margin-top: 28px; }
+@media (max-width: 1100px) {
+  .prospect-workspace { grid-template-columns: 196px minmax(0, 1fr); }
+  .prospect-content { padding: 22px 24px 44px; }
+}
+@media (max-width: 850px) {
+  .prospect-workspace { display: flex; flex-direction: column; }
+  .prospect-sidebar { padding: 10px 16px; border-right: 0; border-bottom: 1px solid var(--cds-border); }
+  .prospect-sidebar-title, .prospect-sidebar-platform { display: none; }
+  .prospect-sidebar nav { flex-direction: row; gap: 4px; }
+  .prospect-sidebar nav > a { justify-content: center; flex: 1; padding-inline: 7px; gap: 6px; }
+  .prospect-content { padding: 20px 20px 36px; }
+  .prospect-heading { align-items: flex-start; }
+}
+@media (max-width: 600px) {
+  .prospect-sidebar { padding-inline: 10px; }
+  .prospect-sidebar nav > a { font-size: 12px; }
+  .prospect-content { padding-inline: 16px; }
+  .prospect-heading { flex-wrap: nowrap; gap: 10px; }
+  .prospect-platform-status { max-width: 130px; }
+  .prospect-task-picker { flex-wrap: wrap; }
+  .prospect-task-picker > select { width: 100%; }
 }

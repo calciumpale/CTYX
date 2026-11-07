@@ -7,21 +7,22 @@ interface WorkspacePage {
   section?: WorkspaceSection;
 }
 
-export type WorkspaceSection = 'prospecting' | 'deals' | 'schedule' | 'training' | 'knowledge';
+export type WorkspaceSection = 'prospecting' | 'deals' | 'schedule' | 'contracts' | 'training' | 'knowledge';
+export type ProspectingSection = 'create' | 'screen' | 'handoff';
 
 // One registry owns page names, frontend access, and navigation order.
 // Server-side permissions remain authoritative for every API request.
 const pages: Record<View, WorkspacePage> = {
   home: { title:'概览', roles:['sales','manager','admin'], section:'deals' },
   deals: { title:'项目跟进', roles:['sales','manager'], section:'deals' },
-  schedule: { title:'智能日程', roles:['sales','manager'], section:'schedule' },
+  schedule: { title:'提醒及日程', roles:['sales','manager'], section:'schedule' },
   meetings: { title:'会议', roles:['sales','manager','admin'], section:'deals' },
-  prospecting: { title:'抖音获客', roles:['sales','manager'], section:'prospecting' },
+  prospecting: { title:'社交平台获客', roles:['sales','manager'], section:'prospecting' },
   knowledge: { title:'知识库', roles:['sales','manager','admin'], section:'knowledge' },
   training: { title:'培训提升', roles:['sales','manager'], section:'training' },
-  approvals: { title:'审批', roles:['sales','manager'], section:'deals' },
-  reports: { title:'销售日报', roles:['manager'], section:'deals' },
-  contracts: { title:'AI 合同初审', roles:['sales','manager'], section:'deals' },
+  approvals: { title:'合同及审批', roles:['sales','manager'], section:'contracts' },
+  reports: { title:'销售日报', roles:['manager'], section:'schedule' },
+  contracts: { title:'合同及审批', roles:['sales','manager'], section:'contracts' },
   talktracks: { title:'成单话术', roles:['sales','manager','admin'], section:'knowledge' },
   studio: { title:'AI 搭建中心', roles:['sales','manager','admin'] },
   runs: { title:'AI 任务记录', roles:['sales','manager','admin'] },
@@ -35,14 +36,15 @@ export function canOpenWorkspaceView(role: MemberRole, view: string): view is Vi
 }
 
 export function workspaceTitle(view: View, role: MemberRole): string {
-  if (view === 'home') return role === 'sales' ? '今日工作' : role === 'manager' ? '团队概览' : '系统管理';
+  if (view === 'home') return role === 'admin' ? '系统管理' : '项目跟进';
   return pages[view].title;
 }
 
-export function workspaceNavigation(role: MemberRole): Array<{id:View;label:string}> {
-  return (['prospecting','deals','schedule','training','knowledge'] as const)
+export function workspaceNavigation(role: MemberRole): Array<{id:View;label:string;mobileLabel?:string}> {
+  const mobile: Partial<Record<View,string>>={prospecting:'社交获客',schedule:'提醒日程',contracts:'合同审批'};
+  return (['prospecting','deals','schedule','contracts','training','knowledge'] as const)
     .filter(id => canOpenWorkspaceView(role,id))
-    .map(id => ({id,label:id === 'schedule' ? '日程' : workspaceTitle(id,role)}));
+    .map(id => ({id,label:workspaceTitle(id,role),...(mobile[id]?{mobileLabel:mobile[id]}:{})}));
 }
 
 export function workspaceSection(view: View, role: MemberRole): WorkspaceSection | undefined {
@@ -50,16 +52,9 @@ export function workspaceSection(view: View, role: MemberRole): WorkspaceSection
   return pages[view].section;
 }
 
-export function workspaceProjectNavigation(role: MemberRole): Array<{id:View;label:string}> {
-  if (role === 'admin') return [];
-  return (['home','deals','meetings','approvals','contracts','reports'] as const)
-    .filter(id => canOpenWorkspaceView(role,id))
-    .map(id => ({id,label:id === 'deals' ? '项目列表' : workspaceTitle(id,role)}));
-}
-
 export function workspaceManagementNavigation(role: MemberRole): Array<{id:View;label:string}> {
   if (role !== 'admin') return [];
-  return (['home','members','rules','settings','studio','runs','meetings'] as const)
+  return (['home','members','rules','settings','studio','runs'] as const)
     .map(id => ({id,label:workspaceTitle(id,role)}));
 }
 
@@ -71,6 +66,7 @@ export interface WorkspaceRoute {
   focus?: string;
   meetingEmbed?: boolean;
   intent?: 'create' | 'followup';
+  prospectingSection?: ProspectingSection;
 }
 
 function identifier(value: string | null): string | undefined {
@@ -79,9 +75,14 @@ function identifier(value: string | null): string | undefined {
 
 export function readWorkspaceRoute(search: string, role: MemberRole): WorkspaceRoute {
   const params = new URLSearchParams(search);
-  const view = params.get('view') || 'home';
-  if (!canOpenWorkspaceView(role,view)) return {view:'home'};
-  const route: WorkspaceRoute = {view};
+  const fallback=role==='admin'?'home':'deals';
+  let view = params.get('view') || fallback;
+  if (!canOpenWorkspaceView(role,view)) return {view:fallback};
+  if(view==='home'&&role!=='admin')view='deals';
+  if(view==='meetings'&&params.get('embed')!=='tencent')return {view:role==='admin'?'settings':'schedule'};
+  const route: WorkspaceRoute = {view:view as View};
+  const section=params.get('section');
+  if(view==='prospecting'&&(section==='create'||section==='screen'||section==='handoff'))route.prospectingSection=section;
   const intent = params.get('intent');
   if (view === 'deals' && (intent === 'create' || intent === 'followup')) route.intent = intent;
   const dealId = identifier(params.get('deal'));
@@ -89,7 +90,7 @@ export function readWorkspaceRoute(search: string, role: MemberRole): WorkspaceR
   const approvalId = identifier(params.get('approval'));
   const focus = identifier(params.get('focus'));
   if (['deals','meetings','contracts','approvals'].includes(view) && dealId) route.dealId = dealId;
-  if (view === 'approvals' && contractId) route.contractId = contractId;
+  if ((view === 'contracts'||view==='approvals') && contractId) route.contractId = contractId;
   if (view === 'approvals' && approvalId) route.approvalId = approvalId;
   if ((view === 'knowledge' || view === 'talktracks') && focus) route.focus = focus;
   if (view === 'meetings' && params.get('embed') === 'tencent') route.meetingEmbed = true;
@@ -98,7 +99,7 @@ export function readWorkspaceRoute(search: string, role: MemberRole): WorkspaceR
 
 export function workspaceSearch(search: string, route: WorkspaceRoute): string {
   const params = new URLSearchParams(search);
-  for (const key of ['view','deal','contract','approval','focus','embed','intent']) params.delete(key);
+  for (const key of ['view','deal','contract','approval','focus','embed','intent','section']) params.delete(key);
   if (route.view !== 'home') params.set('view',route.view);
   if (route.dealId) params.set('deal',route.dealId);
   if (route.contractId) params.set('contract',route.contractId);
@@ -106,5 +107,6 @@ export function workspaceSearch(search: string, route: WorkspaceRoute): string {
   if (route.focus) params.set('focus',route.focus);
   if (route.meetingEmbed) params.set('embed','tencent');
   if (route.view === 'deals' && route.intent) params.set('intent',route.intent);
+  if (route.view === 'prospecting' && route.prospectingSection) params.set('section',route.prospectingSection);
   return params.size ? '?' + params.toString() : '';
 }

@@ -1,20 +1,18 @@
 'use client';
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
 import { ArrowDown, ArrowRight, Bell, BookOpen, BriefcaseBusiness, CalendarDays, Check, ChevronDown, ChevronRight, CircleAlert, ClipboardCheck, Clock3, ExternalLink, GitBranch, Home, Loader2, LogOut, Menu, MessageSquare, Moon, PanelLeftClose, Search, Settings, ShieldCheck, Sun, Users, Video, Workflow, X } from 'lucide-react';
 import { useWorkbench } from '../lib/api';
 import { useChatScroll } from '../lib/use-chat-scroll';
-import { canOpenWorkspaceView, readWorkspaceRoute, workspaceManagementNavigation, workspaceNavigation, workspaceProjectNavigation, workspaceSearch, workspaceSection, workspaceTitle } from '../lib/workspace-navigation';
+import { canOpenWorkspaceView, readWorkspaceRoute, workspaceManagementNavigation, workspaceNavigation, workspaceSearch, workspaceSection, workspaceTitle } from '../lib/workspace-navigation';
 import { AGENTS, type AgentId, type Run, type View } from '../lib/types';
 import { BrandMark, Composer, DiscardChangesDialog, Overlay, shortDate } from './CoreViews';
-import { ContractReviewView } from './ContractReviewView';
-import { ApprovalWorkspace } from './ApprovalWorkspace';
+import { ContractCenter } from './ContractCenter';
 import { SalesDailyReport } from './SalesDailyReport';
-import { ProjectsView } from './ProjectWorkspace';
+import { CustomerWorkspace } from './CustomerWorkspace';
 import { RunsView, SettingsView, TrainingView } from './StudioViews';
 import { BuilderStudio } from './BuilderStudio';
 import { AnswerContent } from './AnswerContent';
 import './answer-content.css';
-import { RoleDashboard } from './RoleDashboard';
 import { AdminHome, BusinessRulesView, KnowledgeWorkspace, MEMBER_LABELS, MembersView } from './AdminWorkspace';
 import type { MemberSession } from '../lib/member-types';
 import { MeetingImportWorkspace } from './MeetingImportWorkspace';
@@ -23,19 +21,21 @@ import { ScheduleWorkspace } from './ScheduleWorkspace';
 
 const navigationIcons: Partial<Record<View, typeof Home>> = {
   home:Home, deals:BriefcaseBusiness, schedule:CalendarDays, meetings:Video, prospecting:Search,
-  knowledge:BookOpen, training:MessageSquare, approvals:ClipboardCheck,
+  knowledge:BookOpen, training:MessageSquare, approvals:ClipboardCheck, contracts:ClipboardCheck,
   members:Users, rules:ShieldCheck, settings:Settings, studio:Workflow, runs:Clock3,
 };
 
 export default function Workbench({member,onLogout}:{member:MemberSession;onLogout:()=>Promise<void>}) {
   const navigation=workspaceNavigation(member.role).map(item=>({...item,icon:navigationIcons[item.id]??Home}));
-  const { state, loading, error, mutate, reload, uploadFollowup } = useWorkbench();
+  const { state, loading, error, mutate, reload } = useWorkbench();
   useEffect(()=>{
     const refreshSpeech=()=>{void reload().catch(()=>{});};
     window.addEventListener('speech-transcription-completed',refreshSpeech);
     return()=>window.removeEventListener('speech-transcription-completed',refreshSpeech);
   },[reload]);
-  const [view, setView] = useState<View>('home');
+  const [view, setView] = useState<View>(member.role==='admin'?'home':'deals');
+  const [routeReady,setRouteReady]=useState(false);
+  const [prospectingSection,setProspectingSection]=useState<'create'|'screen'|'handoff'>('create');
   const [navigationKey, setNavigationKey] = useState(0);
   const [meetingEmbed, setMeetingEmbed] = useState(false);
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
@@ -83,12 +83,6 @@ export default function Workbench({member,onLogout}:{member:MemberSession;onLogo
   const projectBusy=useRef(false);const projectDirty=useRef(false);const pendingProjectLeave=useRef<(()=>void)|null>(null);const [leaveProject,setLeaveProject]=useState(false);
   const onProjectBusy=useCallback((value:boolean)=>{projectBusy.current=value;},[]);
   const onProjectDirty=useCallback((value:boolean)=>{projectDirty.current=value;},[]);
-  const followupPending=useRef(false);
-  const saveRecordingFollowup=useCallback(async (dealId:string,text:string,audio:File)=>{
-    if(followupPending.current)throw new Error('录音正在保存，请等待完成');
-    followupPending.current=true;
-    try{return await uploadFollowup(dealId,text,audio);}finally{followupPending.current=false;}
-  },[uploadFollowup]);
   const stopTrainingMedia=useRef<(()=>void)|null>(null);
   const onTrainingPendingChange=useCallback((count:number)=>{trainingPending.current=count;},[]);
   const onTrainingMediaReady=useCallback((stop:(()=>void)|null)=>{stopTrainingMedia.current=stop;},[]);
@@ -116,18 +110,21 @@ export default function Workbench({member,onLogout}:{member:MemberSession;onLogo
       setFocusedDeal(route.focus??route.dealId??null);
       setFocusedApprovalContract(route.contractId??null);
       setFocusedApprovalId(route.approvalId??null);
+      setProspectingSection(route.prospectingSection??'create');
+      setRouteReady(true);
     });
     return()=>cancelAnimationFrame(frame);
   }, [member.role]);
   const navigate = useCallback((next: View, id?: string, contractId?:string, approvalId?:string,intent?:'create'|'followup') => {
     if(!canOpenWorkspaceView(member.role,next)){notify('当前账号没有这个功能的访问权限');return;}
-    if(next===view&&next!=='deals'&&!id&&!intent){setMobileMenu(false);setSearchOpen(false);return;}
+    if(next==='home'&&member.role!=='admin')next='deals';
+    if(next==='meetings')next=member.role==='admin'?'settings':'schedule';
+    if(next===view&&!id&&!intent&&!contractId&&!approvalId){setMobileMenu(false);setSearchOpen(false);return;}
     if(projectBusy.current){notify('项目正在录入或更新，请等待完成后离开。');return;}
     if(approvalBusy.current){notify('审批操作正在保存，请等待完成后离开。');return;}
     if(contractBusy.current){notify('合同正在导入、保存或初审，请等待完成后离开。');return;}
-    if(followupPending.current){notify('跟进录音正在保存，请等待完成后离开。');return;}
     if(trainingPending.current){notify('语音回应正在保存，请等待完成；失败时可在带练页直接重试。');return;}
-    const proceed=()=>{stopTrainingMedia.current?.();setView(next);if(next==='deals')setNavigationKey(value=>value+1);setProjectIntent(intent||null);setFocusedDeal(id||null);setFocusedApprovalContract(contractId||null);setFocusedApprovalId(approvalId||null);const url=new URL(window.location.href);url.search=workspaceSearch(url.search,{view:next,...(next==='knowledge'||next==='talktracks'?{focus:id}:{dealId:id}),contractId,approvalId,intent});window.history.replaceState(null,'',url.href);setMobileMenu(false);setSearchOpen(false);setNoticesOpen(false);window.scrollTo({top:0,left:0,behavior:'auto'});};
+    const proceed=()=>{stopTrainingMedia.current?.();setView(next);setMeetingEmbed(false);setProspectingSection('create');if(next==='deals')setNavigationKey(value=>value+1);setProjectIntent(intent||null);setFocusedDeal(id||null);setFocusedApprovalContract(contractId||null);setFocusedApprovalId(approvalId||null);const url=new URL(window.location.href);url.search=workspaceSearch(url.search,{view:next,...(next==='knowledge'||next==='talktracks'?{focus:id}:{dealId:id}),contractId,approvalId,intent});window.history.replaceState(null,'',url.href);setMobileMenu(false);setSearchOpen(false);setNoticesOpen(false);window.scrollTo({top:0,left:0,behavior:'auto'});};
     const guardedProceed=()=>{if(prospectingGuard.current&&!prospectingGuard.current(proceed)){setMobileMenu(false);setSearchOpen(false);setNoticesOpen(false);return;}if(studioGuard.current&&!studioGuard.current(proceed)){setMobileMenu(false);setSearchOpen(false);setNoticesOpen(false);return;}proceed();};
     if(projectDirty.current){pendingProjectLeave.current=guardedProceed;setLeaveProject(true);return;}
     if(approvalDirty.current){pendingApprovalLeave.current=guardedProceed;setLeaveApproval(true);return;}
@@ -140,7 +137,6 @@ export default function Workbench({member,onLogout}:{member:MemberSession;onLogo
     if(projectBusy.current){notify('项目正在录入或更新，请等待完成。');return;}
     if(approvalBusy.current){notify('审批操作正在保存，请等待完成。');return;}
     if(contractBusy.current){notify('合同初审正在进行，请等待完成。');return;}
-    if(followupPending.current){notify('跟进录音正在保存，请等待完成。');return;}
     if (sending.current) { notify('当前任务正在生成，请等待完成后继续。'); return; }
     const proceed=()=>{
     const conversationRunIds=priorRunIds??conversation.filter(run=>!run.workflowId).slice(-6).map(run=>run.id);
@@ -155,7 +151,7 @@ export default function Workbench({member,onLogout}:{member:MemberSession;onLogo
   }, [mutate, notify, conversation,selectedTalkIds,member.role,setChatOpen,setChatError,setFailedRequest,setPendingQuery,setChatBusy,setConversation]);
   const requestLogout = () => {
     if(accountBusy)return;
-    if(projectBusy.current||approvalBusy.current||contractBusy.current||followupPending.current||trainingPending.current||sending.current){notify('当前操作正在保存，请完成后再退出登录');return;}
+    if(projectBusy.current||approvalBusy.current||contractBusy.current||trainingPending.current||sending.current){notify('当前操作正在保存，请完成后再退出登录');return;}
     const proceed=()=>{stopTrainingMedia.current?.();setAccountBusy(true);void onLogout().catch(cause=>notify(cause instanceof Error?cause.message:'退出未完成，请重试')).finally(()=>setAccountBusy(false));};
     const guarded=()=>{if(prospectingGuard.current&&!prospectingGuard.current(proceed))return;if(studioGuard.current&&!studioGuard.current(proceed))return;proceed();};
     if(projectDirty.current){pendingProjectLeave.current=guarded;setLeaveProject(true);return;}
@@ -167,20 +163,28 @@ export default function Workbench({member,onLogout}:{member:MemberSession;onLogo
     if (!state || !search.trim()) return [];
     const q = search.trim().toLowerCase();
     return [
-      ...(canOpenWorkspaceView(member.role,'schedule')&&'智能日程 任务 安排 拜访 calendar schedule'.includes(q)?[{id:'schedule',type:'功能',title:'智能日程',subtitle:'任务、日程与拜访',view:'schedule' as View}]:[]),
+      ...(canOpenWorkspaceView(member.role,'schedule')&&'提醒及日程 智能日程 任务 安排 拜访 calendar schedule'.includes(q)?[{id:'schedule',type:'功能',title:'提醒及日程',subtitle:'提醒、任务、日程与拜访',view:'schedule' as View}]:[]),
       ...state.deals.filter(d => `${d.projectName || ''} ${d.name} ${d.contact} ${d.summary}`.toLowerCase().includes(q)).map(d => ({ id: d.id, type: '项目', title: d.projectName || d.name, subtitle: `${d.name} · ${d.stage} · ${d.nextAction}`, view: 'deals' as View })),
       ...state.knowledge.filter(k => `${k.title} ${k.content}`.toLowerCase().includes(q)).map(k => ({ id: k.id, type: '知识', title: k.title, subtitle: k.category, view: 'knowledge' as View })),
       ...state.skills.filter(s => `${s.title} ${s.description}`.toLowerCase().includes(q)).map(s => ({ id: s.id, type: s.status === 'candidate' ? '候选 Skill' : 'Skill', title: s.title, subtitle: s.description, view: 'knowledge' as View })),
       ...state.runs.filter(r => r.query.toLowerCase().includes(q)).map(r => ({ id: r.id, type: '运行记录', title: r.query, subtitle: `${shortDate(r.createdAt)} · ${r.mode === 'demo' ? '本地生成' : '模型生成'}`, view: 'runs' as View })),
     ].slice(0, 15);
   }, [state, search, member.role]);
-  if (loading || !state) return <div className="loading-screen"><BrandMark /><h1>营销工作台</h1>{error ? <><p role="alert">{error}</p><button className="button secondary" onClick={() => void reload().catch(() => {})}>重新加载</button></> : <p><Loader2 size={16} className="spin" />正在加载…</p>}</div>;
+  const onSelectedDealChange=useCallback((id:string)=>{
+    setFocusedDeal(id);setProjectIntent(null);
+    const url=new URL(window.location.href);url.search=workspaceSearch(url.search,{view:'deals',dealId:id});window.history.replaceState(null,'',url.href);
+  },[]);
+  const onProspectingSectionChange=useCallback((section:'create'|'screen'|'handoff')=>{
+    setProspectingSection(section);
+    const url=new URL(window.location.href);url.search=workspaceSearch(url.search,{view:'prospecting',prospectingSection:section});window.history.replaceState(null,'',url.href);
+  },[]);
+  if (loading || !state || !routeReady) return <div className="loading-screen"><BrandMark /><h1>营销工作台</h1>{error ? <><p role="alert">{error}</p><button className="button secondary" onClick={() => void reload().catch(() => {})}>重新加载</button></> : <p><Loader2 size={16} className="spin" />正在加载…</p>}</div>;
   const candidates = state.skills.filter(s => s.status === 'candidate');
   const noticeCount = (state.role === 'manager' ? candidates.length : 0) + Math.min(3, state.activities.length);
   const props = { state, mutate, notify, onAsk };
   const title = workspaceTitle(view,member.role);
   const section = workspaceSection(view,member.role);
-  const projectNavigation = workspaceProjectNavigation(member.role);
+  const homeView=member.role==='admin'?'home':'deals';
   const managementNavigation = workspaceManagementNavigation(member.role);
   const linkProps = (next:View,id?:string,intent?:'create'|'followup') => ({
     href:'/'+workspaceSearch('',{view:next,dealId:id,intent}),
@@ -196,25 +200,23 @@ export default function Workbench({member,onLogout}:{member:MemberSession;onLogo
   return <div className="app-shell">
     {mobileMenu && <button className="sidebar-backdrop" onClick={() => setMobileMenu(false)} aria-label="关闭导航" />}
     <aside className={'sidebar '+(mobileMenu?'mobile-open':'')} aria-label="主导航">
-      <div className="sidebar-brand"><a {...linkProps('home')} className="brand-link" aria-label="营销工作台首页"><BrandMark small/><span>营销工作台</span></a><button className="icon-button close-nav" onClick={()=>setMobileMenu(false)} aria-label="收起导航"><PanelLeftClose size={18}/></button></div>
+      <div className="sidebar-brand"><a {...linkProps(homeView)} className="brand-link" aria-label="营销工作台首页"><BrandMark small/><span>营销工作台</span></a><button className="icon-button close-nav" onClick={()=>setMobileMenu(false)} aria-label="收起导航"><PanelLeftClose size={18}/></button></div>
       <div className="sidebar-tools">{globalControls}</div>
       {member.role!=='admin'&&<button className="new-task-button" onClick={()=>{setConversation([]);setFailedRequest(null);setChatError('');setChatOpen(true);setMobileMenu(false);}} disabled={chatBusy}><MessageSquare size={17}/><span>AI 营销助手</span></button>}
-      <nav aria-label="业务导航">{navigation.map(item=>{const Icon=item.icon;const current=section===item.id;return <a key={item.id} {...linkProps(item.id)} className={'nav-item '+(current?'active':'')} aria-current={current?'page':undefined}><Icon size={18} strokeWidth={1.7}/><span>{item.label}</span>{item.id==='deals'&&approvalPendingCount>0&&<small aria-label={`${approvalPendingCount} 项待审批`}>{approvalPendingCount>99?'99+':approvalPendingCount}</small>}{item.id==='knowledge'&&member.role==='manager'&&candidates.length>0&&<small>{candidates.length}</small>}</a>;})}</nav>
+      <nav aria-label="业务导航">{navigation.map(item=>{const Icon=item.icon;const current=section===item.id;return <a key={item.id} {...linkProps(item.id)} className={'nav-item '+(current?'active':'')} aria-current={current?'page':undefined}><Icon size={18} strokeWidth={1.7}/><span>{item.label}</span>{item.id==='contracts'&&approvalPendingCount>0&&<small aria-label={`${approvalPendingCount} 项待审批`}>{approvalPendingCount>99?'99+':approvalPendingCount}</small>}{item.id==='knowledge'&&member.role==='manager'&&candidates.length>0&&<small>{candidates.length}</small>}</a>;})}</nav>
       {member.role!=='admin'&&<div className="sidebar-recent"><div className="nav-caption">{state.runs.length?'最近 AI 任务':'AI 任务记录'}<button className="icon-button" onClick={()=>navigate('runs')} aria-label="全部 AI 任务记录"><ChevronRight size={13}/></button></div>{state.runs.slice(0,3).map(run=><button key={run.id} onClick={()=>{if(member.role==='admin'){navigate('runs');return;}setConversation([run]);setFailedRequest(null);setChatError('');setChatOpen(true);setMobileMenu(false);}} title={run.query}><span/>{run.query}</button>)}</div>}
       <div className="sidebar-bottom">{managementNavigation.length>0&&<details className="management-menu" onKeyDown={event=>{if(event.key==='Escape'){event.currentTarget.open=false;event.currentTarget.querySelector('summary')?.focus();}}}><summary className="nav-item"><Settings size={17}/><span>系统管理</span><ChevronDown size={14}/></summary><nav aria-label="系统管理导航">{managementNavigation.map(item=><a key={item.id} {...linkProps(item.id)} aria-current={view===item.id?'page':undefined}>{item.label}</a>)}</nav></details>}<div className="connection-status"><span className={'status-dot '+(state.model.connected?'connected':'')}/><span>{state.model.connected?'模型已连接':'模型未配置'}</span></div><div className="profile-row"><span className="profile-avatar">{member.displayName.slice(0,1)}</span><div><strong>{member.displayName}</strong><span>{MEMBER_LABELS[member.role]} · {member.username}</span></div><button className="icon-button" onClick={toggleTheme} aria-label={theme==='light'?'切换深色主题':'切换浅色主题'}>{theme==='light'?<Moon size={17}/>:<Sun size={17}/>}</button><button className="account-logout" onClick={requestLogout} disabled={accountBusy} aria-label="退出登录" title="退出登录">{accountBusy?<Loader2 size={17} className="spin"/>:<LogOut size={17}/>}</button></div></div>
     </aside>
     <div className="workspace"><header className="topbar"><div className="topbar-left"><button className="icon-button menu-toggle" onClick={()=>setMobileMenu(true)} aria-label="展开导航"><Menu size={21}/></button><span className="breadcrumb"><strong>{title}</strong></span></div><div className="topbar-actions">{globalControls}</div></header>
       <main className="main-content" key={view+':'+navigationKey}>
-        {section==='deals'&&<nav className="section-navigation" aria-label="项目跟进导航">{projectNavigation.map(item=><Fragment key={item.id}><a {...linkProps(item.id,['meetings','approvals','contracts'].includes(item.id)?focusedDeal??undefined:undefined)} aria-current={view===item.id?'page':undefined}>{item.label}{item.id==='approvals'&&approvalPendingCount>0&&<small>{approvalPendingCount>99?'99+':approvalPendingCount}</small>}</a>{item.id==='deals'&&<a {...linkProps('deals',undefined,'followup')} className="section-followup"><MessageSquare size={14}/>记录跟进</a>}</Fragment>)}</nav>}
-        {view==='home'&&(member.role==='admin'?<AdminHome state={state} onNavigate={navigate}/>:<RoleDashboard {...props} member={member} onNavigate={navigate} onRecordCustomer={()=>navigate('deals',undefined,undefined,undefined,'create')} onRecordFollowup={()=>navigate('deals',undefined,undefined,undefined,'followup')} pendingApprovals={approvalPendingCount}/>)}
+        {view==='home'&&member.role==='admin'&&<AdminHome state={state} onNavigate={navigate}/>}
         {view==='reports'&&member.role==='manager'&&<SalesDailyReport state={state} notify={notify} onNavigate={navigate}/>}
-        {view==='prospecting'&&member.role!=='admin'&&<ProspectingWorkspace onGuardReady={onProspectingGuardReady}/>}
-        {view==='schedule'&&member.role!=='admin'&&<ScheduleWorkspace state={state} member={member} notify={notify} onNavigate={navigate} onBusyChange={onProjectBusy} onDirtyChange={onProjectDirty}/>}
-        {view==='meetings'&&<MeetingImportWorkspace state={state} onWorkspaceRefresh={reload} initialDealId={focusedDeal} admin={member.role==='admin'} onOpenProjects={()=>navigate('deals')}/>}
-        {view==='deals'&&member.role!=='admin'&&<ProjectsView member={member} key={(focusedDeal||'all')+':'+(projectIntent||'')} {...props} uploadFollowup={saveRecordingFollowup} onReload={reload} onBusyChange={onProjectBusy} onDirtyChange={onProjectDirty} onNavigate={navigate} onApproval={(projectId,requestId)=>navigate('approvals',projectId,undefined,requestId)} initialDealId={focusedDeal} initialIntent={projectIntent} onDealClosed={()=>{setFocusedDeal(null);setProjectIntent(null);const url=new URL(window.location.href);url.search=workspaceSearch(url.search,{view:'deals'});window.history.replaceState(null,'',url.href);}}/>}
-        {view==='contracts'&&member.role!=='admin'&&<ContractReviewView key={focusedDeal||'all'} {...props} initialDealId={focusedDeal} onNavigate={navigate} onBusyChange={onContractBusy} onDirtyChange={onContractDirty} onApproval={(contractId,dealId)=>navigate('approvals',dealId,contractId)}/>}
+        {view==='prospecting'&&member.role!=='admin'&&<ProspectingWorkspace onGuardReady={onProspectingGuardReady} initialSection={prospectingSection} onSectionChange={onProspectingSectionChange}/>}
+        {view==='schedule'&&member.role!=='admin'&&<ScheduleWorkspace pendingApprovals={approvalPendingCount} state={state} member={member} notify={notify} onNavigate={navigate} onBusyChange={onProjectBusy} onDirtyChange={onProjectDirty}/>}
+        {view==='deals'&&member.role!=='admin'&&<CustomerWorkspace member={member} {...props} onReload={reload} onBusyChange={onProjectBusy} onDirtyChange={onProjectDirty} onNavigate={navigate} initialDealId={focusedDeal} initialIntent={projectIntent} onSelectedDealChange={onSelectedDealChange}/>}
+        {(view==='contracts'||view==='approvals')&&member.role!=='admin'&&<ContractCenter {...props} initialTab={view==='approvals'?'approvals':'contracts'} initialDealId={focusedDeal} initialContractId={focusedApprovalContract} initialApprovalId={focusedApprovalId} onNavigate={navigate} onReloadWorkspace={reload} onBusyChange={view==='approvals'?onApprovalBusy:onContractBusy} onDirtyChange={view==='approvals'?onApprovalDirty:onContractDirty} pendingCount={approvalPendingCount}/>}
         {view==='training'&&member.role!=='admin'&&<TrainingView {...props} onPendingChange={onTrainingPendingChange} onMediaStopReady={onTrainingMediaReady}/>}
-        {view==='approvals'&&member.role!=='admin'&&<ApprovalWorkspace key={(focusedDeal||'all')+':'+(focusedApprovalContract||'')+':'+(focusedApprovalId||'')} state={state} notify={notify} onNavigate={navigate} onReloadWorkspace={reload} initialDealId={focusedDeal} initialContractId={focusedApprovalContract} initialApprovalId={focusedApprovalId} onBusyChange={onApprovalBusy} onDirtyChange={onApprovalDirty}/>}
+
         {(view==='knowledge'||view==='talktracks')&&<KnowledgeWorkspace key={view+':'+(focusedDeal||'')} focus={focusedDeal} {...props} member={member} initialTab={view==='talktracks'?'talktracks':'documents'} onUsePlaybook={id=>{if(member.role==='admin')return;setSelectedTalkIds([id]);setConversation([]);setFailedRequest(null);setChatError('');setChatOpen(true);}}/>}
         {view==='studio'&&<BuilderStudio {...props} readOnly={member.role!=='admin'} onGuardReady={onStudioGuardReady}/>}
         {view==='runs'&&<RunsView {...props} canExtract={member.role!=='admin'}/>}
@@ -223,7 +225,7 @@ export default function Workbench({member,onLogout}:{member:MemberSession;onLogo
         {view==='rules'&&member.role==='admin'&&<BusinessRulesView state={state} notify={notify} onBusyChange={onApprovalBusy} onDirtyChange={onApprovalDirty}/>}
       </main>
     </div>
-    {member.role!=='admin'&&!mobileMenu&&<nav className="mobile-role-navigation" aria-label="快捷导航">{navigation.map(item=>{const Icon=item.icon;return <button key={item.id} aria-current={section===item.id?'page':undefined} onClick={()=>navigate(item.id)}><Icon size={20}/><span>{item.label}</span></button>;})}</nav>}
+    {member.role!=='admin'&&!mobileMenu&&<nav className="mobile-role-navigation" aria-label="快捷导航">{navigation.map(item=>{const Icon=item.icon;return <button key={item.id} aria-label={item.label} aria-current={section===item.id?'page':undefined} onClick={()=>navigate(item.id)}><Icon size={20}/><span>{item.mobileLabel??item.label}</span></button>;})}</nav>}
     {leaveProject&&<DiscardChangesDialog title="有尚未保存的内容" onCancel={()=>{setLeaveProject(false);pendingProjectLeave.current=null;}} onDiscard={()=>{projectDirty.current=false;setLeaveProject(false);const proceed=pendingProjectLeave.current;pendingProjectLeave.current=null;proceed?.();}}/>}
     {leaveApproval&&<DiscardChangesDialog title="审批内容尚未提交" onCancel={()=>{setLeaveApproval(false);pendingApprovalLeave.current=null;}} onDiscard={()=>{approvalDirty.current=false;setLeaveApproval(false);const proceed=pendingApprovalLeave.current;pendingApprovalLeave.current=null;proceed?.();}}/>}
     {leaveContract&&<DiscardChangesDialog title="合同草稿尚未保存" onCancel={()=>{setLeaveContract(false);pendingContractLeave.current=null;}} onDiscard={()=>{contractDirty.current=false;setLeaveContract(false);const proceed=pendingContractLeave.current;pendingContractLeave.current=null;proceed?.();}}/>}

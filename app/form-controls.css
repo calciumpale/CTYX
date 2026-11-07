@@ -1,0 +1,98 @@
+/* Shared geometry is an app-wide invariant; module CSS still owns width, color and state.
+   Important declarations keep existing page rules from changing these dimensions. */
+:root {
+  --control-height: 36px;
+  --control-font-size: 13px;
+  --control-padding-inline: 11px;
+  --control-radius: 7px;
+}
+
+@media (max-width: 850px) {
+  :root { --control-height: 44px; --control-font-size: 16px; }
+}
+
+/* Only single-line text-like fields and dropdowns, including native date/time controls. */
+:root body :is(
+  input:not([type="checkbox"], [type="radio"], [type="range"], [type="color"], [type="file"], [type="hidden"], [type="button"], [type="submit"], [type="reset"], [type="image"]):not([hidden]):not([class*="sr-only"]),
+  select:not([multiple]):not([size]):not([hidden]),
+  select[size="1"]:not([multiple]):not([hidden])
+) {
+  box-sizing: border-box;
+  min-width: 0;
+  height: var(--field-height, var(--control-height)) !important;
+  min-height: var(--field-height, var(--control-height)) !important;
+  max-height: var(--field-height, var(--control-height)) !important;
+  padding-block: 0 !important;
+  padding-inline-start: var(--field-padding-inline, var(--control-padding-inline)) !important;
+  padding-inline-end: var(--field-padding-end, var(--field-padding-inline, var(--control-padding-inline))) !important;
+  border-radius: var(--field-radius, var(--control-radius)) !important;
+  font-size: var(--field-font-size, var(--control-font-size)) !important;
+  line-height: normal !important;
+}
+
+:root body :is(select:not([multiple]):not([size]), select[size="1"]:not([multiple])) {
+  --field-padding-end: var(--field-select-padding-end, 32px);
+}
+
+/* The visible border belongs to these groups, rather than to their inner inputs. */
+:root body :is(
+  .search-field, .project-search, .approval-search, .studio-search, .builder-search,
+  .talk-library-search, .run-history-search, .meeting-search-input,
+  .api-settings-key-input, .sales-report-controls > label
+) {
+  --field-height: calc(var(--control-height) - 2px);
+  --field-padding-inline: 0px;
+  --field-radius: 0px;
+  box-sizing: border-box;
+  height: var(--control-height) !important;
+  min-height: var(--control-height) !important;
+  max-height: var(--control-height) !important;
+  padding-block: 0 !important;
+  padding-inline: var(--control-padding-inline) !important;
+  border-radius: var(--control-radius) !important;
+  align-items: center;
+}
+
+/* Embedded selectors use the group's existing icon and chevron. */
+:root body :is(.agent-select, .talk-track-picker) {
+  --field-height: var(--control-height);
+  --field-padding-inline: 0px;
+  --field-select-padding-end: 0px;
+  height: var(--control-height) !important;
+  min-height: var(--control-height) !important;
+  padding-block: 0 !important;
+  border-radius: var(--control-radius) !important;
+}
+
+:root body .workspace-password-input input {
+  --field-padding-end: calc(var(--control-height) + 3px);
+}
+:root body .workspace-password-input > button {
+  width: calc(var(--control-height) - 4px);
+  height: calc(var(--control-height) - 4px);
+}
+:root body .api-settings-key-toggle {
+  min-width: calc(var(--control-height) - 2px);
+  min-height: calc(var(--control-height) - 2px);
+  height: calc(var(--control-height) - 2px);
+  padding: 0;
+}
+
+/* Prose fields share the inset and outline shape, while retaining their own row count.
+   Conversation and document editors deliberately own their layout and typography. */
+:root body textarea:not([hidden]):not([class*="sr-only"]):not(:where(
+  .composer textarea, .studio-reply-composer textarea,
+  .contract-text-field textarea, .prospect-credentials > textarea
+)) {
+  padding: 9px var(--control-padding-inline) !important;
+  border-radius: var(--control-radius) !important;
+  font-size: var(--control-font-size) !important;
+}
+
+/* Regular actions align with fields; icon-only, link, switch and segmented actions stay contextual. */
+:root body :is(.button, .studio-btn, .builder-button, .schedule-button, .api-settings-button, .workspace-login-submit) {
+  height: var(--control-height) !important;
+  min-height: var(--control-height) !important;
+  padding-block: 0 !important;
+  border-radius: var(--control-radius) !important;
+}

@@ -72,7 +72,7 @@ components:
     textColor: "{colors.surface}"
     typography: "{typography.label}"
     rounded: "{rounded.lg}"
-    padding: 8px 13px
+    padding: 0 13px
     height: 36px
   button-primary-hover:
     backgroundColor: "{colors.primary-hover}"
@@ -80,25 +80,26 @@ components:
     backgroundColor: "{colors.surface}"
     textColor: "{colors.text}"
     rounded: "{rounded.lg}"
-    padding: 8px 13px
+    padding: 0 13px
     height: 36px
   button-ghost:
     backgroundColor: transparent
     textColor: "{colors.text-secondary}"
     rounded: "{rounded.lg}"
-    padding: 8px 13px
+    padding: 0 13px
     height: 36px
   button-danger:
     backgroundColor: "{colors.danger}"
     textColor: "{colors.surface}"
     rounded: "{rounded.lg}"
-    padding: 8px 13px
+    padding: 0 13px
     height: 36px
   input:
     backgroundColor: "{colors.surface}"
     textColor: "{colors.text}"
     rounded: "{rounded.lg}"
-    padding: 9px 11px
+    padding: 0 11px
+    height: 36px
   navigation:
     backgroundColor: transparent
     textColor: "{colors.text-secondary}"
@@ -177,13 +178,19 @@ components:
 
 ## Components
 
-- **Buttons：** 主要、次要、透明与危险变体共享紧凑的形状；常规按钮最小高度 36px，首页工具操作可为 34px。次要按钮使用细边框；悬停改变背景，键盘操作显示清楚的 focus-visible。
-- **Inputs：** 输入框、下拉与文本域以中性表面和完整边框为底。设置与知识库常用 36px 控件；项目业务表单保留 44px 单行控件。焦点使用主题 focus shadow，错误配合说明文字呈现。
+- **Buttons：** 主要、次要、透明与危险变体共享常规控件高度与圆角，桌面 36px、850px 及以下 44px。次要按钮使用细边框；悬停改变背景，键盘操作显示清楚的 focus-visible。图标按钮、文字链接、开关和分段切换按各自交互布局。
+- **Inputs：** 单行输入框与下拉在所有业务模块共享尺寸，以中性表面和完整边框为底。焦点使用主题 focus shadow，错误配合说明文字呈现；文本域保留多行高度。
 - **Navigation：** 侧栏行以背景、字重和文字颜色表达当前页。名称、角色可见性、顺序与直接地址统一由 `app/lib/workspace-navigation.ts` 管理；后端权限仍独立校验。
 - **Lists and cards：** 历史与文档采用分隔线列表，项目看板采用轻边框卡片；同类内容对齐，数字使用等宽数字。辅助设置、转写、检索片段与历史按需展开。
 - **Badges：** 默认中性小标签；成功、警告和风险保留文字与语义色，状态不能只靠颜色识别。
 - **Composer：** 使用 composer 半径与内描边，保留中文输入法保护及手动滚动意图。
 - **Confirmation：** 共用未保存更改确认模式；标题、说明、动作分区，默认焦点在继续编辑。窄屏动作纵向排列，Esc 返回编辑；具体业务可保留就地离开提示。
+
+### Shared control geometry
+
+`app/form-controls.css` 是全站控件尺寸的统一来源。单行输入（含日期、时间）与普通单选下拉共用 `--control-height: 36px`、`--control-font-size: 13px`、`--control-padding-inline: 11px` 和 `--control-radius: 7px`；850px 及以下高度为 44px、字号为 16px。控件使用 `border-box`、零垂直内边距，原生下拉末端留 32px。带完整边框的搜索框等组合控件，外框同为 36px / 44px，内部输入减去 2px 边框并清零水平内边距，避免重复留白。
+
+新模块继承这一层和 `--control-*` token，不再添加页面专属的固定控件高度；模块样式继续负责宽度、颜色与状态。普通文本域共用 9px / 11px 内边距和 7px 圆角，保留行数与伸缩；composer、回复区、合同正文与凭据编辑器保留各自排版。复选框、单选框、滑块、颜色、文件、隐藏与按钮类 input、读屏专用输入及多选 / 列表式 select 不套用单行尺寸。
 
 ## Navigation and Naming
 

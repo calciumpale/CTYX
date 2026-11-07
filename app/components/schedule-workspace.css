@@ -177,7 +177,7 @@
   .schedule-range-nav > .schedule-icon-button { width: 32px; }
   .schedule-today { padding-inline: 10px; }
   .schedule-jump { padding-left: 3px; }
-  .schedule-jump input { width: 112px; height: 44px; font-size: 12px; }
+  .schedule-jump input { width: 144px; height: 44px; font-size: 12px; }
   .schedule-view-switch { padding: 2px; }
   .schedule-view-switch button { min-height: 40px; min-width: 32px; padding-inline: 8px; }
   .schedule-calendar-week .schedule-day { min-height: 380px; }

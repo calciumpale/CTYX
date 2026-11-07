@@ -5,6 +5,7 @@ import { readConversationTranscript } from '../tools/douyin-bridge/conversation-
 const browserTest = process.env.PROSPECT_BROWSER_TEST === '1' ? test : test.skip;
 const identity = { senderAccountId: 'sender-1', recipientId: 'recipient-1', conversationId: 'conversation-1', limit: 50 };
 const row = (index, direction, text, extra = '') => `<div data-index="${index}"><div class="messageMessageBoxmessageBox" ${direction ? `data-message-direction="${direction}"` : ''} ${extra}><span data-e2e="message-text">${text}</span></div></div>`;
+const groupedStackRow = (outgoing, text) => `<div data-index="0"><div class="messageMessageBoxmessageBox messageMessageBoxlargeMargin messageMessageBoxstackLayout"><div class="messageMessageBoxselectableRow"><div class="messageMessageBoxcontentBox messageMessageBoxstackLayout" style="display:flex;flex-direction:${outgoing ? 'row-reverse' : 'row'};width:500px;gap:8px"><div class="messageMessageBoxstackLayoutHideAvatar" style="width:32px;height:32px;flex-shrink:0;display:block"></div><div class="MessageBoxContentcolumnBox" style="width:180px;flex:none"><span class="TextMessageTextpureText">${text}</span></div></div></div></div></div>`;
 async function fixture(t, content) {
   const { chromium } = await import('../tools/douyin-bridge/node_modules/playwright/index.mjs');
   const browser = await chromium.launch({ headless: true }); t.after(() => browser.close());
@@ -76,6 +77,50 @@ browserTest('current stack chat resolves authors from the nested content row and
     { direction: 'inbound', text: '什么时候方便看铺？' }, { direction: 'outbound', text: '周六下午可以约看。' },
   ]);
   assert.equal(result.proof.rowKeys.length, 3);
+});
+
+for (const outgoing of [false, true]) browserTest(`a grouped ${outgoing ? 'outbound' : 'inbound'} stack bubble proves its own direction from the reserved avatar slot`, async t => {
+  const text = outgoing ? '我会继续帮您了解需求。' : '这么晚了还没睡啊';
+  const { read } = await fixture(t, groupedStackRow(outgoing, text) + row(1, outgoing ? 'incoming' : 'outgoing', '相邻消息来自另一侧'));
+  const result = await read({ includeProof: true });
+  assert.equal(result.reliable, true);
+  assert.equal(result.covered, true);
+  assert.equal(result.messages.at(-1)?.direction, outgoing ? 'outbound' : 'inbound');
+  assert.equal(result.messages.at(-1)?.text, text);
+});
+
+browserTest('ambiguous or unrelated avatar placeholders never establish a message direction', async t => {
+  const valid = groupedStackRow(false, '待核实的正文');
+  const marker = '<div class="messageMessageBoxstackLayoutHideAvatar" style="width:32px;height:32px;flex-shrink:0;display:block"></div>';
+  const cases = [
+    valid.replace(marker, marker + marker),
+    valid.replace('width:32px;height:32px', 'width:0px;height:0px'),
+    valid.replace('width:32px;height:32px', 'width:60px;height:60px'),
+    valid.replace('flex-shrink:0;display:block', 'flex-shrink:0;display:none'),
+    valid.replace('flex-shrink:0;display:block', 'flex-shrink:0;display:block;visibility:hidden'),
+    valid.replace(marker, marker.replace('<div ', '<span ').replace('</div>', '</span>')),
+    valid.replace(marker, `<div>${marker}</div>`),
+    valid.replace('messageMessageBoxlargeMargin messageMessageBoxstackLayout', 'messageMessageBoxlargeMargin'),
+    valid.replace('messageMessageBoxcontentBox messageMessageBoxstackLayout', 'messageMessageBoxcontentBox'),
+    valid.replace(marker, marker.replace('></div>', '>并非空占位</div>')),
+    valid.replace('messageMessageBoxstackLayoutHideAvatar', 'unrelated-spacer'),
+    valid.replace('width:500px;gap:8px', 'width:500px;gap:8px;justify-content:center'),
+    valid.replace('</span></div>', '</span></div><div style="width:100px">第二个正文气泡</div>'),
+  ];
+  for (const content of cases) {
+    const { read } = await fixture(t, content);
+    const result = await read();
+    assert.equal(result.reliable, false);
+    assert.equal(result.messages.length, 0);
+  }
+});
+
+browserTest('a reserved avatar slot cannot establish direction for a body outside its own content row', async t => {
+  const content = '<div data-index="0"><div class="messageMessageBoxmessageBox messageMessageBoxstackLayout"><div class="messageMessageBoxcontentBox messageMessageBoxstackLayout" style="display:flex;flex-direction:row;width:500px"><div class="messageMessageBoxstackLayoutHideAvatar" style="width:32px;height:32px;flex-shrink:0"></div></div><span data-e2e="message-text" style="display:block;margin-left:100px;width:180px">不属于此布局行的正文</span></div></div>';
+  const { read } = await fixture(t, content);
+  const result = await read();
+  assert.equal(result.reliable, false);
+  assert.equal(result.messages.length, 0);
 });
 
 browserTest('loading, virtualization gaps, unsupported content and truncated output are not reliable agent context', async t => {

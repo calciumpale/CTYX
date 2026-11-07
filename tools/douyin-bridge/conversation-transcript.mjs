@@ -66,9 +66,20 @@ export async function readConversationTranscript(root, { senderAccountId, recipi
         const contentRows = [...row.querySelectorAll('.messageMessageBoxcontentBox')].filter(visible);
         const layoutRow = contentRows.length === 1 ? contentRows[0] : row;
         const layoutBodies = body.length ? body : [...layoutRow.children].filter(node => visible(node) && !node.matches(excluded) && !node.querySelector(avatarSelector) && textFrom(node));
-        if (!directions.size && avatars.length === 1 && layoutBodies.length === 1 && !system) {
+        const placeholders = [...layoutRow.children].filter(node => node.matches('.messageMessageBoxstackLayoutHideAvatar'));
+        const reserved = placeholders.length === 1 ? placeholders[0] : null;
+        const reservedBox = reserved?.getBoundingClientRect();
+        // Grouped Stack bubbles keep an empty 32px avatar slot in this row.
+        // It proves layout only; hidden links and neighbouring rows prove nothing.
+        const placeholder = avatars.length === 0 && contentRows.length === 1 && row.matches('.messageMessageBoxstackLayout') &&
+          layoutRow.matches('.messageMessageBoxcontentBox.messageMessageBoxstackLayout') && reserved?.tagName === 'DIV' &&
+          layoutBodies.length === 1 && layoutRow.contains(layoutBodies[0]) &&
+          visible(reserved) && !reserved.children.length && !reserved.textContent.trim() &&
+          Math.abs(reservedBox.width - 32) <= 1 && Math.abs(reservedBox.height - 32) <= 1 ? reserved : null;
+        const layoutAvatars = placeholders.length ? placeholder ? [placeholder] : [] : avatars;
+        if (!directions.size && layoutAvatars.length === 1 && layoutBodies.length === 1 && !system) {
           const style = getComputedStyle(layoutRow), box = layoutRow.getBoundingClientRect();
-          const avatar = avatars[0].getBoundingClientRect(), bubble = layoutBodies[0].getBoundingClientRect();
+          const avatar = layoutAvatars[0].getBoundingClientRect(), bubble = layoutBodies[0].getBoundingClientRect();
           if (style.display.includes('flex') && avatar.width >= 20 && avatar.height >= 20 && bubble.width > 0 && box.width >= avatar.width + bubble.width) {
             if (style.flexDirection === 'row-reverse' && avatar.left >= bubble.right && avatar.right > box.left + box.width * .75) directions.add('outbound');
             if (style.flexDirection === 'row' && avatar.right <= bubble.left && avatar.left < box.left + box.width * .25) directions.add('inbound');

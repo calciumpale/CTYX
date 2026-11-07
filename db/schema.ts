@@ -130,3 +130,15 @@ export const workbenchProspectMessages=sqliteTable('workbench_prospect_messages'
 export const workbenchProspectLeadPool=sqliteTable('workbench_prospect_lead_pool',{
  id:text('id').primaryKey(),ownerId:text('owner_id').notNull(),conversationId:text('conversation_id').notNull(),contactKey:text('contact_key').notNull(),contactType:text('contact_type').notNull(),contactValue:text('contact_value').notNull(),nickname:text('nickname').notNull(),score:integer('score').notNull(),grade:text('grade').notNull(),reason:text('reason').notNull(),assignedMemberId:text('assigned_member_id'),assignedName:text('assigned_name'),status:text('status').notNull(),createdAt:text('created_at').notNull(),updatedAt:text('updated_at').notNull(),
 },table=>[uniqueIndex('workbench_prospect_pool_contact').on(table.ownerId,table.conversationId,table.contactKey),index('workbench_prospect_pool_assignee').on(table.ownerId,table.assignedMemberId,table.status)]);
+
+/** Durable member-owned calendar records. Retry identities survive edits and soft deletion. */
+export const workbenchSchedules = sqliteTable('workbench_schedules', {
+  id: text('id').primaryKey(), workspaceOwnerId: text('workspace_owner_id').notNull(), ownerAccountId: text('owner_account_id').notNull(), ownerName: text('owner_name').notNull(),
+  requestId: text('request_id').notNull(), createJson: text('create_json').notNull(), kind: text('kind').notNull(), title: text('title').notNull(),
+  startAt: text('start_at'), endAt: text('end_at'), allDay: integer('all_day').notNull().default(0), dealId: text('deal_id'), location: text('location').notNull(), notes: text('notes').notNull(),
+  status: text('status').notNull().default('pending'), version: integer('version').notNull().default(1), createdAt: text('created_at').notNull(), updatedAt: text('updated_at').notNull(), deletedAt: text('deleted_at'),
+}, table => [
+  uniqueIndex('workbench_schedule_retry').on(table.workspaceOwnerId, table.ownerAccountId, table.requestId),
+  index('workbench_schedule_calendar').on(table.workspaceOwnerId, table.ownerAccountId, table.deletedAt, table.startAt),
+  index('workbench_schedule_team').on(table.workspaceOwnerId, table.deletedAt, table.startAt),
+]);

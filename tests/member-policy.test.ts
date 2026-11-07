@@ -95,3 +95,12 @@ test('trusted display names identify knowledge operators and followup authors wi
   const followed=await executeMemberAction(created.state,'sales','deal_note',{dealId:created.dealId,text:'跟进说明'},{actorName:'陈销售'});
   assert.equal(followed.state.deals[0].notes[0].author,'陈销售');
 });
+
+
+test('calendar API permits authenticated business roles and excludes administration', () => {
+  for (const role of ['sales','manager'] as const) {
+    for (const method of ['GET','POST']) assert.doesNotThrow(()=>assertMemberApi(role,'/api/schedules',method));
+    assert.throws(()=>assertMemberApi(role,'/api/schedules','DELETE'),{status:403});
+  }
+  for (const method of ['GET','POST']) assert.throws(()=>assertMemberApi('admin','/api/schedules',method),{status:403});
+});

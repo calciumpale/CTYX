@@ -7,13 +7,14 @@ interface WorkspacePage {
   section?: WorkspaceSection;
 }
 
-export type WorkspaceSection = 'prospecting' | 'deals' | 'training' | 'knowledge';
+export type WorkspaceSection = 'prospecting' | 'deals' | 'schedule' | 'training' | 'knowledge';
 
 // One registry owns page names, frontend access, and navigation order.
 // Server-side permissions remain authoritative for every API request.
 const pages: Record<View, WorkspacePage> = {
   home: { title:'概览', roles:['sales','manager','admin'], section:'deals' },
   deals: { title:'项目跟进', roles:['sales','manager'], section:'deals' },
+  schedule: { title:'智能日程', roles:['sales','manager'], section:'schedule' },
   meetings: { title:'会议', roles:['sales','manager','admin'], section:'deals' },
   prospecting: { title:'抖音获客', roles:['sales','manager'], section:'prospecting' },
   knowledge: { title:'知识库', roles:['sales','manager','admin'], section:'knowledge' },
@@ -39,9 +40,9 @@ export function workspaceTitle(view: View, role: MemberRole): string {
 }
 
 export function workspaceNavigation(role: MemberRole): Array<{id:View;label:string}> {
-  return (['prospecting','deals','training','knowledge'] as const)
+  return (['prospecting','deals','schedule','training','knowledge'] as const)
     .filter(id => canOpenWorkspaceView(role,id))
-    .map(id => ({id,label:workspaceTitle(id,role)}));
+    .map(id => ({id,label:id === 'schedule' ? '日程' : workspaceTitle(id,role)}));
 }
 
 export function workspaceSection(view: View, role: MemberRole): WorkspaceSection | undefined {

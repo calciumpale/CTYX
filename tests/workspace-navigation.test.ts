@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { canOpenWorkspaceView, readWorkspaceRoute, workspaceSearch, workspaceNavigation, workspaceSection, workspaceProjectNavigation, workspaceManagementNavigation } from '../app/lib/workspace-navigation.ts';
 
-test('business navigation has the four requested sections without changing role access', () => {
-  const expected=[{id:'prospecting',label:'抖音获客'},{id:'deals',label:'项目跟进'},{id:'training',label:'培训提升'},{id:'knowledge',label:'知识库'}];
+test('business navigation includes the independent schedule section without changing role access', () => {
+  const expected=[{id:'prospecting',label:'抖音获客'},{id:'deals',label:'项目跟进'},{id:'schedule',label:'日程'},{id:'training',label:'培训提升'},{id:'knowledge',label:'知识库'}];
   assert.deepEqual(workspaceNavigation('sales'), expected);
   assert.deepEqual(workspaceNavigation('manager'), expected);
   assert.deepEqual(workspaceNavigation('admin'), [{id:'knowledge',label:'知识库'}]);
@@ -58,4 +58,15 @@ test('project pages share one section while administration stays permission scop
   assert.deepEqual(workspaceManagementNavigation('sales'),[]);
   assert.deepEqual(workspaceManagementNavigation('manager'),[]);
   assert.deepEqual(workspaceManagementNavigation('admin').map(item=>item.id),['home','members','rules','settings','studio','runs','meetings']);
+});
+
+
+test('schedule has an independent protected direct link', () => {
+  for (const role of ['sales','manager'] as const) {
+    assert.equal(canOpenWorkspaceView(role,'schedule'),true);
+    assert.deepEqual(readWorkspaceRoute('?view=schedule',role),{view:'schedule'});
+    assert.equal(workspaceSection('schedule',role),'schedule');
+  }
+  assert.equal(canOpenWorkspaceView('admin','schedule'),false);
+  assert.deepEqual(readWorkspaceRoute('?view=schedule','admin'),{view:'home'});
 });

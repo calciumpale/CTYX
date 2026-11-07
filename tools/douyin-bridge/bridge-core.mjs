@@ -389,7 +389,7 @@ export async function runOnce(rawConfig, { adapter, journal, fetchImpl = fetch, 
   const abort = () => controller.abort(); signal?.addEventListener('abort', abort, { once: true });
   if (signal?.aborted) controller.abort();
   const timer = setTimeout(() => controller.abort(), jobTimeoutMs);
-  let heartbeatInFlight, humanActionRequired = false;
+  let heartbeatInFlight, humanActionRequired = false, accountFailure, changedAccountError;
   const beat = async () => {
     const result = await request('heartbeat', { deviceId: config.deviceId, jobId: job.id, leaseToken: job.leaseToken }, controller.signal);
     if (result?.ok !== true) fail('任务租约未确认，停止执行。', 'LEASE_LOST');
@@ -427,10 +427,21 @@ export async function runOnce(rawConfig, { adapter, journal, fetchImpl = fetch, 
     await journal.finish(job.id, { result });
   } catch (error) {
     humanActionRequired = error?.code === 'HUMAN_ACTION_REQUIRED';
+    if (error?.code === 'ACCOUNT_VERIFICATION_PENDING') accountFailure = {
+      authenticated: false, verificationPending: true, needsAccountVerification: true,
+      verificationReason: VERIFICATION_REASONS.has(error.verificationReason) ? error.verificationReason : 'owner_proof_missing',
+    };
+    else if (error?.code === 'UNAUTHENTICATED') accountFailure = { authenticated: false };
+    else if (error?.code === 'ACCOUNT_CHANGED') changedAccountError = error;
     await journal.finish(job.id, outbound(job.kind) ? { result: { outcome: entry.dispatchedAt ? 'unknown' : 'failed', error: entry.dispatchedAt ? '发送动作已开始，但结果无法确认。请核对原会话；不会重发。' : safeError(error) } } : { error: safeError(error) });
   } finally {
     clearInterval(heartbeat); clearTimeout(timer); signal?.removeEventListener('abort', abort); if (heartbeatInFlight) await heartbeatInFlight;
   }
   const reported = await report(journal.get(job.id));
-  return { worked: true, pendingReport: !reported, authenticated: account.authenticated, ...(humanActionRequired ? { humanActionRequired: true } : {}) };
+  // Persist/report the attempted operation before enforcing the account boundary.
+  // A temporary missing DOM proof requests bounded recovery; a positive switch
+  // stops the loop and keeps its dedicated browser available for the user.
+  if (changedAccountError) throw changedAccountError;
+  return { worked: true, pendingReport: !reported, authenticated: account.authenticated,
+    ...accountFailure, ...(humanActionRequired ? { humanActionRequired: true } : {}) };
 }

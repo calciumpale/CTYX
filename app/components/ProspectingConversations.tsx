@@ -40,6 +40,15 @@ const messageLabels: Record<ProspectChatMessage['status'], string> = { received:
 const actorLabels: Record<ProspectChatMessage['actor'], string> = { customer: '客户', agent: 'AI 获客助手', human: '人工回复' };
 const contactLabels = { phone: '手机号', wechat: '微信', email: '邮箱' };
 const humanModeLabel = (conversation: ProspectChatConversation) => conversation.handoffReason === '已由销售接管' ? '人工接管中' : '需人工处理';
+const handoffReason = (conversation: ProspectChatConversation) => conversation.handoffReason?.trim() || '未记录接管原因，请查看客户消息后继续跟进。';
+function syncProblem(value?: string) {
+  if (!value) return '上次读取未完成，请重新同步。';
+  if (/账号.*(?:变化|改变|不一致)|身份.*(?:变化|改变|不一致)/.test(value)) return '无法确认发信账号，请在助手中核验原账号后重新同步。';
+  if (/登录|认证|核验/.test(value)) return '抖音登录状态待确认，请在助手中完成登录核验后重新同步。';
+  if (/面板|人工操作/.test(value)) return '会话面板尚未就绪，请在抖音打开此会话后重新同步。';
+  if (/超时|网络|连接/.test(value)) return '会话读取暂时中断，请检查助手连接后重新同步。';
+  return value;
+}
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : '操作未完成，请刷新后重试。';
 const aborted = (error: unknown) => error instanceof DOMException && error.name === 'AbortError';
 
@@ -187,10 +196,14 @@ export function ProspectingConversations({ campaignId, active, view, blocked, pa
   const syncAvailable = view === 'chat' && Boolean(conversation) && !readOnlyConversation;
   const syncStatus = syncAvailable ? selectedSync : undefined;
   const syncPending = busy === 'chatSync' || syncStatus?.status === 'queued' || syncStatus?.status === 'running';
+  const syncIssue = Boolean(syncStatus?.error || syncStatus && ['failed', 'unknown', 'cancelled'].includes(syncStatus.status));
+  const lastSyncedMs = Date.parse(conversation?.lastSyncedAt || '');
+  const hasSynced = Number.isFinite(lastSyncedMs);
+  const syncStalled = Boolean(hasSynced && snapshot?.enabled && !paused && observedAt - lastSyncedMs >= 3 * 60_000);
   const syncLabel = syncPending && snapshot?.online === false ? '启动本机助手后将继续同步'
     : syncStatus?.status === 'running' ? '正在读取抖音私信' : syncPending ? '等待本机助手同步'
-    : syncStatus?.status === 'done' ? `最近同步 ${dateLabel(syncStatus.updatedAt)}`
-    : syncStatus ? syncStatus.error || '上次同步未完成，可以重试。' : '';
+    : syncIssue ? `同步失败：${syncProblem(syncStatus?.error)}`
+    : syncStalled ? '同步已停滞' : '';
   const canReply = Boolean(!readOnlyConversation && conversation?.mode === 'human' && conversation.status === 'active' && sendingAvailable && !mutationBlocked && !paused);
   const pool = (snapshot?.pool || []).filter(item => (grade === 'all' || item.grade === grade) && `${item.nickname} ${item.contactValue} ${item.assignedName || ''}`.toLocaleLowerCase().includes(poolQuery.trim().toLocaleLowerCase()));
   const withinWorkHours = withinChatHours(observedAt, snapshot?.policy || defaultChatPolicy());
@@ -223,7 +236,7 @@ export function ProspectingConversations({ campaignId, active, view, blocked, pa
   }
 
   return <section className="prospect-chat-workspace" hidden={!active} aria-label={view === 'chat' ? '聊天获客' : '留资线索池'}>
-    <div className="prospect-section-heading"><div><h2>{view === 'chat' ? '客户会话' : '留资线索池'}</h2>{syncLabel && <p role="status">{syncLabel}</p>}</div>
+    <div className="prospect-section-heading"><div><h2>{view === 'chat' ? '客户会话' : '留资线索池'}</h2>{view === 'chat' && conversation && <div className={`prospect-chat-sync-status${syncIssue || syncStalled ? ' needs-attention' : ''}`} role="status"><span>{hasSynced ? <>上次同步 <time dateTime={conversation.lastSyncedAt}>{dateLabel(conversation.lastSyncedAt)}</time></> : '尚未完成可靠同步'}</span>{syncLabel && <span>{syncLabel}</span>}</div>}</div>
       {syncAvailable && conversation
         ? <button className="button secondary" disabled={mutationBlocked || syncPending} onClick={() => void execute('chatSync', { conversationId: conversation.id })}>{syncPending ? <Loader2 size={15} className="spin" /> : <RefreshCw size={15} />}立即同步</button>
         : <button className="button ghost" disabled={mutationBlocked} onClick={() => void refresh(true)}><RefreshCw size={15} />刷新</button>}
@@ -258,7 +271,10 @@ export function ProspectingConversations({ campaignId, active, view, blocked, pa
           {conversation ? <div className={`prospect-conversation-detail${conversation.mode === 'human' ? ' is-human' : ''}`}>
             <header className="prospect-conversation-header"><button className="button ghost prospect-chat-back" onClick={() => setMobileDetail(false)}><ArrowLeft size={15} />会话列表</button><div><h3>{conversation.nickname || '未提供昵称'}</h3><div className="prospect-conversation-meta"><span className={`prospect-chat-badge${conversation.mode === 'human' ? ' is-human' : ''}`}>{conversation.mode === 'human' ? <UserRound size={13} /> : <Bot size={13} />}{conversation.status === 'closed' ? '已结束' : conversation.mode === 'human' ? humanModeLabel(conversation) : 'AI 跟进'}</span>{profile && <a href={profile} target="_blank" rel="noopener noreferrer">抖音主页<ExternalLink size={12} /></a>}</div></div>{!readOnlyConversation && <button className="button secondary" disabled={mutationBlocked || conversation.status === 'closed'} onClick={() => changeMode(conversation)}>{busy === 'chatTakeover' || busy === 'chatResume' ? <Loader2 size={15} className="spin" /> : conversation.mode === 'human' ? <Bot size={15} /> : <UserRound size={15} />}{conversation.mode === 'human' ? '交还 AI 助手' : '人工接管'}</button>}</header>
             <details className="prospect-chat-needs" key={`${conversation.id}-needs`}><summary><strong>客户需求</strong><span>{conversation.memory ? stageLabels[conversation.memory.stage] : '待了解'}</span><span>{conversation.memory?.contactCaptured ? '已留资' : '未留资'}</span><ChevronDown size={13} /></summary><div className="prospect-chat-needs-body"><dl>{needFields.map(([key, label]) => <div key={key}><dt>{label}</dt><dd>{conversation.memory?.needs[key] || '未确认'}</dd></div>)}</dl>{conversation.memory?.summary && <p>{conversation.memory.summary}</p>}<p className="prospect-chat-contact-history">留资询问 {conversation.memory?.contactAsks || 0} 次 · 拒绝 {conversation.memory?.contactDeclines || 0} 次</p></div></details>
-            {conversation.status === 'closed' ? <div className="prospect-chat-readonly" role="status"><CircleAlert size={16} /><p>会话已结束{conversation.closeReason ? `：${conversation.closeReason}` : '，消息记录保留。'}</p></div> : readOnlyConversation ? <div className="prospect-chat-readonly" role="status"><Users size={16} /><p>只读会话，接管与发送由原任务负责人操作。</p></div> : conversation.mode === 'human' && <div className="prospect-chat-takeover" role="status"><UserRound size={16} /><div><strong>{humanModeLabel(conversation)}，AI 助手已停止回复此会话</strong><p>{conversation.handoffReason || '完成后可交还 AI 助手继续跟进。'}</p></div></div>}
+            {conversation.status === 'closed' ? <div className="prospect-chat-readonly" role="status"><CircleAlert size={16} /><p>会话已结束{conversation.closeReason ? `：${conversation.closeReason}` : '，消息记录保留。'}</p></div> : <>
+              {readOnlyConversation && <div className="prospect-chat-readonly" role="status"><Users size={16} /><p>只读会话，接管与发送由原任务负责人操作。</p></div>}
+              {conversation.mode === 'human' && <div className="prospect-chat-takeover" role="status"><UserRound size={16} /><div><strong>{humanModeLabel(conversation)}，AI 助手已停止回复此会话</strong><p>{handoffReason(conversation)}</p></div></div>}
+            </>}
             <div className="prospect-chat-transcript" ref={containerRef} role="log" aria-label={`${conversation.nickname || '客户'}的聊天记录`} aria-live="polite" aria-relevant="additions text" onScroll={onScroll} onWheel={markUserInput} onTouchStart={markUserInput} onKeyDown={event => { if (['PageUp', 'PageDown', 'Home', 'End', 'ArrowUp', 'ArrowDown'].includes(event.key)) markUserInput(); }} tabIndex={0}>
               {messages.length ? messages.map(message => <article key={message.id} className={`prospect-chat-message is-${message.direction} is-${message.actor}`}><header><span>{message.actor === 'customer' ? conversation.nickname || '客户' : actorLabels[message.actor]}</span><time dateTime={message.postedAt || message.createdAt}>{dateLabel(message.postedAt || message.createdAt)}</time></header><p>{message.text}</p><footer><span className={['failed', 'unknown'].includes(message.status) ? 'needs-attention' : ''}>{messageLabels[message.status]}</span>{message.error && <span>{message.error}</span>}</footer>{!readOnlyConversation && message.id === latestOutbound?.id && message.status === 'failed' && <button type="button" className="button ghost" disabled={!canReply} onClick={() => void execute('chatReply', { conversationId: conversation.id, version: conversation.version, message: message.text })}><RefreshCw size={14} />重试发送</button>}</article>) : <div className="prospect-chat-no-messages"><MessageCircle size={23} /><p>这段会话还没有同步的消息。保持助手运行，稍后刷新查看。</p></div>}
             </div>

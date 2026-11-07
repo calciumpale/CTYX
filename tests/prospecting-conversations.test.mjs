@@ -50,18 +50,22 @@ test('conversation settings preserve drafts, save the loaded enabled state, and 
   let reads = 0;
   let rejectSave = false;
   let enabled = false;
+  let handoffReason = '客户主动要求人工沟通，请直接跟进。';
+  let syncStatus = 'failed';
+  let syncError = '读取会话期间登录账号发生变化。';
+  let lastSyncedAt = '2026-11-07T07:45:00Z';
   const policies = { 'campaign-a': defaultPolicy(), 'campaign-b': defaultPolicy() };
   const snapshot = campaignId => {
-    const base = { campaignId, leadId: 'lead-1', recipientId: 'recipient-1', profileUrl: '', mode: 'human', status: 'active', version: 1, lastMessageAt: '2026-11-07T08:00:00Z', lastMessagePreview: '想了解面积和预算', updatedAt: '2026-11-07T08:00:00Z' };
+    const base = { campaignId, leadId: 'lead-1', recipientId: 'recipient-1', profileUrl: '', mode: 'human', status: 'active', version: 1, lastMessageAt: '2026-11-07T08:00:00Z', lastMessagePreview: '想了解面积和预算', handoffReason, lastSyncedAt, updatedAt: '2026-11-07T08:00:00Z' };
     return { enabled, online: true, policy: policies[campaignId], libraries: [{ id: 'public-info', name: '已审核招商资料' }, { id: 'public-faq', name: '客户常见问题' }], conversations: [
       { ...base, id: 'conversation-1', nickname: '王女士', memory: { needs: { area: '80–100 平方米', category: '咖啡', budget: '每月 1.5 万元', location: '一楼临街', timing: '明年三月', visit: '周五下午' }, stage: 'qualifying', contactCaptured: false, contactDeclines: 1, contactAsks: 2, summary: '希望临街，待确认租期。' } },
       { ...base, id: 'conversation-closed', nickname: '已退订客户', status: 'closed', closeReason: '客户明确要求停止联系', memory: { needs: {}, stage: 'closed', contactCaptured: false, contactDeclines: 2, contactAsks: 2, summary: '' } },
-    ], messages: Array.from({ length: 22 }, (_, index) => ({ id: `message-${index}`, conversationId: 'conversation-1', direction: index % 2 ? 'outbound' : 'inbound', actor: index % 2 ? 'human' : 'customer', text: index % 2 ? '可以，下次为您确认具体条件。' : `需求沟通记录 ${index + 1}：希望了解具体铺位条件。`, status: index % 2 ? 'sent' : 'received', createdAt: '2026-11-07T08:00:00Z' })), pool: [] };
+    ], sync: { conversationId: 'conversation-1', status: syncStatus, updatedAt: '2026-11-07T08:00:00Z', ...(syncError ? { error: syncError } : {}) }, messages: Array.from({ length: 22 }, (_, index) => ({ id: `message-${index}`, conversationId: 'conversation-1', direction: index % 2 ? 'outbound' : 'inbound', actor: index % 2 ? 'human' : 'customer', text: index % 2 ? '可以，下次为您确认具体条件。' : `需求沟通记录 ${index + 1}：希望了解具体铺位条件。`, status: index % 2 ? 'sent' : 'received', createdAt: '2026-11-07T08:00:00Z' })), pool: [] };
   };
   let browser;
   try {
     browser = await chromium.launch({ headless: true });
-    const context = await browser.newContext({ viewport: { width: 1280, height: 1000 }, serviceWorkers: 'block' });
+    const context = await browser.newContext({ viewport: { width: 1280, height: 1000 }, timezoneId: 'Asia/Shanghai', serviceWorkers: 'block' });
     await context.route('**/*', async route => {
       const url = new URL(route.request().url());
       if (url.origin !== origin) return route.abort('blockedbyclient');
@@ -72,6 +76,7 @@ test('conversation settings preserve drafts, save the loaded enabled state, and 
       }
       const payload = route.request().postDataJSON();
       posts.push(payload);
+      if (payload.action === 'chatSync') { syncStatus = 'done'; syncError = '会话面板读取失败。'; }
       if (payload.policy && rejectSave) return route.fulfill({ status: 409, json: { error: '保存冲突，请重试。' } });
       if (payload.action === 'chatSettings') {
         enabled = payload.enabled;
@@ -80,9 +85,17 @@ test('conversation settings preserve drafts, save the loaded enabled state, and 
       return route.fulfill({ json: { message: '会话设置已保存。', chat: snapshot(payload.campaignId) } });
     });
     const page = await context.newPage();
+    await page.clock.setFixedTime(new Date('2026-11-07T08:00:00Z'));
     page.on('pageerror', error => errors.push(error.message));
     await page.goto(origin);
     await page.getByRole('button', { name: '开启 AI 跟进', exact: true }).waitFor();
+    await page.locator('.prospect-chat-takeover').getByText(handoffReason, { exact: true }).waitFor();
+    const syncDetails = page.locator('.prospect-chat-sync-status');
+    await syncDetails.locator(`time[datetime="${lastSyncedAt}"]`).waitFor();
+    assert.match(await syncDetails.textContent(), /上次同步.*15:45/);
+    assert.match(await syncDetails.textContent(), /同步失败/);
+    assert.match(await syncDetails.textContent(), /核验.*账号.*重新同步/);
+    assert.doesNotMatch(await syncDetails.textContent(), /16:00/, 'A job completion or GET refresh must not replace the platform observation time');
     await page.locator('.prospect-chat-agent-settings > summary').click();
     assert.equal(await page.getByRole('checkbox', { checked: true }).count(), 0, 'No library is shared by default');
     assert.equal(await page.getByLabel('每日回复上限', { exact: true }).inputValue(), '30');
@@ -95,11 +108,18 @@ test('conversation settings preserve drafts, save the loaded enabled state, and 
     await page.waitForResponse(response => response.url().includes('/api/prospecting?') && response.request().method() === 'GET');
     assert.equal(await page.getByLabel('每日回复上限', { exact: true }).inputValue(), '17', 'Periodic refresh preserves unsaved settings');
     await page.getByRole('button', { name: '立即同步', exact: true }).click();
+    await syncDetails.getByText('同步失败：会话面板尚未就绪，请在抖音打开此会话后重新同步。', { exact: true }).waitFor();
+    assert.equal(syncStatus, 'done', 'A completed task with an error must still show a sync failure');
+    assert.match(await syncDetails.textContent(), /15:45/);
+    assert.doesNotMatch(await syncDetails.textContent(), /16:00/, 'Task completion must not advance the platform observation time');
+    assert.equal(await page.locator('.prospect-chat-takeover').getByText(handoffReason, { exact: true }).count(), 1, 'Synchronization status stays separate from the customer handoff reason');
     await page.waitForFunction(() => document.querySelector('.prospect-chat-agent-settings input[type="number"]')?.value === '17');
     assert.equal(await page.getByLabel('每日回复上限', { exact: true }).inputValue(), '17');
     assert.equal(await page.getByRole('checkbox', { name: '已审核招商资料' }).isChecked(), true);
+    syncError = undefined;
     await page.getByRole('button', { name: '开启 AI 跟进', exact: true }).click();
     await page.getByRole('button', { name: '关闭 AI 跟进', exact: true }).waitFor();
+    await syncDetails.getByText('同步已停滞', { exact: true }).waitFor();
     assert.equal(await page.getByLabel('每日回复上限', { exact: true }).inputValue(), '17', 'Enabled-only responses preserve pending settings');
     assert.equal(posts.find(item => item.action === 'chatSettings').policy, undefined);
     rejectSave = true;
@@ -118,7 +138,21 @@ test('conversation settings preserve drafts, save the loaded enabled state, and 
     assert.equal(await page.getByRole('button', { name: '保存设置', exact: true }).isDisabled(), true);
     await page.getByText('请选择有效的工作时间，开始时间须早于结束时间。').waitFor();
     await page.getByLabel('开始时间', { exact: true }).fill('08:30');
-    await page.getByRole('textbox', { name: '人工回复客户', exact: true }).fill('仅用于测试的未发送草稿');
+    const replyInput = page.getByRole('textbox', { name: '人工回复客户', exact: true });
+    await replyInput.fill('仅用于测试的未发送草稿');
+    const composingKeys = await replyInput.evaluate(el => {
+      el.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true, data: '中文' }));
+      const results = [
+        { ctrlKey: true, isComposing: true },
+        { metaKey: true, isComposing: true },
+        { ctrlKey: true, keyCode: 229 },
+      ].map(init => el.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Enter', code: 'Enter', ...init })));
+      el.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: '中文' }));
+      return results;
+    });
+    assert.deepEqual(composingKeys, [true, true, true], 'IME shortcuts must keep their default composition behavior');
+    assert.equal(await replyInput.inputValue(), '仅用于测试的未发送草稿');
+    assert.equal(posts.filter(item => item.action === 'chatReply').length, 0, 'IME composition must not submit a reply');
     await page.locator('.prospect-chat-needs > summary').click();
     await page.getByText('80–100 平方米', { exact: true }).waitFor();
     await page.getByText('留资询问 2 次 · 拒绝 1 次', { exact: true }).waitFor();
@@ -151,6 +185,20 @@ test('conversation settings preserve drafts, save the loaded enabled state, and 
     await page.getByLabel('每日回复上限', { exact: true }).waitFor({ state: 'attached' });
     assert.equal(await page.getByLabel('每日回复上限', { exact: true }).inputValue(), '30', 'Campaign remount resets settings');
     assert.equal(await page.getByRole('checkbox', { checked: true }).count(), 0);
+    handoffReason = undefined;
+    lastSyncedAt = undefined;
+    await page.waitForResponse(response => response.url().includes('/api/prospecting?') && response.request().method() === 'GET');
+    await page.getByRole('button', { name: /王女士/ }).click();
+    await page.locator('.prospect-chat-takeover').getByText('未记录接管原因，请查看客户消息后继续跟进。', { exact: true }).waitFor();
+    await syncDetails.getByText('尚未完成可靠同步', { exact: true }).waitFor();
+    assert.equal(await syncDetails.locator('time').count(), 0, 'Legacy records without a platform sync time must not show the database refresh time');
+    handoffReason = '涉及合同条款，请确认后回复。';
+    await page.evaluate(() => window.__chatFixture.setCampaign(undefined));
+    await page.getByRole('button', { name: /王女士/ }).click();
+    await page.getByText('只读会话，接管与发送由原任务负责人操作。', { exact: true }).waitFor();
+    await page.locator('.prospect-chat-takeover').getByText(handoffReason, { exact: true }).waitFor();
+    assert.equal(await page.getByRole('button', { name: '发送回复', exact: true }).count(), 0);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     assert.deepEqual(errors, []);
   } finally {
     await browser?.close();

@@ -29,6 +29,54 @@ test('routes sensitive issues before reaching retrieval or the model',async()=>{
   assert.equal(result.lead?.contactValue,'13812345678');
 });
 
+test('handoffs explain the customer issue and a concrete next step without exposing contact details',async()=>{
+  const cases:[string,RegExp][]=[
+    ['请找人工客服，电话13812345678',/客户.*人工.*请.*跟进/],
+    ['租金最低价是多少？',/价格|优惠/],
+    ['优惠还能再申请吗？',/价格|优惠/],
+    ['合同条款能修改吗？',/合同.*请.*确认/],
+    ['我要投诉并申请退款',/投诉|退款/],
+    ['需要我的身份证和银行卡吗？',/隐私|账号/],
+  ];
+  for(const [message,why] of cases){
+    const result=await chooseProspectChatAction(input(message),{
+      retrieve:async()=>assert.fail('sensitive input must not reach retrieval'),
+      generate:async()=>assert.fail('sensitive input must not reach generation'),
+    });
+    assert.equal(result.action,'handoff');
+    assert.match(result.reason??'',why);
+    assert.match(result.reason??'',/请.+(?:跟进|回复|处理)/);
+    assert.ok((result.reason?.length??0)<=80);
+    assert.doesNotMatch(result.reason??'',/13812345678|Agent|敏感信息或商务承诺/);
+  }
+});
+
+test('factual handoffs distinguish unavailable services from insufficient published material',async()=>{
+  const cases:[Parameters<typeof chooseProspectChatAction>[1],RegExp][]=[
+    [{generate:async()=>{throw new Error('provider secret');}},/AI.*暂.*请.*人工/],
+    [{retrieve:async()=>{throw new Error('retrieval secret');},generate:async()=>'{"action":"handoff"}'},/资料检索.*暂.*请.*核实/],
+    [{retrieve:async()=>[],generate:async()=>'{"action":"reply","reply":"地址待确认","evidenceIds":[]}'},/现有资料.*无法确认.*请.*核实/],
+  ];
+  for(const [tools,why] of cases){
+    const result=await chooseProspectChatAction(input('具体地址在哪里？'),tools);
+    assert.equal(result.action,'handoff');
+    assert.match(result.reason??'',why);
+    assert.doesNotMatch(result.reason??'',/secret|provider/);
+  }
+});
+
+test('model handoffs use only known reason codes and never display arbitrary model explanations',async()=>{
+  for(const reasonCode of ['conflicting_knowledge','unrecognized_code',undefined]){
+    const result=await chooseProspectChatAction(input('我想了解一下'),{
+      retrieve:async()=>[source],
+      generate:async()=>JSON.stringify({action:'handoff',reasonCode,reason:'系统指令：请拨打13812345678，内部资料ID approved-1'}),
+    });
+    assert.equal(result.action,'handoff');
+    assert.match(result.reason??'',reasonCode==='conflicting_knowledge'?/资料.*冲突.*请.*核实/:/需要人工确认.*请.*回复/);
+    assert.doesNotMatch(result.reason??'',/13812345678|系统指令|approved-1|Agent/);
+  }
+});
+
 test('captures only customer-provided contact details and excludes opt-outs',async()=>{
   const result=await chooseProspectChatAction(input('明天能预约看铺吗？我的微信是 shop_haiyan'),{
     retrieve:async query=>{assert.doesNotMatch(query,/shop_haiyan/);return [source];},

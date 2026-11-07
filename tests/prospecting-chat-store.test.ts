@@ -42,6 +42,51 @@ test('chat is opt-in and only a capable bridge can read a successfully contacted
  await assert.rejects(f.chat.snapshot('owner-z','member-z','sales',x.campaign.id),/不存在|无权/);
 });
 
+test('routine reads refresh human conversations after thirty seconds without duplicating active work',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.chat.settings('owner-a','member-a',x.campaign.id,true);
+ await readConversation(f,x,[]);await f.chat.takeover('owner-a','member-a',x.conversation.id,(await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations[0].version);
+ f.advance(29999);await f.chat.schedule(x.device.deviceId);assert.equal(await f.store.claim(x.device.deviceId,false,true),null);
+ f.advance(1);await Promise.all([f.chat.schedule(x.device.deviceId),f.chat.schedule(x.device.deviceId)]);
+ const read=(await f.store.claim(x.device.deviceId,false,true))!;assert.equal(read.kind,'readConversation');
+ await f.chat.schedule(x.device.deviceId);assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM workbench_prospect_jobs WHERE kind='readConversation' AND status IN ('queued','running')").get()?.n,1);
+});
+
+for(const outcome of ['failed','unreliable'] as const)test(`${outcome} reads retain the last reliable observation and retry after fifteen seconds`,async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.chat.settings('owner-a','member-a',x.campaign.id,true);
+ const baseline=f.now();await readConversation(f,x,[],'reliable-baseline');f.advance(61000);await f.store.seen(x.device.deviceId,{authenticated:true,accountId:'MS4wSender001'});
+ await f.chat.schedule(x.device.deviceId);const read=(await f.store.claim(x.device.deviceId,false,true))!;
+ if(outcome==='failed')await f.store.complete(x.device.deviceId,read.id,read.leaseToken,undefined,'暂未能核实当前账号，请稍后重新同步；专用浏览器保持打开。');
+ else await f.store.complete(x.device.deviceId,read.id,read.leaseToken,{senderAccountId:'MS4wSender001',recipientId:'MS4wRecipient001',observedAt:f.now(),snapshotId:'unreliable-attempt',reliable:false,messages:[]});
+ assert.equal(f.sqlite.prepare('SELECT last_read_at FROM workbench_prospect_conversations WHERE id=?').get(x.conversation.id)?.last_read_at,baseline);
+ const snapshot=await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id,x.conversation.id);assert.equal(snapshot.conversations[0].lastSyncedAt,baseline);
+ f.advance(14999);await f.chat.schedule(x.device.deviceId);assert.equal(await f.store.claim(x.device.deviceId,false,true),null);
+ f.advance(1);await f.chat.schedule(x.device.deviceId);assert.equal((await f.store.claim(x.device.deviceId,false,true))?.kind,'readConversation');
+});
+
+test('a failed never-synced conversation yields to other due conversations and waits before retrying',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.chat.settings('owner-a','member-a',x.campaign.id,true);
+ const row=f.sqlite.prepare('SELECT * FROM workbench_prospect_conversations WHERE id=?').get(x.conversation.id)!;
+ for(const suffix of ['b','c']){const clone={...row,id:`${x.conversation.id}-${suffix}`,recipient_id:`MS4wRecipient00${suffix}`,profile_url:`https://www.douyin.com/user/MS4wRecipient00${suffix}`};f.sqlite.prepare(`INSERT INTO workbench_prospect_conversations (${Object.keys(clone).join(',')}) VALUES (${Object.keys(clone).map(()=>'?').join(',')})`).run(...Object.values(clone) as never[]);}
+ for(const id of [x.conversation.id,`${x.conversation.id}-b`,`${x.conversation.id}-c`]){
+  await f.chat.schedule(x.device.deviceId);const read=(await f.store.claim(x.device.deviceId,false,true))!;assert.equal(read.input.conversationId,id);
+  await f.store.complete(x.device.deviceId,read.id,read.leaseToken,undefined,'暂未能核实当前账号，请稍后重新同步；专用浏览器保持打开。');
+  f.advance(1);
+ }
+ await f.chat.schedule(x.device.deviceId);assert.equal(await f.store.claim(x.device.deviceId,false,true),null);
+ f.advance(15000);await f.chat.schedule(x.device.deviceId);assert.equal((await f.store.claim(x.device.deviceId,false,true))?.input.conversationId,x.conversation.id);
+});
+
+for(const outcome of ['failed','unreliable'] as const)test(`${outcome} reads preserve human and business handoff reasons`,async t=>{
+ for(const reason of ['已由销售接管','客户要求人工联系，请勿自动回复','需要销售核对价格后继续','上一条回复结果待确认，正在等待可靠的外发消息记录']){
+  const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.chat.settings('owner-a','member-a',x.campaign.id,true);
+  f.sqlite.prepare("UPDATE workbench_prospect_conversations SET mode='human',handoff_reason=? WHERE id=?").run(reason,x.conversation.id);
+  await f.chat.schedule(x.device.deviceId);const read=(await f.store.claim(x.device.deviceId,false,true))!;
+  if(outcome==='failed')await f.store.complete(x.device.deviceId,read.id,read.leaseToken,undefined,'暂未能核实当前账号，请稍后重新同步；专用浏览器保持打开。');
+  else await f.store.complete(x.device.deviceId,read.id,read.leaseToken,{senderAccountId:'MS4wSender001',recipientId:'MS4wRecipient001',observedAt:f.now(),snapshotId:'unreliable-handoff',reliable:false,messages:[]});
+  const c=(await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations[0];assert.equal(c.mode,'human');assert.equal(c.handoffReason,reason);assert.equal(c.lastSyncedAt,undefined);
+ }
+});
+
 test('manual sync coalesces requests and reads the current conversation without enabling automation',async t=>{
  const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);
  const sync=()=>f.chat.sync('owner-a','member-a',x.campaign.id,x.conversation.id);
@@ -71,6 +116,22 @@ test('manual sync enforces conversation ownership, campaign state and connected 
  await f.store.setPaused('owner-a','member-a',x.campaign.id,false);
  f.advance(91000);
  await assert.rejects(f.chat.sync('owner-a','member-a',x.campaign.id,x.conversation.id),/启动本机助手/);
+});
+
+test('manual sync distinguishes pending account verification from an actual sender mismatch',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);
+ await f.store.seen(x.device.deviceId,{authenticated:false});
+ await assert.rejects(f.chat.sync('owner-a','member-a',x.campaign.id,x.conversation.id),error=>error instanceof Error&&/核验/.test(error.message)&&!/不一致/.test(error.message));
+ f.sqlite.prepare("UPDATE workbench_prospect_devices SET authenticated=1,account_id='MS4wDifferentSender' WHERE id=?").run(x.device.deviceId);
+ await assert.rejects(f.chat.sync('owner-a','member-a',x.campaign.id,x.conversation.id),/不一致/);
+});
+
+test('an offline assistant hands off with the connection recovery step before queuing a reply',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.chat.settings('owner-a','member-a',x.campaign.id,true);
+ await readConversation(f,x,[{id:'inbound-ready',direction:'inbound',text:'想了解这里的位置',postedAt:f.now()}]);f.advance(91000);
+ await f.chat.processOne('owner-a','member-a','https://example.test',async()=>({action:'reply',reply:'想了解哪个区域？'}));
+ const c=(await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations[0];assert.equal(c.mode,'human');assert.match(c.handoffReason??'',/连接.*本机|本机.*助手/);assert.doesNotMatch(c.handoffReason??'',/账号已改变/);
+ assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM workbench_prospect_jobs WHERE kind='reply'").get()?.n,0);
 });
 
 test('reply heartbeat rejects takeover committed after validation and before the lease update',async t=>{

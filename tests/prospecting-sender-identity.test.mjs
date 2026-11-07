@@ -7,7 +7,7 @@ const browserTest = process.env.PROSPECT_BROWSER_TEST === '1' ? test : test.skip
 const handle = 'tenant_123';
 const ownProfile = (value = handle, controls = true) => `<main><h1>同名账号</h1><span>抖音号：${value}</span>${controls ? '<button role="tab">私密作品</button><input placeholder="搜索你发布的作品">' : ''}</main>`;
 const result = (id, value = handle) => `<a href="/user/${id}?from=search">同名账号 抖音号: ${value}\n10粉丝 20获赞</a>`;
-async function fixture(t, { search = result('other-user', `${handle}_other`) + result('sender-1'), canonical = ownProfile(), self = ownProfile() } = {}) {
+async function fixture(t, { search = result('other-user', `${handle}_other`) + result('sender-1'), canonical = ownProfile(), self = ownProfile(), conversation = false } = {}) {
   const { chromium } = await import('../tools/douyin-bridge/node_modules/playwright/index.mjs');
   const browser = await chromium.launch({ headless: true }); t.after(() => browser.close());
   const context = await browser.newContext();
@@ -20,6 +20,7 @@ async function fixture(t, { search = result('other-user', `${handle}_other`) + r
     const content = state.profiles[url.pathname] ?? (url.pathname === '/user/self' ? state.self
       : url.pathname === '/user/sender-1' ? state.canonical
       : url.pathname.startsWith('/search/') ? state.search
+      : conversation ? '<main><button onclick="document.querySelector(\'[role=dialog]\').hidden=false">私信</button><section role="dialog" hidden><a href="/user/recipient-1">会话对象</a><div data-e2e="message-list"><div data-e2e="message-item" data-message-direction="incoming" data-message-id="inbound-1"><span data-e2e="message-text">想了解面积</span></div></div><textarea>保留的私信草稿</textarea></section></main>'
       : '<main><h1>同名账号</h1><span>抖音号：different_recipient</span><div role="dialog"><textarea>保留的私信草稿</textarea></div></main>');
     return route.fulfill({ contentType: 'text/html; charset=utf-8', body: `<!doctype html><html><body><header><a aria-label="我的主页" href="/user/self">我</a></header>${content}</body></html>` });
   });
@@ -249,12 +250,12 @@ browserTest('a transient DOM read interruption stays unauthenticated and recover
   assert.equal(state.requests.length, before);
 });
 
-browserTest('bounded recovery repairs an expired canonical proof on SELF without replacing the chat or draft', async t => {
+browserTest('bounded recovery can refresh a proved SELF alias without replacing the chat or draft', async t => {
   const { adapter, page, state } = await fixture(t);
   await adapter.accountStatus({ expectedAccountId: 'sender-1' });
   await adapter.identityNavigate('https://www.douyin.com/user/self');
   adapter.passiveAccount.checkedAt -= 15001;
-  assert.equal((await adapter.accountStatus({ passive: true, expectedAccountId: 'sender-1' })).verificationPending, true);
+  assert.equal((await adapter.accountStatus({ passive: true, expectedAccountId: 'sender-1' })).accountId, 'sender-1');
   const before = state.requests.length, pages = adapter.context.pages().length;
   const recovered = await adapter.recoverAccountStatus({ expectedAccountId: 'sender-1' });
   assert.equal(recovered.authenticated, true); assert.equal(recovered.accountId, 'sender-1');
@@ -285,7 +286,8 @@ browserTest('bounded recovery repairs the SELF state left by a transient canonic
   state.canonical = ownProfile(handle, false);
   assert.equal((await adapter.accountStatus({ expectedAccountId: 'sender-1' })).verificationPending, true);
   assert.equal(adapter.identityPage.url(), 'https://www.douyin.com/user/self');
-  assert.equal(adapter.senderProof, undefined);
+  assert.equal(adapter.senderProof.accountId, 'sender-1');
+  assert.equal(adapter.senderProof.handle, handle);
   state.canonical = ownProfile();
   const before = state.requests.length;
   const recovered = await adapter.recoverAccountStatus({ expectedAccountId: 'sender-1' });
@@ -342,4 +344,151 @@ browserTest('an explicit visible login control overrides stale owner health with
   const recovered = await adapter.recoverAccountStatus({ expectedAccountId: 'sender-1' });
   assert.equal(recovered.authenticated, false); assert.equal(recovered.verificationPending, undefined);
   assert.equal(state.requests.length, before);
+});
+
+const conversationInput = { senderAccountId: 'sender-1', recipientId: 'recipient-1', profileUrl: 'https://www.douyin.com/user/recipient-1', conversationId: 'conversation-1', limit: 50 };
+
+browserTest('conversation reads reject a server-side account switch hidden by stale owner DOM at either read boundary', async t => {
+  for (const boundary of ['before', 'after']) for (const conflict of ['missing-owner', 'changed-owner']) {
+    const { adapter, page, state } = await fixture(t, { conversation: true });
+    await adapter.accountStatus({ expectedAccountId: 'sender-1' });
+    const identity = adapter.identityPage, hint = { ...adapter.senderProof };
+    const before = state.requests.length;
+    const switchSession = async () => {
+      // The server's current session is now B, while the unrefreshed identity
+      // tab still renders A and the freshly loaded conversation header is SELF.
+      state.canonical = conflict === 'missing-owner' ? ownProfile(handle, false) : ownProfile('session_b');
+      state.self = ownProfile('session_b');
+      assert.equal((await adapter.ownProfileProof(identity, undefined, 'sender-1')).handle, handle);
+      assert.equal((await adapter.currentAccount(page)).hasSelfLink, true);
+    };
+    if (boundary === 'before') await switchSession();
+    else {
+      const verifyTarget = adapter.verifyTarget.bind(adapter);
+      adapter.verifyTarget = async (...args) => { await verifyTarget(...args); await switchSession(); };
+    }
+    await assert.rejects(adapter.readConversation(conversationInput), error => {
+      assert.equal(error.code, conflict === 'missing-owner' ? 'ACCOUNT_VERIFICATION_PENDING' : 'ACCOUNT_CHANGED');
+      if (conflict === 'missing-owner') {
+        assert.equal(error.verificationPending, true);
+        assert.equal(error.verificationReason, 'owner_proof_missing');
+      }
+      return true;
+    });
+    assert.equal(adapter.identityPage, identity);
+    assert.deepEqual(state.requests.slice(before), boundary === 'before'
+      ? ['/user/recipient-1', '/user/sender-1']
+      : ['/user/recipient-1', '/user/sender-1', '/user/sender-1']);
+    assert.deepEqual(adapter.senderProof, hint);
+    assert.equal(await page.locator('textarea').inputValue(), '保留的私信草稿');
+  }
+});
+
+browserTest('healthy conversation reads verify both boundaries on the same canonical identity tab without rediscovery', async t => {
+  const { adapter, page, state } = await fixture(t, { conversation: true });
+  await adapter.accountStatus({ expectedAccountId: 'sender-1' });
+  const before = state.requests.length, identity = adapter.identityPage, pages = adapter.context.pages().length;
+  const observed = await adapter.readConversation(conversationInput);
+  assert.equal(observed.messages[0].text, '想了解面积');
+  assert.equal(observed.reliable, true);
+  assert.deepEqual(state.requests.slice(before), ['/user/recipient-1', '/user/sender-1', '/user/sender-1']);
+  assert.equal(adapter.identityPage, identity);
+  assert.equal(adapter.context.pages().length, pages);
+  assert.equal(page.url(), 'https://www.douyin.com/user/recipient-1');
+  assert.equal(await page.locator('textarea').inputValue(), '保留的私信草稿');
+});
+
+browserTest('a same-handle SELF alias stays passive while conversation reads refresh the established canonical', async t => {
+  const { adapter, page, state } = await fixture(t, { conversation: true });
+  await adapter.accountStatus({ expectedAccountId: 'sender-1' });
+  await adapter.identityPage.evaluate(() => history.replaceState({}, '', '/user/self'));
+  adapter.passiveAccount.checkedAt -= 15001;
+  const before = state.requests.length;
+  assert.equal((await adapter.accountStatus({ passive: true, expectedAccountId: 'sender-1' })).accountId, 'sender-1');
+  assert.equal(state.requests.length, before);
+  assert.equal((await adapter.readConversation(conversationInput)).messages[0].direction, 'inbound');
+  assert.deepEqual(state.requests.slice(before), ['/user/recipient-1', '/user/sender-1', '/user/sender-1']);
+  state.canonical = ownProfile(handle, false); state.self = ownProfile(handle, false);
+  assert.equal((await adapter.verifiedSender(page, 'sender-1')).authenticated, false);
+});
+
+browserTest('missing post-read ownership is pending and retains the established identity hint', async t => {
+  const { adapter, state } = await fixture(t, { conversation: true });
+  await adapter.accountStatus({ expectedAccountId: 'sender-1' });
+  const hint = { ...adapter.senderProof }, verifyTarget = adapter.verifyTarget.bind(adapter);
+  adapter.verifyTarget = async (...args) => {
+    await verifyTarget(...args);
+    await adapter.identityPage.locator('[role=tab]').evaluate(node => node.remove());
+    state.canonical = ownProfile(handle, false); state.self = ownProfile(handle, false);
+  };
+  await assert.rejects(adapter.readConversation(conversationInput), error => {
+    assert.equal(error.code, 'ACCOUNT_VERIFICATION_PENDING');
+    assert.equal(error.verificationPending, true);
+    assert.equal(error.needsAccountVerification, true);
+    assert.equal(error.verificationReason, 'owner_proof_missing');
+    return true;
+  });
+  assert.deepEqual(adapter.senderProof, hint);
+});
+
+browserTest('a strict temporary canonical failure preserves pending metadata and the established identity hint', async t => {
+  const { adapter, page, state } = await fixture(t);
+  await adapter.accountStatus({ expectedAccountId: 'sender-1' });
+  const hint = { ...adapter.senderProof };
+  state.canonical = ownProfile(handle, false); state.self = ownProfile(handle, false);
+  const pending = await adapter.verifiedSender(page, 'sender-1');
+  assert.equal(pending.authenticated, false);
+  assert.equal(pending.verificationPending, true);
+  assert.equal(pending.verificationReason, 'owner_proof_missing');
+  assert.deepEqual(adapter.senderProof, hint);
+});
+
+browserTest('fresh read ownership rejects a changed header or handle and explicit login before another identity navigation', async t => {
+  for (const conflict of ['header', 'handle', 'login', 'captcha']) {
+    const { adapter, state } = await fixture(t, { conversation: true });
+    await adapter.accountStatus({ expectedAccountId: 'sender-1' });
+    const before = state.requests.filter(path => path === '/user/sender-1').length;
+    const verifyTarget = adapter.verifyTarget.bind(adapter);
+    adapter.verifyTarget = async (...args) => {
+      await verifyTarget(...args);
+      if (conflict === 'header') await adapter.activePage.locator('header').first().evaluate(node => { node.innerHTML = '<a aria-label="我的主页" href="/user/sender-2">其他账号</a>'; });
+      if (conflict === 'handle') await adapter.identityPage.locator('main span').evaluate(node => { node.textContent = '抖音号：changed_owner'; });
+      if (conflict === 'login') await adapter.identityPage.locator('header').evaluate(node => { node.innerHTML = '<button>登录</button>'; });
+      if (conflict === 'captcha') await adapter.identityPage.locator('main').evaluate(node => node.insertAdjacentHTML('beforeend', '<div data-e2e="captcha">安全验证</div>'));
+    };
+    await assert.rejects(adapter.readConversation(conversationInput), error => error.code === (conflict === 'login' ? 'UNAUTHENTICATED' : conflict === 'captcha' ? 'HUMAN_ACTION_REQUIRED' : 'ACCOUNT_CHANGED'));
+    assert.equal(state.requests.filter(path => path === '/user/sender-1').length, before + 1);
+  }
+});
+
+browserTest('conversation identity DOM interruptions stay pending without erasing the established identity hint', async t => {
+  const { adapter, state } = await fixture(t, { conversation: true });
+  await adapter.accountStatus({ expectedAccountId: 'sender-1' });
+  const hint = { ...adapter.senderProof }, identity = adapter.identityPage, before = state.requests.length;
+  const currentAccount = adapter.currentAccount.bind(adapter);
+  adapter.currentAccount = async page => {
+    if (page === identity) throw Error('Execution context was destroyed');
+    return currentAccount(page);
+  };
+  await assert.rejects(adapter.readConversation(conversationInput), error => {
+    assert.equal(error.code, 'ACCOUNT_VERIFICATION_PENDING');
+    assert.equal(error.verificationPending, true);
+    assert.equal(error.needsAccountVerification, true);
+    assert.equal(error.verificationReason, 'account_read_interrupted');
+    return true;
+  });
+  assert.deepEqual(adapter.senderProof, hint);
+  assert.deepEqual(state.requests.slice(before), ['/user/recipient-1', '/user/sender-1']);
+});
+
+browserTest('strict sender DOM interruptions stay pending without erasing the established identity hint', async t => {
+  const { adapter, page } = await fixture(t);
+  await adapter.accountStatus({ expectedAccountId: 'sender-1' });
+  const hint = { ...adapter.senderProof };
+  adapter.currentAccount = async () => { throw Error('Execution context was destroyed'); };
+  const pending = await adapter.verifiedSender(page, 'sender-1');
+  assert.equal(pending.authenticated, false);
+  assert.equal(pending.verificationPending, true);
+  assert.equal(pending.verificationReason, 'account_read_interrupted');
+  assert.deepEqual(adapter.senderProof, hint);
 });

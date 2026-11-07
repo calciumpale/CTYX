@@ -102,13 +102,18 @@ export function createProspectingService(deps:Dependencies){
     const verifiedAccountId=typeof input.verifiedReadOnlyAccountId==='string'&&/^dy-readonly-[a-f0-9]{24}$/.test(input.verifiedReadOnlyAccountId)&&current.accountId===input.accountId&&!current.accountId?.startsWith('dy-readonly-')?current.accountId:undefined;
     const acknowledgement=verifiedAccountId?{verifiedAccountId}:{};
     const claim=()=>store.claim(deviceId,input.sendRetryVersion===1,supportsConversations);
+    // Persist due inbox observations before prospect analysis or early returns.
+    if(supportsConversations)await store.chat.schedule(deviceId);
     if(supportsConversations&&await store.chat.hasQueuedManualSync(deviceId)){
      if(request.signal.aborted)throw new DomainError('请求已取消，未领取新任务',409);
      const queued=await claim();
      if(queued)return json({job:queued,...acknowledgement});
     }
     if(supportsConversations&&await store.chat.hasQueuedConversationWork(deviceId)){
-     await store.chat.processOne(device.owner_id,device.member_id,new URL(request.url).origin,undefined,true);
+     const stopped=await store.chat.processOne(device.owner_id,device.member_id,new URL(request.url).origin,undefined,true);
+     // Continuous reads must not starve already observed inbound turns. Process
+     // at most one normal decision, retaining opt-out priority before dispatch.
+     if(!stopped)await store.chat.processOne(device.owner_id,device.member_id,new URL(request.url).origin,deps.decideChat);
      if(request.signal.aborted)throw new DomainError('请求已取消，未领取新任务',409);
      const queued=await claim();
      if(queued)return json({job:queued,...acknowledgement});
@@ -117,7 +122,6 @@ export function createProspectingService(deps:Dependencies){
     if(!chatProcessed)await analyzeBatch(device.owner_id,device.member_id,new URL(request.url).origin);
     if(request.signal.aborted)throw new DomainError('请求已取消，未领取新任务',409);
     await store.enqueueAutomatic(device.owner_id,device.member_id);
-    if(supportsConversations)await store.chat.schedule(deviceId);
     if(request.signal.aborted)throw new DomainError('请求已取消，未领取新任务',409);
     return json({job:await claim(),...acknowledgement});
    }

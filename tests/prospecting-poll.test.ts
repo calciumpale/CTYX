@@ -10,7 +10,7 @@ import type {ProspectBridgeJob} from '../app/lib/prospecting-types.ts';
 const model={key:'synthetic-only',url:'https://model.example.test/chat/completions',name:'test-model'};
 const sender={authenticated:true,accountId:'MS4wPollSender001',accountName:'测试发送账号'};
 
-function fixture(){
+function fixture(decideChat?:Parameters<typeof createProspectingService>[0]['decideChat']){
  const sqlite=new DatabaseSync(':memory:');
  for(const file of readdirSync(new URL('../drizzle/',import.meta.url)).filter(name=>name.endsWith('.sql')).sort())sqlite.exec(readFileSync(new URL(`../drizzle/${file}`,import.meta.url),'utf8'));
  sqlite.exec("INSERT INTO workbench_member_accounts VALUES ('member-a','owner-a','sales','销售','sales','sales-1',1,'salt','hash',100000,'now','now')");
@@ -32,7 +32,7 @@ function fixture(){
   },
  } as unknown as D1Database;
  const store=createProspectingStore(db);
- const service=createProspectingService({db,readModel:async()=>model});
+ const service=createProspectingService({db,readModel:async()=>model,decideChat});
  async function connect(){const device=await store.connect('owner-a','member-a','poll测试');await store.seen(device.deviceId,sender);return device;}
  async function campaign(suffix:string){
   const c=await store.createCampaign('owner-a','member-a',normalizeCampaignInput({requirements:`销售培训工具，面向中小企业${suffix}`,keywords:['销售培训'],reviewMode:'manual'}));
@@ -128,6 +128,45 @@ test('queued ongoing conversation work is claimed before new prospect model anal
  await f.store.chat.settings('owner-a','member-a',ongoing.campaign.id,true);await f.store.chat.schedule(device.deviceId);await f.campaign('backlog');
  let modelCalls=0;t.mock.method(globalThis,'fetch',async(_url:unknown,init?:RequestInit)=>{modelCalls++;return modelReply(init);});
  const response=await f.poll(device,undefined,1);assert.equal(response.status,200);assert.equal((await response.json() as {job:ProspectBridgeJob}).job.kind,'readConversation');assert.equal(modelCalls,0);
+});
+
+test('a newly due conversation read is claimed before prospect model analysis',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const device=await f.connect();const ongoing=await f.campaign('newly-due');
+ await f.store.review('owner-a','member-a',ongoing.campaign.id,ongoing.lead.id,ongoing.lead.version,'approve',ongoing.lead.greeting,'销售');const greeting=(await f.store.claim(device.deviceId))!;await f.store.complete(device.deviceId,greeting.id,greeting.leaseToken,{outcome:'submitted'});
+ await f.store.chat.settings('owner-a','member-a',ongoing.campaign.id,true);await f.campaign('backlog');
+ let modelCalls=0;t.mock.method(globalThis,'fetch',async(_url:unknown,init?:RequestInit)=>{modelCalls++;return modelReply(init);});
+ const response=await f.poll(device,undefined,1);assert.equal(response.status,200);assert.equal((await response.json() as {job:ProspectBridgeJob}).job.kind,'readConversation');assert.equal(modelCalls,0,'a first due read must not wait for a model request');
+});
+
+test('due inbox reads do not starve an already synchronized customer decision',async t=>{
+ let decisions=0;
+ const f=fixture(async()=>{decisions++;return{action:'handoff',reason:'客户要求人工沟通，请直接跟进。'};});
+ t.after(()=>f.sqlite.close());const device=await f.connect();const ongoing=await f.campaign('decision-fairness');
+ await f.store.review('owner-a','member-a',ongoing.campaign.id,ongoing.lead.id,ongoing.lead.version,'approve',ongoing.lead.greeting,'销售');
+ const greeting=(await f.store.claim(device.deviceId))!;await f.store.complete(device.deviceId,greeting.id,greeting.leaseToken,{outcome:'submitted'});
+ await f.store.chat.settings('owner-a','member-a',ongoing.campaign.id,true,{libraryIds:[],replyDailyLimit:30,conversationReplyLimit:12,workStart:'00:00',workEnd:'23:59'});
+ const c=(await f.store.chat.snapshot('owner-a','member-a','sales',ongoing.campaign.id)).conversations[0];
+ f.sqlite.prepare('UPDATE workbench_prospect_conversations SET has_baseline=1,opened_at=?,last_snapshot_id=? WHERE id=?').run(new Date(Date.now()-60000).toISOString(),'baseline',c.id);
+ await f.store.chat.schedule(device.deviceId);const read=(await f.store.claim(device.deviceId,false,true))!;
+ await f.store.complete(device.deviceId,read.id,read.leaseToken,{senderAccountId:sender.accountId,recipientId:ongoing.lead.recipientId,observedAt:new Date().toISOString(),snapshotId:'new-inbound',reliable:true,messages:[{id:'new-question',direction:'inbound',text:'请介绍一下',postedAt:new Date().toISOString()}]});
+ const row=f.sqlite.prepare('SELECT * FROM workbench_prospect_conversations WHERE id=?').get(c.id)!;
+ const clone={...row,id:`${c.id}-due`,recipient_id:'MS4wFairRecipient',profile_url:'https://www.douyin.com/user/MS4wFairRecipient',has_baseline:0,last_snapshot_id:null,last_read_at:null};
+ f.sqlite.prepare(`INSERT INTO workbench_prospect_conversations (${Object.keys(clone).join(',')}) VALUES (${Object.keys(clone).map(()=>'?').join(',')})`).run(...Object.values(clone) as never[]);
+ const response=await f.poll(device,undefined,1);assert.equal(response.status,200);
+ assert.equal((await response.json() as {job:ProspectBridgeJob}).job.kind,'readConversation');
+ assert.equal(decisions,1,'an inbox queue must still give an eligible inbound turn its decision slot');
+ assert.equal(f.sqlite.prepare('SELECT mode FROM workbench_prospect_conversations WHERE id=?').get(c.id)?.mode,'human');
+});
+
+test('an existing manual sync does not prevent scheduling another due conversation',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const device=await f.connect();const ongoing=await f.campaign('manual-and-due');
+ await f.store.review('owner-a','member-a',ongoing.campaign.id,ongoing.lead.id,ongoing.lead.version,'approve',ongoing.lead.greeting,'销售');const greeting=(await f.store.claim(device.deviceId))!;await f.store.complete(device.deviceId,greeting.id,greeting.leaseToken,{outcome:'submitted'});
+ await f.store.chat.settings('owner-a','member-a',ongoing.campaign.id,true);const c=(await f.store.chat.snapshot('owner-a','member-a','sales',ongoing.campaign.id)).conversations[0];
+ const row=f.sqlite.prepare('SELECT * FROM workbench_prospect_conversations WHERE id=?').get(c.id)!;const clone={...row,id:`${c.id}-other`,recipient_id:'MS4wOtherRecipient',profile_url:'https://www.douyin.com/user/MS4wOtherRecipient'};
+ f.sqlite.prepare(`INSERT INTO workbench_prospect_conversations (${Object.keys(clone).join(',')}) VALUES (${Object.keys(clone).map(()=>'?').join(',')})`).run(...Object.values(clone) as never[]);
+ await f.store.chat.sync('owner-a','member-a',ongoing.campaign.id,c.id);
+ const response=await f.poll(device,undefined,1);assert.equal(response.status,200);const read=(await response.json() as {job:ProspectBridgeJob}).job;assert.equal(read.input.conversationId,c.id);assert.equal(read.input.manualSync,true);
+ assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM workbench_prospect_jobs WHERE kind='readConversation' AND status IN ('queued','running')").get()?.n,2);
 });
 
 test('a reliable customer stop closes immediately before a manual reply can be queued',async t=>{

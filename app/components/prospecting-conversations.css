@@ -1,5 +1,8 @@
 .prospect-chat-workspace { --prospect-handoff-bg: var(--cds-surface-3); --prospect-handoff-badge: var(--cds-fill-ghost-selected); --prospect-handoff-text: var(--cds-text-primary); --prospect-handoff-line: var(--cds-border-strong); }
 .prospect-chat-workspace[hidden] { display: none; }
+.prospect-chat-sync-status { display: flex; flex-wrap: wrap; gap: 3px 12px; margin-top: 5px; color: var(--cds-text-secondary); font-size: 12px; overflow-wrap: anywhere; }
+.prospect-chat-sync-status time { font-variant-numeric: tabular-nums; }
+.prospect-chat-sync-status.needs-attention > span:last-child { color: var(--cds-text-primary); font-weight: 500; }
 .prospect-chat-agent { padding: 0 0 12px; margin-bottom: 14px; border-bottom: 1px solid var(--cds-border); }
 .prospect-chat-agent-toolbar { display: flex; align-items: center; gap: 12px; justify-content: space-between; }
 .prospect-chat-agent-title { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }

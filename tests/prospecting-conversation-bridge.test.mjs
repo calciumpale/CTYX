@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { Journal, runOnce, validateJob } from '../tools/douyin-bridge/bridge-core.mjs';
+import { BridgeError, Journal, runOnce, validateJob } from '../tools/douyin-bridge/bridge-core.mjs';
 
 const config = { origin: 'https://workbench.example', deviceId: 'device-1', deviceToken: 'device-token' };
 const identity = { senderAccountId: 'sender-1', recipientId: 'recipient-1', profileUrl: 'https://www.douyin.com/user/recipient-1', conversationId: 'conversation-1' };
@@ -24,6 +24,38 @@ async function execute(journal, next, actions) {
     return Response.json({ ok: true });
   } });
   return { polled, completed };
+}
+
+for (const code of ['ACCOUNT_VERIFICATION_PENDING', 'UNAUTHENTICATED', 'ACCOUNT_CHANGED', 'CHAT_UNAVAILABLE']) {
+  test(`a read ${code} records its failure and preserves the correct connection boundary`, async t => {
+    const journal = await journalFor(t);
+    let completed, polls = 0;
+    const failure = new BridgeError('本次会话读取未完成，请重新核验后同步。', code);
+    failure.verificationReason = 'account_read_interrupted';
+    const operation = runOnce(config, { journal, adapter: {
+      accountStatus: () => ({ authenticated: true, accountId: 'sender-1' }),
+      readConversation: async () => { throw failure; },
+    }, fetchImpl: async (url, options) => {
+      if (url.endsWith('/poll')) { polls++; return Response.json({ job: job('failed-read', 'readConversation') }); }
+      if (url.endsWith('/complete')) completed = JSON.parse(options.body);
+      return Response.json({ ok: true });
+    } });
+    if (code === 'ACCOUNT_CHANGED') await assert.rejects(operation, error => error.code === 'ACCOUNT_CHANGED');
+    else {
+      const result = await operation;
+      assert.equal(result.authenticated, code === 'CHAT_UNAVAILABLE');
+      assert.equal(result.verificationPending === true, code === 'ACCOUNT_VERIFICATION_PENDING');
+      if (code === 'ACCOUNT_VERIFICATION_PENDING') {
+        assert.equal(result.needsAccountVerification, true);
+        assert.equal(result.verificationReason, 'account_read_interrupted');
+      }
+    }
+    assert.equal(polls, 1);
+    assert.equal(completed.error, failure.message);
+    assert.equal(completed.result, undefined);
+    assert.equal(journal.get('failed-read').reported, true);
+    assert.equal(journal.get('failed-read').dispatchedAt, undefined);
+  });
 }
 
 test('conversation jobs validate exact account and target, bound reads, and require approved reply context', () => {

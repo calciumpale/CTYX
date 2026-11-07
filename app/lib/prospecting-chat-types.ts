@@ -33,6 +33,8 @@ export interface ProspectChatConversation {
   version: number;
   lastMessageAt: string;
   lastMessagePreview: string;
+  /** Time of the last reliable platform observation, independent of UI refreshes and failed reads. */
+  lastSyncedAt?: string;
   handoffReason?: string;
   memory?: ProspectChatMemory;
   closeReason?: string;

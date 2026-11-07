@@ -44,7 +44,7 @@ export function createProspectingService(deps:Dependencies){
     else if(action==='chatSync'){if(!campaignId)throw new DomainError('请选择要同步的会话');const queued=await store.chat.sync(ownerId,memberId,campaignId,prospectId(input.conversationId));message=queued?'已请求助手同步抖音私信':'同步已在队列中或刚完成';}
     else{if(!Number.isInteger(input.version)||Number(input.version)<1)throw new DomainError('会话版本无效');const id=prospectId(input.conversationId);
      if(action==='chatTakeover'){await store.chat.takeover(ownerId,memberId,id,Number(input.version));message='已接管会话，助手不会继续自动回复';}
-     else if(action==='chatResume'){await store.chat.resume(ownerId,memberId,id,Number(input.version));message='已恢复助手，下一条客户消息会继续处理';}
+     else if(action==='chatResume'){await store.chat.resume(ownerId,memberId,id,Number(input.version));message='已恢复 AI，将同步核实并继续处理最新未回复的客户消息';}
      else{await store.chat.reply(ownerId,memberId,id,Number(input.version),typeof input.message==='string'?input.message:'');message='人工回复已排队，助手会核对当前会话后提交';}
     }
     return json({message,chat:await store.chat.snapshot(ownerId,memberId,role,campaignId,typeof input.conversationId==='string'?input.conversationId:undefined)});

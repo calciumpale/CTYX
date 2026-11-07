@@ -9,6 +9,8 @@ const SELF = `${HOME}user/self`;
 const READ_ONLY_ACCOUNT = /^dy-readonly-[a-f0-9]{24}$/;
 const canonicalAccount = value => typeof value === 'string' && /^[a-zA-Z0-9_.-]{5,140}$/.test(value) && value !== 'self' && !value.startsWith('dy-readonly-');
 const PASSIVE_ACCOUNT_TTL_MS = 15000;
+const IDENTITY_NAVIGATION_INTERVAL_MS = 60000;
+const TARGET_READ_PROOF_INTERVAL_MS = 300000;
 const COMMENT_ROWS = '[data-e2e="comment-item"], [data-e2e="comment-level-1"], [data-e2e="comment-level-2"], .comment-item';
 const STACK_CHAT = '[data-e2e="im-dialog"] [data-stack-layer="chat"]';
 const CHAT_ROOTS = `${STACK_CHAT}, [role="dialog"], [data-e2e="im-chat"], [data-e2e="chat-container"], [data-e2e="message-panel"], [class*="chat-room"]`;
@@ -128,6 +130,7 @@ export class DouyinBrowserAdapter {
     if (!this.identityPage || this.identityPage.isClosed()) {
       this.identityPage = await this.context.newPage(); this.identityPage.setDefaultTimeout(this.timeoutMs);
     }
+    this.lastIdentityNavigationAt = Date.now();
     try { await this.identityPage.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 }); }
     catch { checkAbort(signal); fail('本人身份核验页面打开失败。', 'NAVIGATION'); }
     const current = new URL(this.identityPage.url());
@@ -223,8 +226,9 @@ export class DouyinBrowserAdapter {
       const header = await this.currentAccount(page);
       if (header.ambiguous) return verificationPending('account_ambiguous', '页面显示多个当前账号，发送身份未通过核验。');
       if (header.authenticated && header.accountId !== expectedId) return { authenticated: false, errorCode: 'ACCOUNT_CHANGED', message: '当前登录账号与任务账号不一致。' };
-      // Cached recovery is never sufficient on its own: reload owner controls before every send check.
-      const account = header.authenticated && !this.senderProof ? header : await this.recoverOwnAccount(signal, { allowReadOnly: false, expectedAccountId: expectedId });
+      // Only the final dispatch check refreshes ownership, within the same
+      // navigation budget as recovery. A passive check never authorizes a send.
+      const account = header.authenticated && !this.senderProof ? header : await this.recoverAccountStatus({ signal, allowReadOnly: false, expectedAccountId: expectedId });
       return account.authenticated && account.accountId !== expectedId ? { authenticated: false, errorCode: 'ACCOUNT_CHANGED', message: '当前登录账号与任务账号不一致。' } : account;
     } catch (error) {
       checkAbort(signal);
@@ -241,8 +245,8 @@ export class DouyinBrowserAdapter {
       if (header.ambiguous) return verificationPending('account_ambiguous');
       if (header.authenticated && header.accountId !== expectedId) return { authenticated: false, errorCode: 'ACCOUNT_CHANGED', message: '当前登录账号与任务账号不一致。' };
       // A directly rendered canonical self link remains a fresh identity source.
-      // Recovered senders need session-bound owner proof at each read boundary;
-      // an unchanged identity tab can still show the previous signed-in owner.
+      // Read boundaries inspect current DOM on the owned pages. Dispatch has a
+      // separate strict check; ordinary synchronization must not reload them.
       if (!this.senderProof && header.authenticated) return header;
       const established = this.senderProof;
       const identity = this.identityPage;
@@ -251,20 +255,10 @@ export class DouyinBrowserAdapter {
       await this.guard(identity, signal);
       if (await this.loginRequired(identity)) return { authenticated: false, errorCode: 'UNAUTHENTICATED', message: '抖音页面要求重新登录，请完成登录后重新连接。' };
       const selfAlias = /^https:\/\/(?:www\.)?douyin\.com\/user\/self\/?(?:[?#]|$)/.test(identity.url());
-      // Existing DOM may invalidate the established owner, but never authorize
-      // a transcript. Refresh only this owned tab; do not rediscover via SELF
-      // or search when the canonical page temporarily loses owner controls.
-      const previousProof = await this.ownProfileProof(identity, signal, selfAlias ? 'self' : expectedId);
-      if (previousProof && previousProof.handle !== established.handle) return { authenticated: false, errorCode: 'ACCOUNT_CHANGED', message: '当前登录账号的本人身份已变化，请重新确认。' };
-      try { await identity.goto(`${HOME}user/${expectedId}`, { waitUntil: 'domcontentloaded', timeout: 30000 }); }
-      catch { checkAbort(signal); return verificationPending('navigation_failed'); }
-      if (!/^https:\/\/(?:www\.)?douyin\.com\//.test(identity.url())) return verificationPending('identity_route_changed');
-      await this.guard(identity, signal);
-      if (await this.loginRequired(identity)) return { authenticated: false, errorCode: 'UNAUTHENTICATED', message: '抖音页面要求重新登录，请完成登录后重新连接。' };
       const identityHeader = await this.currentAccount(identity);
       if (identityHeader.ambiguous) return verificationPending('account_ambiguous');
       if (identityHeader.authenticated && identityHeader.accountId !== expectedId) return { authenticated: false, errorCode: 'ACCOUNT_CHANGED', message: '当前登录账号与任务账号不一致。' };
-      const proof = await this.ownProfileProof(identity, signal, expectedId);
+      const proof = await this.ownProfileProof(identity, signal, selfAlias ? 'self' : expectedId);
       if (!proof) return verificationPending();
       if (proof.handle !== established.handle) return { authenticated: false, errorCode: 'ACCOUNT_CHANGED', message: '当前登录账号的本人身份已变化，请重新确认。' };
       await this.guard(page, signal);
@@ -319,7 +313,9 @@ export class DouyinBrowserAdapter {
     // A bounded recovery may refresh only the identity tab that this session
     // already owns. Never reopen a tab the user closed or replace a chat/draft.
     if (!page || page.isClosed() || !/^https:\/\/(?:www\.)?douyin\.com\//.test(page.url())) return { authenticated: false, message: '抖音任务页面已关闭或离开，请点击“连接抖音”恢复。' };
-    if (!identity || identity.isClosed() || !/^https:\/\/(?:www\.)?douyin\.com\//.test(identity.url())) return { authenticated: false, message: '身份核验页面已关闭或离开，请点击“连接抖音”恢复。' };
+    // A failed reload replaces this owned tab with Chromium's error document;
+    // retry its bound profile below instead of treating a network error as logout.
+    if (!identity || identity.isClosed() || (!/^https:\/\/(?:www\.)?douyin\.com\//.test(identity.url()) && identity.url() !== 'chrome-error://chromewebdata/')) return { authenticated: false, message: '身份核验页面已关闭或离开，请点击“连接抖音”恢复。' };
     const expected = canonicalAccount(expectedAccountId) ? expectedAccountId : this.senderProof?.accountId;
     if (!expected) return this.accountStatus({ signal, allowReadOnly, expectedAccountId, passive: true });
     try {
@@ -328,6 +324,8 @@ export class DouyinBrowserAdapter {
       const header = await this.currentAccount(page);
       if (header.ambiguous) return pending('account_ambiguous');
       if (header.authenticated && header.accountId !== expected) fail('当前登录账号与已配对账号不一致。', 'ACCOUNT_CHANGED');
+      if (this.lastIdentityNavigationAt !== undefined && Date.now() - this.lastIdentityNavigationAt < IDENTITY_NAVIGATION_INTERVAL_MS) return verificationPending('owner_proof_missing', '账号核验需间隔至少一分钟，请稍后重试；本轮未发送。');
+      this.lastIdentityNavigationAt = Date.now();
       try { await identity.goto(`${HOME}user/${expected}`, { waitUntil: 'domcontentloaded', timeout: 30000 }); }
       catch {
         checkAbort(signal);
@@ -640,11 +638,34 @@ export class DouyinBrowserAdapter {
     if (visible.length !== 1) fail(message, 'CONTROL_UNVERIFIED');
     return visible[0];
   }
-  async verifyTarget(page, root, target, stackChat) {
+  async verifyTarget(page, root, target, stackChat, { passive = false, snapshotId } = {}) {
     const message = '无法核对目标会话的用户主页，未发送。请打开该用户会话后检查页面结构。';
     if (stackChat) {
-      // The current chat header opens the participant's actual profile in a new tab.
       const profileCard = await this.uniqueVisible(root.locator('.StackLayoutStackChatHeaderuser [data-apm-action="个人页卡片"]'), message);
+      const signature = () => profileCard.evaluate(node => {
+        const header = node.closest('.StackLayoutStackChatHeaderuser');
+        const visible = element => element instanceof HTMLElement && !!(element.offsetWidth || element.offsetHeight || element.getClientRects().length) && getComputedStyle(element).visibility !== 'hidden';
+        if (!header || !visible(header)) return null;
+        return JSON.stringify({ text: header.innerText, label: header.getAttribute('aria-label'), title: header.getAttribute('title'),
+          cardLabel: node.getAttribute('aria-label'), cardTitle: node.getAttribute('title'),
+          profiles: [...header.querySelectorAll('a[href]')].filter(visible).map(link => link.href),
+          images: [...header.querySelectorAll('img')].filter(visible).map(image => ({ src: image.currentSrc || image.src, alt: image.alt })) });
+      });
+      let onTarget = false;
+      try { onTarget = profileIdentity(page.url()).url === target.url; } catch { /* A changed route cannot reuse a participant proof. */ }
+      if (!onTarget) fail(message, 'RECIPIENT_UNVERIFIED');
+      const current = await signature(), binding = this.readTargetBinding;
+      if (passive && current && binding?.page === page && binding.context === this.context && binding.targetId === target.id && binding.signature === current &&
+          (snapshotId === undefined || binding.snapshotId === snapshotId) &&
+          Date.now() - binding.checkedAt >= 0 && Date.now() - binding.checkedAt < TARGET_READ_PROOF_INTERVAL_MS &&
+          await profileCard.evaluate((node, prior) => node === prior, binding.card).catch(() => false)) return;
+      // Read-only health proofs have a shared five-minute budget, including
+      // failed popups. Final dispatch always proves the current target anew.
+      const interval = snapshotId !== undefined && binding?.snapshotId !== snapshotId ? IDENTITY_NAVIGATION_INTERVAL_MS : TARGET_READ_PROOF_INTERVAL_MS;
+      if (passive && this.lastTargetProofAttemptAt !== undefined && Date.now() - this.lastTargetProofAttemptAt < interval) fail(message, 'RECIPIENT_UNVERIFIED');
+      this.lastTargetProofAttemptAt = Date.now();
+      this.readTargetBinding = undefined;
+      await binding?.card.dispose().catch(() => {});
       let profilePage;
       try {
         await Promise.all([
@@ -652,7 +673,10 @@ export class DouyinBrowserAdapter {
           profileCard.click(),
         ]);
         await profilePage.waitForURL(url => url.href !== 'about:blank', { waitUntil: 'domcontentloaded', timeout: this.timeoutMs });
-        if (profileIdentity(profilePage.url()).id === target.id) return;
+        if (profileIdentity(profilePage.url()).id === target.id && current && await signature() === current && profileIdentity(page.url()).url === target.url) {
+          this.readTargetBinding = { page, context: this.context, targetId: target.id, signature: current, card: await profileCard.elementHandle(), checkedAt: Date.now() };
+          return;
+        }
       } catch { /* An unavailable, invalid, or different profile cannot authorize a send. */ }
       finally { await profilePage?.close().catch(() => {}); }
       fail(message, 'RECIPIENT_UNVERIFIED');
@@ -661,23 +685,28 @@ export class DouyinBrowserAdapter {
     const ids = new Set(); for (const url of profiles) { try { ids.add(profileIdentity(url).id); } catch { /* not a usable identity */ } }
     if (ids.size !== 1 || !ids.has(target.id)) fail(message, 'RECIPIENT_UNVERIFIED');
   }
-  async openConversation(input, { signal, writable = true } = {}) {
+  async openConversation(input, { signal, writable = true, deferTargetProof = false } = {}) {
     if (READ_ONLY_ACCOUNT.test(input.senderAccountId)) fail('当前账号只完成了搜索身份核验，未验证可发送的主页身份。', 'SENDER_UNVERIFIED');
     const target = profileIdentity(input.profileUrl); if (target.id !== input.recipientId) fail('目标会话身份不一致。', 'INVALID_RECIPIENT');
     if (target.id === input.senderAccountId) fail('不能向当前登录账号发送获客私信。', 'INVALID_RECIPIENT');
-    const page = await this.navigate(target.url, signal);
+    let page = this.activePage, onTarget = false;
+    if (page && !page.isClosed()) { try { onTarget = profileIdentity(page.url()).url === target.url; } catch { /* A different page needs one explicit target navigation. */ } }
+    if (!onTarget) page = await this.navigate(target.url, signal);
+    else await this.guard(page, signal);
     if (profileIdentity(page.url()).id !== target.id) fail('打开的主页与审核时的收件人不同。', 'INVALID_RECIPIENT');
-    const account = await (writable ? this.verifiedSender(page, input.senderAccountId, signal) : this.verifiedConversationAccount(page, input.senderAccountId, signal));
+    const account = await this.verifiedConversationAccount(page, input.senderAccountId, signal);
     requireAccount(account, input.senderAccountId, '暂未核实任务账号，请等待页面恢复。');
-    const entry = page.getByRole('button', { name: /^(私信|发消息|发送私信)$/ });
-    const entryError = '未找到唯一的私信入口，目标可能未开放私信。';
-    try { await entry.filter({ visible: true }).first().waitFor({ state: 'visible', timeout: this.timeoutMs }); }
-    catch { await this.guard(page, signal); fail(entryError, 'CONTROL_UNVERIFIED'); }
-    const button = await this.uniqueVisible(entry, entryError);
-    await button.click(); await this.guard(page, signal);
     const required = writable ? COMPOSER : '.messageMessageListwrapper, [data-e2e="message-list"]';
     const roots = page.locator(CHAT_ROOTS);
     const panel = roots.filter({ has: page.locator(required), visible: true }).first();
+    const entry = page.getByRole('button', { name: /^(私信|发消息|发送私信)$/ });
+    const entryError = '未找到唯一的私信入口，目标可能未开放私信。';
+    if (!await panel.isVisible()) {
+      try { await entry.filter({ visible: true }).first().waitFor({ state: 'visible', timeout: this.timeoutMs }); }
+      catch { await this.guard(page, signal); fail(entryError, 'CONTROL_UNVERIFIED'); }
+      const button = await this.uniqueVisible(entry, entryError);
+      await button.click(); await this.guard(page, signal);
+    }
     try { await panel.waitFor({ state: 'visible', timeout: Math.min(3000, this.timeoutMs) }); }
     catch {
       await this.guard(page, signal);
@@ -701,16 +730,21 @@ export class DouyinBrowserAdapter {
     }
     if (!root) fail('无法核对目标会话面板，未发送。', 'CHAT_UNAVAILABLE');
     const stackChat = await root.getAttribute('data-stack-layer') === 'chat';
-    await this.verifyTarget(page, root, target, stackChat);
+    if (!deferTargetProof) await this.verifyTarget(page, root, target, stackChat, { passive: true });
     return { page, root, target, stackChat };
   }
   async readConversation(input, { signal } = {}) {
-    const { page, root, target, stackChat } = await this.openConversation(input, { signal, writable: false });
+    const { page, root, target, stackChat } = await this.openConversation(input, { signal, writable: false, deferTargetProof: true });
     const result = await readConversationTranscript(root, { ...input, signal, timeoutMs: this.timeoutMs, includeProof: true });
+    await this.verifyTarget(page, root, target, stackChat, { passive: true, snapshotId: result.snapshotId });
+    const binding = this.readTargetBinding;
+    const confirmed = await readConversationTranscript(root, { ...input, signal, timeoutMs: this.timeoutMs, includeProof: true });
+    if (confirmed.snapshotId !== result.snapshotId) fail('核实会话对象时消息已变化，请稍后重新同步。', 'CONVERSATION_CHANGED');
     const account = await this.verifiedConversationAccount(page, input.senderAccountId, signal);
     requireAccount(account, input.senderAccountId, '暂未核实读取会话的账号，请等待页面恢复。');
-    await this.verifyTarget(page, root, target, stackChat);
-    return result;
+    if (stackChat && binding && this.readTargetBinding === binding) binding.snapshotId = result.snapshotId;
+    await this.verifyTarget(page, root, target, stackChat, { passive: true, snapshotId: result.snapshotId });
+    return confirmed;
   }
   async reply(input, options = {}) {
     return this.send(input, { ...options, conversationReply: true });

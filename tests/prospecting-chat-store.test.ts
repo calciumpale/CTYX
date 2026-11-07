@@ -126,11 +126,11 @@ test('manual sync distinguishes pending account verification from an actual send
  await assert.rejects(f.chat.sync('owner-a','member-a',x.campaign.id,x.conversation.id),/不一致/);
 });
 
-test('an offline assistant hands off with the connection recovery step before queuing a reply',async t=>{
+test('an offline assistant pauses with the connection recovery step before queuing a reply',async t=>{
  const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.chat.settings('owner-a','member-a',x.campaign.id,true);
  await readConversation(f,x,[{id:'inbound-ready',direction:'inbound',text:'想了解这里的位置',postedAt:f.now()}]);f.advance(91000);
  await f.chat.processOne('owner-a','member-a','https://example.test',async()=>({action:'reply',reply:'想了解哪个区域？'}));
- const c=(await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations[0];assert.equal(c.mode,'human');assert.match(c.handoffReason??'',/连接.*本机|本机.*助手/);assert.doesNotMatch(c.handoffReason??'',/账号已改变/);
+ const c=(await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations[0];assert.equal(c.mode,'agent');assert.match(c.handoffReason??'',/连接.*本机|本机.*助手/);assert.doesNotMatch(c.handoffReason??'',/账号已改变/);
  assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM workbench_prospect_jobs WHERE kind='reply'").get()?.n,0);
 });
 
@@ -179,16 +179,16 @@ test('takeover cancels queued agent replies and invalidates a running agent leas
  await f.store.complete(x.device.deviceId,manual.id,manual.leaseToken,{outcome:'submitted'});
  f.advance(61000);await readConversation(f,x,[{id:'next',direction:'inbound',text:'好的',postedAt:f.now()}],'snapshot-3');
  snapshot=await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id,x.conversation.id);await f.chat.resume('owner-a','member-a',x.conversation.id,snapshot.conversations[0].version);
+ f.advance(31000);await readConversation(f,x,[{id:'next',direction:'inbound',text:'好的',postedAt:f.now()}],'snapshot-after-resume');
  await f.chat.processOne('owner-a','member-a','https://example.test',async()=>({action:'reply',reply:'收到'}));const running=(await f.store.claim(x.device.deviceId,false,true))!;assert.equal(running.kind,'reply');
  snapshot=await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id,x.conversation.id);await f.chat.takeover('owner-a','member-a',x.conversation.id,snapshot.conversations[0].version);
  await assert.rejects(f.store.renew(x.device.deviceId,running.id,running.leaseToken),/接管|会话|停止/);
 });
 
-test('human-mode contact capture is evidence checked, deduplicated and scoped to assigned sales or managers',async t=>{
+test('agent-mode contact capture is evidence checked, deduplicated and scoped to assigned sales or managers',async t=>{
  const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.chat.settings('owner-a','member-a',x.campaign.id,true);
- await f.chat.takeover('owner-a','member-a',x.conversation.id,x.conversation.version);
  await readConversation(f,x,[{id:'contact',direction:'inbound',text:'我手机号是13800138000，可以电话沟通。',postedAt:f.now()}]);
- const decision={action:'reply' as const,reply:'不会自动发出',lead:{contactType:'phone' as const,contactValue:'13800138000',score:85,grade:'high' as const,reason:'客户主动留下手机号'}};
+ const decision={action:'wait' as const,reply:'不会自动发出',lead:{contactType:'phone' as const,contactValue:'13800138000',score:85,grade:'high' as const,reason:'客户主动留下手机号'}};
  await f.chat.processOne('owner-a','member-a','https://example.test',async()=>decision);
  const sales=await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id,x.conversation.id);assert.equal(sales.pool.length,1);assert.equal(sales.pool[0].contactValue,'13800138000');assert.equal(sales.pool[0].assignedMemberId,'member-a');assert.equal(sales.pool[0].grade,'high');
  assert.equal((await f.store.jobs('owner-a','member-a',x.campaign.id)).filter(job=>job.kind==='reply').length,0);
@@ -315,15 +315,16 @@ test('a pre-click failed manual reply may be explicitly queued again without aut
  assert.equal((await f.store.jobs('owner-a','member-a',x.campaign.id)).filter(job=>job.kind==='reply').length,2);assert.equal(await f.store.claim(x.device.deviceId,false,true),null,'retry preserves send cooldown');
 });
 
-test('a takeover while a decision is running prevents stale reply and leaves inbound available to capture in human mode',async t=>{
+test('a takeover while a decision is running prevents stale reply and leaves inbound pending for the salesperson',async t=>{
  const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.chat.settings('owner-a','member-a',x.campaign.id,true);
  await readConversation(f,x,[{id:'contact-race',direction:'inbound',text:'我的电话是13800138000',postedAt:f.now()}]);
  let release!:(value:{action:'reply';reply:string})=>void,entered!:()=>void;const waiting=new Promise<void>(resolve=>{entered=resolve;});
  const processing=f.chat.processOne('owner-a','member-a','https://example.test',async()=>{entered();return new Promise(resolve=>{release=resolve;});});await waiting;
  const snapshot=await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id,x.conversation.id);await f.chat.takeover('owner-a','member-a',x.conversation.id,snapshot.conversations[0].version);release({action:'reply',reply:'这条不得发出'});await processing;
  assert.equal((await f.store.jobs('owner-a','member-a',x.campaign.id)).filter(job=>job.kind==='reply').length,0);
- await f.chat.processOne('owner-a','member-a','https://example.test',(owner,origin,input)=>chooseProspectChatAction(input,{}));
- assert.equal((await f.chat.snapshot('owner-a','manager-a','manager')).pool.length,1);
+ assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',async()=>{assert.fail('human takeover must not invoke the agent');}),false);
+ assert.equal((await f.chat.snapshot('owner-a','manager-a','manager')).pool.length,0);
+ assert.equal(f.sqlite.prepare("SELECT processed FROM workbench_prospect_messages WHERE source_key='contact-race'").get()?.processed,0);
 });
 
 test('policy-to-store sensitive multi-message capture hands off and assigns an evidence-backed lead without calling the model',async t=>{
@@ -655,4 +656,136 @@ test('technical synchronization never resumes a closed or unresolved conversatio
   await f.store.complete(x.device.deviceId,read.id,read.leaseToken,{senderAccountId:'MS4wSender001',recipientId:'MS4wRecipient001',observedAt:f.now(),snapshotId:`blocked-${blocked}`,reliable:true,messages:[]});
   const c=(await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations[0];assert.equal(c.mode,'human');assert.equal(c.status,blocked==='closed'?'closed':'active');
  }
+});
+
+
+test('human mode never enters a normal automatic decision and keeps the question pending',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.chat.settings('owner-a','member-a',x.campaign.id,true);await readConversation(f,x,[{id:'human-no-decision',direction:'inbound',text:'想找80平空铺',postedAt:f.now()}]);
+ let c=(await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations[0];await f.chat.takeover('owner-a','member-a',c.id,c.version);
+ let calls=0;assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',async()=>{calls++;return{action:'reply',reply:'不应判断'};}),false);assert.equal(calls,0);
+ assert.equal(f.sqlite.prepare("SELECT processed FROM workbench_prospect_messages WHERE source_key='human-no-decision'").get()?.processed,0);
+});
+
+for(const issue of ['offline','unverified'] as const)test(`${issue} readiness pauses the agent without swallowing its unanswered turn`,async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.chat.settings('owner-a','member-a',x.campaign.id,true);f.advance(61000);
+ const inbound={id:'ready-pending',direction:'inbound' as const,text:'想找80到100平空铺',postedAt:f.now()};await readConversation(f,x,[inbound]);
+ if(issue==='offline')f.advance(91000);else f.sqlite.prepare('UPDATE workbench_prospect_devices SET authenticated=0 WHERE id=?').run(x.device.deviceId);
+ const decide=async()=>({action:'reply' as const,reply:'您希望在哪个区域找铺？'});await f.chat.processOne('owner-a','member-a','https://example.test',decide);
+ const c=(await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations[0];assert.equal(c.mode,'agent');assert.equal(f.sqlite.prepare("SELECT processed FROM workbench_prospect_messages WHERE source_key='ready-pending'").get()?.processed,0);
+ assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',decide),false);
+ f.advance(31000);await readConversation(f,x,[inbound],'ready-now-reliable');assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',decide),true);const reply=(await f.store.claim(x.device.deviceId,false,true))!;assert.equal(reply.kind,'reply');
+});
+
+test('explicit resume waits for a fresh reliable read then authorizes only the latest unanswered observed question once',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);const first={id:'resume-earlier',direction:'inbound' as const,text:'您好',postedAt:f.now()};f.advance(1000);const latest={id:'resume-latest',direction:'inbound' as const,text:'想找80到100平空铺',postedAt:f.now()};
+ await f.chat.sync('owner-a','member-a',x.campaign.id,x.conversation.id);const initial=(await f.store.claim(x.device.deviceId,false,true))!;await f.store.complete(x.device.deviceId,initial.id,initial.leaseToken,{senderAccountId:'MS4wSender001',recipientId:'MS4wRecipient001',observedAt:f.now(),snapshotId:'resume-observe-only',reliable:true,messages:[first,latest]});
+ await f.chat.settings('owner-a','member-a',x.campaign.id,true);let c=(await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations[0];await f.chat.takeover('owner-a','member-a',c.id,c.version);c=(await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations[0];await f.chat.resume('owner-a','member-a',c.id,c.version);
+ c=(await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations[0];assert.equal(c.handoffReason,'已恢复AI，等待同步核实最新未回复消息');
+ const seen:string[]=[];const decide=async(_o:string,_r:string,input:Parameters<typeof chooseProspectChatAction>[0])=>{seen.push(...input.pending!.map(m=>m.text));return{action:'reply' as const,reply:'您希望在哪个区域找铺？'};};assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',decide),false);
+ f.advance(31000);await readConversation(f,x,[first,latest],'resume-verified-now');assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',decide),true);assert.deepEqual(seen,['想找80到100平空铺']);
+ assert.equal(f.sqlite.prepare("SELECT eligible FROM workbench_prospect_messages WHERE source_key='resume-earlier'").get()?.eligible,0);assert.equal(f.sqlite.prepare("SELECT eligible FROM workbench_prospect_messages WHERE source_key='resume-latest'").get()?.eligible,1);
+ f.advance(61000);const reply=(await f.store.claim(x.device.deviceId,false,true))!;await f.store.complete(x.device.deviceId,reply.id,reply.leaseToken,{outcome:'submitted'});f.advance(31000);await readConversation(f,x,[first,latest],'resume-verified-again');assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',decide),false);
+});
+
+for(const blocked of ['history','answered','unknown','running','takeover','read-error'] as const)test(`explicit resume preserves the ${blocked} boundary before admitting observe-only history`,async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);f.advance(61000);
+ const inbound={id:'resume-boundary',direction:'inbound' as const,text:'想找80到100平空铺',postedAt:blocked==='history'?'2026-11-05T04:00:00.000Z':f.now()};
+ await f.chat.sync('owner-a','member-a',x.campaign.id,x.conversation.id);const initial=(await f.store.claim(x.device.deviceId,false,true))!;await f.store.complete(x.device.deviceId,initial.id,initial.leaseToken,{senderAccountId:'MS4wSender001',recipientId:'MS4wRecipient001',observedAt:f.now(),snapshotId:'resume-boundary-before',reliable:true,messages:[inbound]});
+ await f.chat.settings('owner-a','member-a',x.campaign.id,true);let c=(await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations[0];await f.chat.takeover('owner-a','member-a',c.id,c.version);c=(await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations[0];
+ if(blocked==='unknown'||blocked==='running'){
+  f.sqlite.prepare("INSERT INTO workbench_prospect_jobs(id,owner_id,member_id,device_id,campaign_id,lead_id,kind,status,input_json,sender_id,created_at,updated_at,lease_until) VALUES ('blocked-resume','owner-a','member-a',?,?,?,'reply',?,?,'MS4wSender001',?,?,?)").run(x.device.deviceId,x.campaign.id,x.lead.id,blocked,JSON.stringify({conversationId:c.id,recipientId:'MS4wRecipient001'}),f.now(),f.now(),'2026-12-01T04:00:00.000Z');
+  await assert.rejects(f.chat.resume('owner-a','member-a',c.id,c.version),/执行|待确认/);return;
+ }
+ await f.chat.resume('owner-a','member-a',c.id,c.version);c=(await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations[0];
+ if(blocked==='takeover')await f.chat.takeover('owner-a','member-a',c.id,c.version);
+ f.advance(31000);
+ if(blocked==='read-error'){
+  await f.store.seen(x.device.deviceId,{authenticated:true,accountId:'MS4wSender001'});await f.chat.schedule(x.device.deviceId);const failed=(await f.store.claim(x.device.deviceId,false,true))!;await f.store.complete(x.device.deviceId,failed.id,failed.leaseToken,undefined,'暂未核实当前账号');
+  assert.equal((await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations[0].handoffReason,'已恢复AI，等待同步核实最新未回复消息');f.advance(15000);
+ }
+ await readConversation(f,x,blocked==='answered'?[inbound,{id:'human-after-question',direction:'outbound',text:'销售已回复',postedAt:f.now()}]:[inbound],`resume-boundary-${blocked}`);
+ let calls=0;const worked=await f.chat.processOne('owner-a','member-a','https://example.test',async()=>{calls++;return{action:'reply',reply:'您希望在哪个区域找铺？'};});assert.equal(worked,blocked==='read-error');assert.equal(calls,blocked==='read-error'?1:0);
+});
+
+
+test('an account change while a resume read is running cannot authorize the old sender question',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);f.advance(61000);const inbound={id:'resume-account-check',direction:'inbound' as const,text:'想找80平空铺',postedAt:f.now()};
+ await f.chat.sync('owner-a','member-a',x.campaign.id,x.conversation.id);const first=(await f.store.claim(x.device.deviceId,false,true))!;await f.store.complete(x.device.deviceId,first.id,first.leaseToken,{senderAccountId:'MS4wSender001',recipientId:'MS4wRecipient001',observedAt:f.now(),snapshotId:'resume-old-sender',reliable:true,messages:[inbound]});
+ await f.chat.settings('owner-a','member-a',x.campaign.id,true);let c=(await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations[0];await f.chat.resume('owner-a','member-a',c.id,c.version);f.advance(31000);await f.chat.schedule(x.device.deviceId);const read=(await f.store.claim(x.device.deviceId,false,true))!;
+ f.sqlite.prepare("UPDATE workbench_prospect_devices SET account_id='MS4wDifferentSender' WHERE id=?").run(x.device.deviceId);
+ await f.store.complete(x.device.deviceId,read.id,read.leaseToken,{senderAccountId:'MS4wSender001',recipientId:'MS4wRecipient001',observedAt:f.now(),snapshotId:'resume-account-changed',reliable:true,messages:[inbound]});
+ assert.equal(f.sqlite.prepare("SELECT eligible FROM workbench_prospect_messages WHERE source_key='resume-account-check'").get()?.eligible,0);assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',async()=>{assert.fail('old sender must remain paused');}),false);
+});
+
+
+test('explicit resume does not replay an already eligible question answered directly in Douyin',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.chat.settings('owner-a','member-a',x.campaign.id,true);f.advance(61000);
+ const inbound={id:'resume-eligible-answered',direction:'inbound' as const,text:'80平空铺有吗',postedAt:f.now()};await readConversation(f,x,[inbound]);let c=(await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations[0];await f.chat.takeover('owner-a','member-a',c.id,c.version);c=(await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations[0];await f.chat.resume('owner-a','member-a',c.id,c.version);
+ f.advance(31000);await readConversation(f,x,[inbound,{id:'resume-direct-answer',direction:'outbound',text:'销售已在抖音中答复',postedAt:f.now()}],'resume-with-human-answer');
+ assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',async()=>{assert.fail('an eligible but answered question must not replay');}),false);
+});
+
+
+function addSendRetryLineage(f:ReturnType<typeof fixture>,x:Awaited<ReturnType<typeof prepared>>,variant='direct'){
+ const original=f.sqlite.prepare("SELECT * FROM workbench_prospect_jobs WHERE kind='send' AND campaign_id=? LIMIT 1").get(x.campaign.id)!;
+ f.sqlite.prepare("UPDATE workbench_prospect_jobs SET status=? WHERE id=?").run(variant==='running'?'running':'unknown',original.id);
+ const base=JSON.parse(String(original.input_json));
+ const insert=(id:string,parent:string|undefined,status='done',changes:Record<string,unknown>={},inputChanges:Record<string,unknown>={})=>{
+  const input={...base,...inputChanges,...(parent?{retry:{previousJobId:parent}}:{})};
+  const clone={...original,id,status,input_json:JSON.stringify(input),active_key:null,recipient_key:null,lease_hash:null,lease_until:null,...changes};
+  f.sqlite.prepare(`INSERT INTO workbench_prospect_jobs (${Object.keys(clone).join(',')}) VALUES (${Object.keys(clone).map(()=>'?').join(',')})`).run(...Object.values(clone) as never[]);
+ };
+ let parent=String(original.id);
+ if(variant==='indirect'){insert('retry-middle',parent,'failed');parent='retry-middle';}
+ if(variant==='too-deep')for(let i=0;i<101;i++){const id=`retry-depth-${i}`;insert(id,parent,'failed');parent=id;}
+ const changes:Record<string,unknown>={};
+ if(variant==='other-owner')changes.owner_id='owner-z';if(variant==='other-member')changes.member_id='member-b';if(variant==='other-sender')changes.sender_id='MS4wDifferentSender';if(variant==='other-campaign')changes.campaign_id='other-campaign';
+ insert('retry-completed',variant==='ordinary-done'?undefined:parent,'done',changes,variant==='changed-message'?{message:'更改后的招呼'}:variant==='other-recipient'?{recipientId:'MS4wOtherRecipient'}:{});
+ if(variant==='missing-parent'||variant==='cycle')f.sqlite.prepare('UPDATE workbench_prospect_jobs SET input_json=? WHERE id=?').run(JSON.stringify({...base,retry:{previousJobId:variant==='cycle'?'retry-completed':'missing-parent'}}),original.id);
+ return String(original.id);
+}
+
+for(const variant of ['direct','indirect'])test(`a valid ${variant} completed greeting retry unblocks the same conversation without rewriting its unknown ancestor`,async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);const oldId=addSendRetryLineage(f,x,variant);await f.chat.settings('owner-a','member-a',x.campaign.id,true);f.advance(61000);
+ const inbound={id:'resolved-send-question',direction:'inbound' as const,text:'80到100平空铺有吗',postedAt:f.now()};await readConversation(f,x,[inbound]);let c=(await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations.find(c=>c.id===x.conversation.id)!;await f.chat.takeover('owner-a','member-a',c.id,c.version);c=(await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations.find(c=>c.id===x.conversation.id)!;
+ await f.chat.resume('owner-a','member-a',c.id,c.version);f.advance(31000);await readConversation(f,x,[inbound],'resolved-send-reliable');assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',async()=>({action:'reply',reply:'您希望在哪个区域找铺？'})),true);
+ const next=(await f.store.claim(x.device.deviceId,false,true))!;assert.equal(next.kind,'reply');assert.equal(f.sqlite.prepare('SELECT status FROM workbench_prospect_jobs WHERE id=?').get(oldId)?.status,'unknown');assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM workbench_prospect_jobs WHERE kind='send'").get()?.n,variant==='direct'?2:3);
+});
+
+for(const variant of ['ordinary-done','changed-message','other-owner','other-member','other-sender','other-campaign','other-recipient','missing-parent','cycle','too-deep','running'])test(`a ${variant} greeting lineage never clears the unresolved sending boundary`,async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);addSendRetryLineage(f,x,variant);await f.chat.settings('owner-a','member-a',x.campaign.id,true);let c=(await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations.find(c=>c.id===x.conversation.id)!;await f.chat.takeover('owner-a','member-a',c.id,c.version);c=(await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations.find(c=>c.id===x.conversation.id)!;
+ await assert.rejects(f.chat.resume('owner-a','member-a',c.id,c.version),/执行|待确认/);
+});
+
+test('a retry lineage changed before the control transaction cannot authorize a stale resume',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);addSendRetryLineage(f,x);await f.chat.settings('owner-a','member-a',x.campaign.id,true);let c=(await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations.find(c=>c.id===x.conversation.id)!;await f.chat.takeover('owner-a','member-a',c.id,c.version);c=(await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations.find(c=>c.id===x.conversation.id)!;
+ f.interceptNextBatch(()=>f.sqlite.prepare("UPDATE workbench_prospect_jobs SET input_json=json_set(input_json,'$.message','已变更批准内容') WHERE id='retry-completed'").run());
+ await assert.rejects(f.chat.resume('owner-a','member-a',c.id,c.version),/更新|改变/);assert.equal((await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations.find(c=>c.id===x.conversation.id)!.mode,'human');
+});
+
+
+test('an outbound-only resume snapshot cannot replay a question outside its visible window',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.chat.settings('owner-a','member-a',x.campaign.id,true);f.advance(61000);
+ await readConversation(f,x,[{id:'omitted-resume-question',direction:'inbound',text:'80平有吗',postedAt:f.now()}]);let c=(await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations[0];await f.chat.takeover('owner-a','member-a',c.id,c.version);c=(await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations[0];await f.chat.resume('owner-a','member-a',c.id,c.version);
+ f.advance(31000);await readConversation(f,x,[{id:'outbound-only-answer',direction:'outbound',text:'销售已在抖音中答复',postedAt:f.now()}],'outbound-only-resume');
+ assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',async()=>{assert.fail('a partial window must not replay its omitted pending question');}),false);
+ assert.equal((await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations[0].handoffReason,'已恢复AI，等待同步核实最新未回复消息');
+});
+
+
+test('a readiness pause commits neither per-turn memory nor lead capture before the turn can be queued',async t=>{
+ for(const contact of [false,true]){
+  const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.chat.settings('owner-a','member-a',x.campaign.id,true);f.advance(61000);
+  const inbound={id:'memory-once',direction:'inbound' as const,text:contact?'我的手机号是13800138000，可以电话沟通。':'暂不留联系方式',postedAt:f.now()};await readConversation(f,x,[inbound]);f.sqlite.prepare('UPDATE workbench_prospect_devices SET authenticated=0 WHERE id=?').run(x.device.deviceId);
+  const decide=(_o:string,_r:string,input:Parameters<typeof chooseProspectChatAction>[0])=>chooseProspectChatAction(input,{});await f.chat.processOne('owner-a','member-a','https://example.test',decide);
+  let c=(await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations[0];assert.equal(c.memory!.contactDeclines,0);assert.equal(c.memory!.contactAsks,0);assert.equal((await f.chat.snapshot('owner-a','manager-a','manager')).pool.length,0);
+  f.advance(31000);await readConversation(f,x,[inbound],'memory-once-reliable');await f.chat.processOne('owner-a','member-a','https://example.test',decide);
+  c=(await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations[0];assert.equal(c.memory!.contactDeclines,contact?0:1);assert.equal((await f.chat.snapshot('owner-a','manager-a','manager')).pool.length,contact?1:0);
+ }
+});
+
+test('a retry chain invalidated before queue insertion cannot authorize a reply',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);addSendRetryLineage(f,x);await f.chat.settings('owner-a','member-a',x.campaign.id,true);f.advance(61000);await readConversation(f,x,[{id:'atomic-lineage-question',direction:'inbound',text:'80平有吗',postedAt:f.now()}]);
+ f.interceptNextBatch(()=>f.sqlite.prepare("UPDATE workbench_prospect_jobs SET input_json=json_set(input_json,'$.message','已变更批准内容') WHERE id='retry-completed'").run());
+ await f.chat.processOne('owner-a','member-a','https://example.test',async()=>({action:'reply',reply:'您希望在哪个区域找铺？'}));assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM workbench_prospect_jobs WHERE kind='reply' AND status='queued'").get()?.n,0);
 });

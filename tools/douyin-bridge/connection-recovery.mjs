@@ -1,10 +1,10 @@
-/** Pure policy shared by the desktop and CLI. Only fresh confirmed identity
- * resets the outage budget; missing DOM is never proof of a changed account. */
-export function createConnectionRecovery({now=Date.now,delayMs=15000,cooldownMs=60000,attemptLimit=2}={}){
+/** Pure policy shared by the desktop and CLI. Fresh confirmed identity resets
+ * the outage budget, while the last refresh cooldown survives brief recovery. */
+export function createConnectionRecovery({now=Date.now,delayMs=60000,cooldownMs=300000,attemptLimit=2}={}){
  let pendingSince=null,attempts=0,nextAt=0,manual=false;
  return {
   observe(result){
-   if(result?.authenticated===true){pendingSince=null;attempts=0;nextAt=0;manual=false;}
+   if(result?.authenticated===true){pendingSince=null;attempts=0;manual=false;}
    else if(result?.authenticated===false&&result.verificationPending===true){if(pendingSince===null)pendingSince=now();}
    else{pendingSince=null;manual=false;}
   },

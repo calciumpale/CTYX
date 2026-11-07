@@ -7,6 +7,11 @@ const browserTest = process.env.PROSPECT_BROWSER_TEST === '1' ? test : test.skip
 const handle = 'tenant_123';
 const ownProfile = (value = handle, controls = true) => `<main><h1>同名账号</h1><span>抖音号：${value}</span>${controls ? '<button role="tab">私密作品</button><input placeholder="搜索你发布的作品">' : ''}</main>`;
 const result = (id, value = handle) => `<a href="/user/${id}?from=search">同名账号 抖音号: ${value}\n10粉丝 20获赞</a>`;
+function advanceIdentityNavigation(t, adapter) {
+  const previousNow = Date.now.bind(Date);
+  const offset = Math.max(0, (adapter.lastIdentityNavigationAt ?? previousNow()) + 60001 - previousNow());
+  t.mock.method(Date, 'now', () => previousNow() + offset);
+}
 async function fixture(t, { search = result('other-user', `${handle}_other`) + result('sender-1'), canonical = ownProfile(), self = ownProfile(), conversation = false } = {}) {
   const { chromium } = await import('../tools/douyin-bridge/node_modules/playwright/index.mjs');
   const browser = await chromium.launch({ headless: true }); t.after(() => browser.close());
@@ -28,6 +33,16 @@ async function fixture(t, { search = result('other-user', `${handle}_other`) + r
   const page = await adapter.navigate('https://www.douyin.com/user/recipient-1');
   return { adapter, page, state };
 }
+async function stackConversationFixture(t) {
+  const data = await fixture(t, { conversation: true });
+  await data.adapter.accountStatus({ expectedAccountId: 'sender-1' });
+  await data.page.locator('[role=dialog]').evaluate(root => {
+    root.setAttribute('data-stack-layer', 'chat');
+    root.querySelector('a').remove();
+    root.insertAdjacentHTML('afterbegin', '<div class="StackLayoutStackChatHeaderuser"><div data-apm-action="个人页卡片" onclick="window.open(\'/user/recipient-1\')">同名客户</div></div>');
+  });
+  return data;
+}
 
 browserTest('sender recovery requires an exact handle result and canonical owner controls without changing the chat', async t => {
   const { adapter, page } = await fixture(t);
@@ -35,6 +50,7 @@ browserTest('sender recovery requires an exact handle result and canonical owner
   assert.equal(account.authenticated, true);
   assert.equal(account.accountId, 'sender-1');
   assert.equal(account.verifiedReadOnlyAccountId, `dy-readonly-${createHash('sha256').update(handle).digest('hex').slice(0, 24)}`);
+  advanceIdentityNavigation(t, adapter);
   assert.equal((await adapter.verifiedSender(page, 'sender-1')).accountId, 'sender-1');
   assert.equal(page.url(), 'https://www.douyin.com/user/recipient-1');
   assert.equal(await page.locator('textarea').inputValue(), '保留的私信草稿');
@@ -70,6 +86,7 @@ browserTest('a cached canonical identity is rejected after the signed-in account
   assert.equal((await adapter.accountStatus()).accountId, 'sender-1');
   state.canonical = ownProfile(handle, false);
   state.self = ownProfile('switched_account');
+  advanceIdentityNavigation(t, adapter);
   const account = await adapter.verifiedSender(page, 'sender-1');
   assert.equal(account.authenticated, false);
   assert.equal(page.url(), 'https://www.douyin.com/user/recipient-1');
@@ -119,6 +136,7 @@ browserTest('passive identity expiry rereads owner DOM without navigation while 
   assert.equal((await adapter.accountStatus({ ...options, passive: true })).accountId, 'sender-1');
   assert.equal(count(), initial);
   await adapter.accountStatus(options); assert.equal(count(), initial + 1);
+  advanceIdentityNavigation(t, adapter);
   await adapter.verifiedSender(page, 'sender-1'); assert.equal(count(), initial + 2);
   t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
   t.mock.timers.tick(15001);
@@ -148,6 +166,7 @@ browserTest('a strict sender check never accepts a passive proof after owner con
   const { adapter, page, state } = await fixture(t);
   await adapter.accountStatus({ expectedAccountId: 'sender-1' });
   state.canonical = ownProfile(handle, false); state.self = ownProfile(handle, false);
+  advanceIdentityNavigation(t, adapter);
   assert.equal((await adapter.verifiedSender(page, 'sender-1')).authenticated, false);
 });
 
@@ -257,6 +276,7 @@ browserTest('bounded recovery can refresh a proved SELF alias without replacing 
   adapter.passiveAccount.checkedAt -= 15001;
   assert.equal((await adapter.accountStatus({ passive: true, expectedAccountId: 'sender-1' })).accountId, 'sender-1');
   const before = state.requests.length, pages = adapter.context.pages().length;
+  advanceIdentityNavigation(t, adapter);
   const recovered = await adapter.recoverAccountStatus({ expectedAccountId: 'sender-1' });
   assert.equal(recovered.authenticated, true); assert.equal(recovered.accountId, 'sender-1');
   assert.deepEqual(state.requests.slice(before), ['/user/sender-1']);
@@ -290,10 +310,57 @@ browserTest('bounded recovery repairs the SELF state left by a transient canonic
   assert.equal(adapter.senderProof.handle, handle);
   state.canonical = ownProfile();
   const before = state.requests.length;
+  advanceIdentityNavigation(t, adapter);
   const recovered = await adapter.recoverAccountStatus({ expectedAccountId: 'sender-1' });
   assert.equal(recovered.accountId, 'sender-1'); assert.equal(recovered.authenticated, true);
   assert.deepEqual(state.requests.slice(before), ['/user/sender-1']);
   assert.equal(await page.locator('textarea').inputValue(), '保留的私信草稿');
+});
+
+browserTest('a failed identity navigation recovers from the browser error page without requiring login', async t => {
+  const { adapter, page, state } = await fixture(t);
+  await adapter.accountStatus({ expectedAccountId: 'sender-1' });
+  const identity = adapter.identityPage, pages = adapter.context.pages().length;
+  state.failCanonical = true;
+  advanceIdentityNavigation(t, adapter);
+  const interrupted = await adapter.recoverAccountStatus({ expectedAccountId: 'sender-1' });
+  assert.equal(interrupted.verificationPending, true);
+  assert.equal(interrupted.verificationReason, 'navigation_failed');
+  await identity.waitForURL('chrome-error://chromewebdata/', { waitUntil: 'commit', timeout: 2000 });
+  assert.equal((await adapter.accountStatus({ passive: true, expectedAccountId: 'sender-1' })).verificationPending, true);
+  state.failCanonical = false;
+  const before = state.requests.length;
+  assert.equal((await adapter.recoverAccountStatus({ expectedAccountId: 'sender-1' })).verificationPending, true);
+  assert.equal(state.requests.length, before, 'A failed navigation also starts the quiet period');
+  advanceIdentityNavigation(t, adapter);
+  const recovered = await adapter.recoverAccountStatus({ expectedAccountId: 'sender-1' });
+  assert.equal(recovered.authenticated, true);
+  assert.equal(recovered.accountId, 'sender-1');
+  assert.deepEqual(state.requests.slice(before), ['/user/sender-1']);
+  assert.equal(adapter.identityPage, identity);
+  assert.equal(adapter.context.pages().length, pages);
+  assert.equal(await page.locator('textarea').inputValue(), '保留的私信草稿');
+});
+
+browserTest('browser error recovery still requires fresh matching owner proof', async t => {
+  for (const proof of ['missing', 'changed']) {
+    const { adapter, page, state } = await fixture(t);
+    await adapter.accountStatus({ expectedAccountId: 'sender-1' });
+    state.failCanonical = true;
+    advanceIdentityNavigation(t, adapter);
+    await adapter.recoverAccountStatus({ expectedAccountId: 'sender-1' });
+    await adapter.identityPage.waitForURL('chrome-error://chromewebdata/', { waitUntil: 'commit', timeout: 2000 });
+    state.failCanonical = false;
+    state.canonical = proof === 'missing' ? ownProfile(handle, false) : ownProfile('changed_owner');
+    advanceIdentityNavigation(t, adapter);
+    if (proof === 'changed') {
+      await assert.rejects(adapter.recoverAccountStatus({ expectedAccountId: 'sender-1' }), error => error.code === 'ACCOUNT_CHANGED');
+    } else {
+      const recovered = await adapter.recoverAccountStatus({ expectedAccountId: 'sender-1' });
+      assert.equal(recovered.authenticated, false);
+      assert.equal(recovered.verificationPending, true);
+    }
+  }
 });
 
 browserTest('bounded recovery does not resurrect a closed task or identity tab or navigate an off-origin task', async t => {
@@ -327,6 +394,7 @@ browserTest('bounded recovery cannot authorize a session whose canonical owner p
   await adapter.accountStatus({ expectedAccountId: 'sender-1' });
   state.canonical = ownProfile(handle, false); state.self = ownProfile(handle, false);
   const before = state.requests.length;
+  advanceIdentityNavigation(t, adapter);
   const recovered = await adapter.recoverAccountStatus({ expectedAccountId: 'sender-1' });
   assert.equal(recovered.authenticated, false); assert.equal(recovered.verificationPending, true);
   assert.equal(recovered.needsAccountVerification, true); assert.equal(recovered.verificationReason, 'owner_proof_missing');
@@ -348,7 +416,7 @@ browserTest('an explicit visible login control overrides stale owner health with
 
 const conversationInput = { senderAccountId: 'sender-1', recipientId: 'recipient-1', profileUrl: 'https://www.douyin.com/user/recipient-1', conversationId: 'conversation-1', limit: 50 };
 
-browserTest('conversation reads reject a server-side account switch hidden by stale owner DOM at either read boundary', async t => {
+browserTest('strict dispatch verification rejects server account changes hidden by passive read DOM', async t => {
   for (const boundary of ['before', 'after']) for (const conflict of ['missing-owner', 'changed-owner']) {
     const { adapter, page, state } = await fixture(t, { conversation: true });
     await adapter.accountStatus({ expectedAccountId: 'sender-1' });
@@ -367,38 +435,158 @@ browserTest('conversation reads reject a server-side account switch hidden by st
       const verifyTarget = adapter.verifyTarget.bind(adapter);
       adapter.verifyTarget = async (...args) => { await verifyTarget(...args); await switchSession(); };
     }
-    await assert.rejects(adapter.readConversation(conversationInput), error => {
-      assert.equal(error.code, conflict === 'missing-owner' ? 'ACCOUNT_VERIFICATION_PENDING' : 'ACCOUNT_CHANGED');
-      if (conflict === 'missing-owner') {
-        assert.equal(error.verificationPending, true);
-        assert.equal(error.verificationReason, 'owner_proof_missing');
-      }
-      return true;
-    });
+    assert.equal((await adapter.readConversation(conversationInput)).reliable, true);
+    advanceIdentityNavigation(t, adapter);
+    if (conflict === 'missing-owner') {
+      const account = await adapter.verifiedSender(page, 'sender-1');
+      assert.equal(account.authenticated, false);
+      assert.equal(account.verificationPending, true);
+      assert.equal(account.verificationReason, 'owner_proof_missing');
+    } else {
+      await assert.rejects(adapter.verifiedSender(page, 'sender-1'), error => error.code === 'ACCOUNT_CHANGED');
+    }
     assert.equal(adapter.identityPage, identity);
-    assert.deepEqual(state.requests.slice(before), boundary === 'before'
-      ? ['/user/recipient-1', '/user/sender-1']
-      : ['/user/recipient-1', '/user/sender-1', '/user/sender-1']);
+    assert.deepEqual(state.requests.slice(before), ['/user/sender-1']);
     assert.deepEqual(adapter.senderProof, hint);
     assert.equal(await page.locator('textarea').inputValue(), '保留的私信草稿');
   }
 });
 
-browserTest('healthy conversation reads verify both boundaries on the same canonical identity tab without rediscovery', async t => {
+browserTest('ordinary conversation reads reuse the visible chat and inspect ownership without page reloads', async t => {
   const { adapter, page, state } = await fixture(t, { conversation: true });
   await adapter.accountStatus({ expectedAccountId: 'sender-1' });
   const before = state.requests.length, identity = adapter.identityPage, pages = adapter.context.pages().length;
   const observed = await adapter.readConversation(conversationInput);
   assert.equal(observed.messages[0].text, '想了解面积');
   assert.equal(observed.reliable, true);
-  assert.deepEqual(state.requests.slice(before), ['/user/recipient-1', '/user/sender-1', '/user/sender-1']);
+  assert.equal((await adapter.readConversation(conversationInput)).reliable, true);
+  assert.deepEqual(state.requests.slice(before), []);
   assert.equal(adapter.identityPage, identity);
   assert.equal(adapter.context.pages().length, pages);
   assert.equal(page.url(), 'https://www.douyin.com/user/recipient-1');
   assert.equal(await page.locator('textarea').inputValue(), '保留的私信草稿');
 });
 
-browserTest('a same-handle SELF alias stays passive while conversation reads refresh the established canonical', async t => {
+browserTest('ordinary stack reads reuse the same visible participant proof for five minutes', async t => {
+  const { adapter, state } = await stackConversationFixture(t);
+  const before = state.requests.length;
+  for (let poll = 0; poll < 3; poll++) assert.equal((await adapter.readConversation(conversationInput)).reliable, true);
+  assert.deepEqual(state.requests.slice(before), ['/user/recipient-1']);
+  const previousNow = Date.now.bind(Date); t.mock.method(Date, 'now', () => previousNow() + 300001);
+  assert.equal((await adapter.readConversation(conversationInput)).reliable, true);
+  assert.deepEqual(state.requests.slice(before), ['/user/recipient-1', '/user/recipient-1']);
+});
+
+browserTest('a changed stack participant pauses passive reads without retrying its popup', async t => {
+  const { adapter, page, state } = await stackConversationFixture(t);
+  await adapter.readConversation(conversationInput);
+  await page.locator('[data-apm-action]').evaluate(card => { card.textContent = '客户乙'; });
+  const before = state.requests.length;
+  for (let attempt = 0; attempt < 3; attempt++) await assert.rejects(adapter.readConversation(conversationInput), error => error.code === 'RECIPIENT_UNVERIFIED');
+  assert.equal(state.requests.length, before);
+});
+
+browserTest('strict stack dispatch independently rejects a same-label participant callback swap', async t => {
+  const { adapter, page, state } = await fixture(t);
+  await page.locator('body').evaluate(body => body.insertAdjacentHTML('beforeend', '<section data-stack-layer="chat"><div class="StackLayoutStackChatHeaderuser"><div data-apm-action="个人页卡片" onclick="window.open(\'/user/recipient-1\')">同名客户</div></div></section>'));
+  const root = page.locator('[data-stack-layer=chat]'), target = { id: 'recipient-1', url: 'https://www.douyin.com/user/recipient-1' };
+  await adapter.verifyTarget(page, root, target, true, { passive: true });
+  await root.locator('[data-apm-action]').evaluate(card => { card.onclick = () => window.open('/user/someone-else'); });
+  const before = state.requests.length;
+  await adapter.verifyTarget(page, root, target, true, { passive: true });
+  assert.equal(state.requests.length, before);
+  await assert.rejects(adapter.verifyTarget(page, root, target, true), error => error.code === 'RECIPIENT_UNVERIFIED');
+  assert.deepEqual(state.requests.slice(before), ['/user/someone-else']);
+});
+
+browserTest('a cached stack card never returns another customer transcript under the original recipient', async t => {
+  const { adapter, page, state } = await stackConversationFixture(t);
+  assert.equal((await adapter.readConversation(conversationInput)).reliable, true);
+  await page.locator('[data-stack-layer=chat]').evaluate(root => {
+    root.querySelector('[data-apm-action]').onclick = () => window.open('/user/someone-else');
+    root.querySelector('[data-e2e=message-text]').textContent = '另一客户的手机号13800138000';
+  });
+  const before = state.requests.length;
+  for (let poll = 0; poll < 2; poll++) await assert.rejects(adapter.readConversation(conversationInput), error => error.code === 'RECIPIENT_UNVERIFIED');
+  assert.equal(state.requests.length, before);
+  const previousNow = Date.now.bind(Date); t.mock.method(Date, 'now', () => previousNow() + 60001);
+  await assert.rejects(adapter.readConversation(conversationInput), error => error.code === 'RECIPIENT_UNVERIFIED');
+  assert.deepEqual(state.requests.slice(before), ['/user/someone-else']);
+});
+
+browserTest('a new stack snapshot needs one budgeted target proof before returning any message body', async t => {
+  const { adapter, page, state } = await stackConversationFixture(t);
+  const first = await adapter.readConversation(conversationInput), before = state.requests.length;
+  assert.equal((await adapter.readConversation(conversationInput)).snapshotId, first.snapshotId);
+  assert.equal(state.requests.length, before, 'An unchanged snapshot has no extra popup');
+  await page.locator('[data-e2e=message-text]').evaluate(node => { node.textContent = '我需要80到100平'; });
+  await assert.rejects(adapter.readConversation(conversationInput), error => error.code === 'RECIPIENT_UNVERIFIED');
+  assert.equal(state.requests.length, before);
+  const previousNow = Date.now.bind(Date); t.mock.method(Date, 'now', () => previousNow() + 60001);
+  const verified = await adapter.readConversation(conversationInput);
+  assert.equal(verified.messages[0].text, '我需要80到100平');
+  assert.deepEqual(state.requests.slice(before), ['/user/recipient-1']);
+  assert.equal((await adapter.readConversation(conversationInput)).snapshotId, verified.snapshotId);
+  assert.deepEqual(state.requests.slice(before), ['/user/recipient-1']);
+});
+
+browserTest('a transcript changing during target proof is never returned or cached as verified', async t => {
+  const { adapter, page } = await stackConversationFixture(t);
+  await page.locator('[data-apm-action]').evaluate(card => {
+    card.onclick = () => {
+      document.querySelector('[data-e2e=message-text]').textContent = '核实期间出现的不同正文';
+      window.open('/user/recipient-1');
+    };
+  });
+  await assert.rejects(adapter.readConversation(conversationInput), error => error.code === 'CONVERSATION_CHANGED');
+  assert.equal(adapter.readTargetBinding?.snapshotId, undefined);
+});
+
+browserTest('strict owner verification waits at least one minute between identity navigation attempts', async t => {
+  const { adapter, page, state } = await fixture(t);
+  await adapter.accountStatus({ expectedAccountId: 'sender-1' });
+  const before = state.requests.length;
+  const immediate = await adapter.verifiedSender(page, 'sender-1');
+  assert.equal(immediate.authenticated, false);
+  assert.equal(immediate.verificationPending, true);
+  assert.deepEqual(state.requests.slice(before), []);
+  const realNow = Date.now.bind(Date); t.mock.method(Date, 'now', () => realNow() + 60001);
+  const verified = await adapter.verifiedSender(page, 'sender-1');
+  assert.equal(verified.accountId, 'sender-1');
+  assert.deepEqual(state.requests.slice(before), ['/user/sender-1']);
+  const repeated = await adapter.verifiedSender(page, 'sender-1');
+  assert.equal(repeated.verificationPending, true);
+  assert.deepEqual(state.requests.slice(before), ['/user/sender-1']);
+});
+
+browserTest('an actual send refreshes its owner once only at the final dispatch boundary', async t => {
+  const { adapter, page, state } = await fixture(t, { conversation: true });
+  await adapter.accountStatus({ expectedAccountId: 'sender-1' });
+  await page.locator('[role=dialog]').evaluate(root => root.insertAdjacentHTML('beforeend', '<button onclick="const row=document.createElement(\'div\');row.dataset.e2e=\'message-item\';row.textContent=this.parentElement.querySelector(\'textarea\').value;this.parentElement.append(row)">发送</button>'));
+  advanceIdentityNavigation(t, adapter);
+  const before = state.requests.length; let checkpoints = 0;
+  const sent = await adapter.send({ ...conversationInput, message: '仅用于隔离测试' }, { beforeDispatch: async () => { checkpoints++; } });
+  assert.equal(sent.outcome, 'submitted');
+  assert.equal(checkpoints, 1);
+  assert.deepEqual(state.requests.slice(before), ['/user/sender-1']);
+});
+
+browserTest('a server account switch after draft entry blocks the final send checkpoint', async t => {
+  for (const owner of ['missing', 'changed']) {
+    const { adapter, page, state } = await fixture(t, { conversation: true });
+    await adapter.accountStatus({ expectedAccountId: 'sender-1' });
+    await page.locator('[role=dialog]').evaluate(root => root.insertAdjacentHTML('beforeend', '<button>发送</button>'));
+    advanceIdentityNavigation(t, adapter);
+    let checkpoints = 0;
+    await assert.rejects(adapter.send({ ...conversationInput, message: '未授权发送的隔离测试草稿' }, {
+      renewBeforeDispatch: async () => { state.canonical = owner === 'missing' ? ownProfile(handle, false) : ownProfile('another_owner'); },
+      beforeDispatch: async () => { checkpoints++; },
+    }), error => error.code === (owner === 'missing' ? 'ACCOUNT_VERIFICATION_PENDING' : 'ACCOUNT_CHANGED'));
+    assert.equal(checkpoints, 0);
+  }
+});
+
+browserTest('a same-handle SELF alias remains passive for reads while dispatch still refreshes its canonical', async t => {
   const { adapter, page, state } = await fixture(t, { conversation: true });
   await adapter.accountStatus({ expectedAccountId: 'sender-1' });
   await adapter.identityPage.evaluate(() => history.replaceState({}, '', '/user/self'));
@@ -407,8 +595,9 @@ browserTest('a same-handle SELF alias stays passive while conversation reads ref
   assert.equal((await adapter.accountStatus({ passive: true, expectedAccountId: 'sender-1' })).accountId, 'sender-1');
   assert.equal(state.requests.length, before);
   assert.equal((await adapter.readConversation(conversationInput)).messages[0].direction, 'inbound');
-  assert.deepEqual(state.requests.slice(before), ['/user/recipient-1', '/user/sender-1', '/user/sender-1']);
+  assert.deepEqual(state.requests.slice(before), []);
   state.canonical = ownProfile(handle, false); state.self = ownProfile(handle, false);
+  advanceIdentityNavigation(t, adapter);
   assert.equal((await adapter.verifiedSender(page, 'sender-1')).authenticated, false);
 });
 
@@ -436,6 +625,7 @@ browserTest('a strict temporary canonical failure preserves pending metadata and
   await adapter.accountStatus({ expectedAccountId: 'sender-1' });
   const hint = { ...adapter.senderProof };
   state.canonical = ownProfile(handle, false); state.self = ownProfile(handle, false);
+  advanceIdentityNavigation(t, adapter);
   const pending = await adapter.verifiedSender(page, 'sender-1');
   assert.equal(pending.authenticated, false);
   assert.equal(pending.verificationPending, true);
@@ -457,7 +647,7 @@ browserTest('fresh read ownership rejects a changed header or handle and explici
       if (conflict === 'captcha') await adapter.identityPage.locator('main').evaluate(node => node.insertAdjacentHTML('beforeend', '<div data-e2e="captcha">安全验证</div>'));
     };
     await assert.rejects(adapter.readConversation(conversationInput), error => error.code === (conflict === 'login' ? 'UNAUTHENTICATED' : conflict === 'captcha' ? 'HUMAN_ACTION_REQUIRED' : 'ACCOUNT_CHANGED'));
-    assert.equal(state.requests.filter(path => path === '/user/sender-1').length, before + 1);
+    assert.equal(state.requests.filter(path => path === '/user/sender-1').length, before);
   }
 });
 
@@ -478,7 +668,7 @@ browserTest('conversation identity DOM interruptions stay pending without erasin
     return true;
   });
   assert.deepEqual(adapter.senderProof, hint);
-  assert.deepEqual(state.requests.slice(before), ['/user/recipient-1', '/user/sender-1']);
+  assert.deepEqual(state.requests.slice(before), []);
 });
 
 browserTest('strict sender DOM interruptions stay pending without erasing the established identity hint', async t => {

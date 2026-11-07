@@ -336,7 +336,7 @@ export class DesktopController {
               this.#set({ phase: recovery.manualRequired ? 'verification_required' : 'verifying', busy: false, authenticated: false,
                 recoveryAttempt: recovery.attempts, nextRetryAt: recovery.nextAt === null ? undefined : new Date(recovery.nextAt).toISOString(),
                 verificationReason: result.verificationReason, errorCode: undefined,
-                message: recovery.manualRequired ? '自动核验暂未完成，专用浏览器已保留。请检查抖音页面后点击“重新核验账号”。' : '暂未核实当前账号，正在重试；专用浏览器保持打开，本轮不领取任务。' });
+                message: recovery.manualRequired ? '自动核验暂未完成，专用浏览器已保留。请检查抖音页面后点击“重新核验账号”。' : '暂未核实当前账号，等待账号恢复；下次核验时间前不会自动刷新，专用浏览器保持打开，本轮不领取任务。' });
             } else {
               exitState = { phase: 'login_required', authenticated: false, errorCode: 'UNAUTHENTICATED', message: '登录或账号确认已失效，同步已暂停，专用浏览器已保留。请完成登录或切回已配对账号，再点击“连接抖音”。' };
               break;

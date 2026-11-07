@@ -16,5 +16,5 @@ for(const [label,result,throws] of [
 test('CLI passive stalls recover in place using the same bounded policy as the desktop',async()=>{
  let now=0,runs=0,recoveries=0;const controller=new AbortController();
  const outcome=await runCliLoop({}, {adapter:{},journal:{},signal:controller.signal,now:()=>now,run:async(_config,options)=>{runs++;if(options.recoverAccount){recoveries++;controller.abort();return{authenticated:true};}return{authenticated:false,verificationPending:true};},heartbeat:async()=>({ok:true}),schedule:()=>({unref(){}}),cancel(){},sleep:async ms=>{now+=ms;},logger(){},errorLogger(){}});
- assert.equal(outcome.manualRequired,false);assert.equal(runs,4);assert.equal(recoveries,1);
+ assert.equal(outcome.manualRequired,false);assert.equal(runs,13);assert.equal(now,60000);assert.equal(recoveries,1);
 });

@@ -16,10 +16,34 @@ function publicMessage(r:MessageRow):ProspectChatMessage{const status=r.job_stat
 const publicPool=(r:PoolRow):ProspectCapturedLead=>({id:r.id,conversationId:r.conversation_id,nickname:r.nickname,contactType:r.contact_type,contactValue:r.contact_value,grade:r.grade,score:r.score,reason:r.reason,assignedMemberId:r.assigned_member_id,assignedName:r.assigned_name,status:r.status,updatedAt:r.updated_at});
 const capturedContactSql="EXISTS (SELECT 1 FROM workbench_prospect_lead_pool captured WHERE captured.owner_id=c.owner_id AND captured.conversation_id=c.id) AS contact_captured";
 const lastSyncedSql="(SELECT json_extract(synced.result_json,'$.observedAt') FROM workbench_prospect_jobs synced WHERE synced.owner_id=c.owner_id AND synced.member_id=c.member_id AND synced.sender_id=c.sender_id AND synced.kind='readConversation' AND synced.status='done' AND json_extract(synced.input_json,'$.conversationId')=c.id AND json_extract(synced.result_json,'$.reliable')=1 ORDER BY json_extract(synced.result_json,'$.observedAt') DESC LIMIT 1) AS last_synced_at";
-const technicalReadReasons=['会话读取尚不可靠，已暂停自动回复','会话读取尚不可靠，已暂停自动回复；请稍后重新同步，核实消息后再继续。','会话读取失败，已转交销售','会话面板未打开或需要人工操作，未发送。','会话已恢复同步，可继续人工回复'];
-const isTechnicalReadPause=(reason:string|null)=>!!reason&&(technicalReadReasons.includes(reason)||reason.startsWith('会话同步暂时失败：'));
-const replaceableReadHandoffSql="(handoff_reason IS NULL OR handoff_reason='' OR handoff_reason IN ('会话读取尚不可靠，已暂停自动回复','会话读取尚不可靠，已暂停自动回复；请稍后重新同步，核实消息后再继续。','会话读取失败，已转交销售','会话面板未打开或需要人工操作，未发送。','会话已恢复同步，可继续人工回复') OR handoff_reason LIKE '会话同步暂时失败：%')";
-const recoverableReadPauseSql=`status='active' AND handoff_reason IS NOT NULL AND ${replaceableReadHandoffSql} AND NOT EXISTS (SELECT 1 FROM workbench_prospect_jobs uncertain WHERE uncertain.owner_id=workbench_prospect_conversations.owner_id AND uncertain.sender_id=workbench_prospect_conversations.sender_id AND uncertain.kind IN ('send','reply') AND uncertain.status='unknown' AND json_extract(uncertain.input_json,'$.recipientId')=workbench_prospect_conversations.recipient_id)`;
+const RESUME_PENDING='已恢复AI，等待同步核实最新未回复消息';
+const temporaryReadyReasons=['本机助手未连接，请启动本机助手并连接抖音后重新同步','本机助手暂未核实当前账号，请在助手中完成账号核验后重新同步'];
+const technicalReadReasons=[...temporaryReadyReasons,'会话读取尚不可靠，已暂停自动回复','会话读取尚不可靠，已暂停自动回复；请稍后重新同步，核实消息后再继续。','会话读取失败，已转交销售','会话面板未打开或需要人工操作，未发送。','会话已恢复同步，可继续人工回复'];
+const isTechnicalReadPause=(reason:string|null)=>!!reason&&(technicalReadReasons.includes(reason)||reason===RESUME_PENDING||reason.startsWith('会话同步暂时失败：'));
+const replaceableReadHandoffSql="(handoff_reason IS NULL OR handoff_reason='' OR handoff_reason IN ('本机助手未连接，请启动本机助手并连接抖音后重新同步','本机助手暂未核实当前账号，请在助手中完成账号核验后重新同步','会话读取尚不可靠，已暂停自动回复','会话读取尚不可靠，已暂停自动回复；请稍后重新同步，核实消息后再继续。','会话读取失败，已转交销售','会话面板未打开或需要人工操作，未发送。','会话已恢复同步，可继续人工回复') OR handoff_reason LIKE '会话同步暂时失败：%')";
+// Mirror the journal's completed-retry ancestry proof without rewriting send history.
+// Full input equality after removing retry preserves the approved message and identity.
+const resolvedSendAncestorSql=(job:string)=>`(${job}.kind='send' AND ${job}.status='unknown' AND EXISTS (
+ WITH RECURSIVE lineage(root_id,id,next_id,depth,path,base_input) AS (
+  SELECT completed.id,completed.id,json_extract(completed.input_json,'$.retry.previousJobId'),0,json_array(completed.id),json_remove(completed.input_json,'$.retry')
+  FROM workbench_prospect_jobs completed WHERE completed.kind='send' AND completed.status='done'
+   AND completed.owner_id=${job}.owner_id AND completed.member_id=${job}.member_id AND completed.sender_id=${job}.sender_id AND completed.campaign_id=${job}.campaign_id
+   AND json_extract(completed.input_json,'$.senderAccountId')=${job}.sender_id
+   AND json_extract(completed.input_json,'$.recipientId')=json_extract(${job}.input_json,'$.recipientId')
+   AND json_type(completed.input_json,'$.message')='text' AND length(json_extract(completed.input_json,'$.message'))>0
+   AND json_type(completed.input_json,'$.retry')='object' AND json_type(completed.input_json,'$.retry.previousJobId')='text'
+  UNION ALL
+  SELECT lineage.root_id,parent.id,json_extract(parent.input_json,'$.retry.previousJobId'),lineage.depth+1,json_insert(lineage.path,'$[#]',parent.id),lineage.base_input
+  FROM lineage JOIN workbench_prospect_jobs parent ON parent.id=lineage.next_id
+  WHERE lineage.depth<100 AND typeof(lineage.next_id)='text' AND parent.kind='send'
+   AND parent.owner_id=${job}.owner_id AND parent.member_id=${job}.member_id AND parent.sender_id=${job}.sender_id AND parent.campaign_id=${job}.campaign_id
+   AND json_remove(parent.input_json,'$.retry')=lineage.base_input
+   AND NOT EXISTS (SELECT 1 FROM json_each(lineage.path) seen WHERE seen.value=parent.id)
+ ), valid_roots AS (SELECT root_id FROM lineage WHERE next_id IS NULL OR next_id='')
+ SELECT 1 FROM lineage ancestor JOIN valid_roots valid ON valid.root_id=ancestor.root_id WHERE ancestor.depth>0 AND ancestor.id=${job}.id
+))`;
+const unresolvedOutboundSql=(job:string)=>`(${job}.kind IN ('send','reply') AND ${job}.status IN ('unknown','running') AND NOT ${resolvedSendAncestorSql(job)})`;
+const recoverableReadPauseSql=`status='active' AND EXISTS (SELECT 1 FROM workbench_prospect_devices verified WHERE verified.owner_id=workbench_prospect_conversations.owner_id AND verified.member_id=workbench_prospect_conversations.member_id AND verified.enabled=1 AND verified.authenticated=1 AND verified.account_id=workbench_prospect_conversations.sender_id) AND handoff_reason IS NOT NULL AND (${replaceableReadHandoffSql} OR (mode='agent' AND handoff_reason='${RESUME_PENDING}')) AND NOT EXISTS (SELECT 1 FROM workbench_prospect_jobs uncertain WHERE uncertain.owner_id=workbench_prospect_conversations.owner_id AND uncertain.sender_id=workbench_prospect_conversations.sender_id AND ${unresolvedOutboundSql('uncertain')} AND json_extract(uncertain.input_json,'$.recipientId')=workbench_prospect_conversations.recipient_id)`;
 const messageSelect='SELECT m.*,m.rowid AS row_order,j.status AS job_status,j.error AS job_error FROM workbench_prospect_messages m LEFT JOIN workbench_prospect_jobs j ON j.id=m.job_id';
 const sendText=(value:unknown)=>{if(typeof value!=='string'||!value.trim()||value.length>1000||/[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(value))throw new DomainError('回复内容需为1至1000个字符');return value;};
 const MANUAL_SYNC_INTERVAL_MS=8000;
@@ -99,9 +123,13 @@ export function createProspectingChatStore(db:D1Database,now:()=>number=Date.now
  }
  async function control(ownerId:string,memberId:string,id:string,version:number,mode:'agent'|'human'){
   const c=await ownConversation(ownerId,memberId,id);if(c.version!==version||c.status!=='active')throw conflict();const token=crypto.randomUUID(),time=stamp(),guard='SELECT 1 FROM workbench_prospect_conversations WHERE id=? AND processing_token=?';
-  if(mode==='agent'&&await db.prepare("SELECT id FROM workbench_prospect_jobs WHERE kind='reply' AND status='unknown' AND json_extract(input_json,'$.conversationId')=? LIMIT 1").bind(id).first())throw new DomainError('上一条回复结果待确认，可靠同步核实之前不能恢复自动回复',409);
+  if(mode==='agent'){
+   const task=await campaign(ownerId,memberId,c.campaign_id);if(task.status!=='active'||object(JSON.parse(task.data_json)).chatEnabled!==true)throw new DomainError('请先启用会话并恢复获客任务，再恢复自动回复',409);
+   if(await db.prepare(`SELECT uncertain.id FROM workbench_prospect_jobs uncertain WHERE uncertain.owner_id=? AND uncertain.sender_id=? AND ${unresolvedOutboundSql('uncertain')} AND json_extract(uncertain.input_json,'$.recipientId')=? LIMIT 1`).bind(ownerId,c.sender_id,c.recipient_id).first())throw new DomainError('上一条回复仍在执行或结果待确认，可靠同步核实之前不能恢复自动回复',409);
+   if(await db.prepare('SELECT 1 FROM workbench_prospect_contact_optouts WHERE owner_id=? AND sender_id=? AND recipient_id=?').bind(ownerId,c.sender_id,c.recipient_id).first())throw new DomainError('客户已要求停止联系，不能恢复自动回复',409);
+  }
   const results=await db.batch([
-   db.prepare('UPDATE workbench_prospect_conversations SET mode=?,handoff_reason=?,version=version+1,processing_token=?,processing_until=NULL,updated_at=? WHERE id=? AND owner_id=? AND member_id=? AND version=? AND status=\'active\'').bind(mode,mode==='human'?'已由销售接管':null,token,time,id,ownerId,memberId,version),
+   db.prepare(`UPDATE workbench_prospect_conversations SET mode=?,handoff_reason=?,last_snapshot_id=CASE WHEN ?=1 THEN NULL ELSE last_snapshot_id END,version=version+1,processing_token=?,processing_until=NULL,updated_at=? WHERE id=? AND owner_id=? AND member_id=? AND version=? AND status='active'${mode==='agent'?` AND NOT EXISTS (SELECT 1 FROM workbench_prospect_jobs uncertain WHERE uncertain.owner_id=workbench_prospect_conversations.owner_id AND uncertain.sender_id=workbench_prospect_conversations.sender_id AND json_extract(uncertain.input_json,'$.recipientId')=workbench_prospect_conversations.recipient_id AND ${unresolvedOutboundSql('uncertain')})`:''}`).bind(mode,mode==='human'?'已由销售接管':RESUME_PENDING,mode==='agent'?1:0,token,time,id,ownerId,memberId,version),
    ...cancelQueued(id,guard,[id,token]),
    db.prepare('UPDATE workbench_prospect_conversations SET processing_token=NULL WHERE id=? AND processing_token=?').bind(id,token),
   ]);if(!results[0].meta.changes)throw conflict();
@@ -112,7 +140,7 @@ export function createProspectingChatStore(db:D1Database,now:()=>number=Date.now
   const jobId=`pj-${crypto.randomUUID()}`,replyId=`pcm-${crypto.randomUUID()}`,time=stamp();
   const input={senderAccountId:c.sender_id,recipientId:c.recipient_id,profileUrl:c.profile_url,message,replyId,expectedSnapshotId:c.last_snapshot_id,conversationId:c.id,actor,...(actor==='agent'?{policyVersion:policyVersion??0}:{})};
   return{jobId,statements:[
-   db.prepare(`INSERT INTO workbench_prospect_jobs(id,owner_id,member_id,device_id,campaign_id,lead_id,kind,status,input_json,result_json,active_key,sender_id,created_at,updated_at) SELECT ?,?,?,?,?,?,'reply','queued',?,?,?,?,?,? WHERE EXISTS (${guard}) AND NOT EXISTS (SELECT 1 FROM workbench_prospect_contact_optouts WHERE owner_id=? AND sender_id=? AND recipient_id=?) AND EXISTS (SELECT 1 FROM workbench_prospect_devices WHERE id=? AND enabled=1 AND authenticated=1 AND account_id=?)`).bind(jobId,c.owner_id,c.member_id,d.id,c.campaign_id,c.lead_id,JSON.stringify(input),JSON.stringify(metadata),`chat-reply:${c.id}`,c.sender_id,time,time,...values,c.owner_id,c.sender_id,c.recipient_id,d.id,c.sender_id),
+   db.prepare(`INSERT INTO workbench_prospect_jobs(id,owner_id,member_id,device_id,campaign_id,lead_id,kind,status,input_json,result_json,active_key,sender_id,created_at,updated_at) SELECT ?,?,?,?,?,?,'reply','queued',?,?,?,?,?,? WHERE EXISTS (${guard}) AND NOT EXISTS (SELECT 1 FROM workbench_prospect_contact_optouts WHERE owner_id=? AND sender_id=? AND recipient_id=?) AND EXISTS (SELECT 1 FROM workbench_prospect_devices WHERE id=? AND enabled=1 AND authenticated=1 AND account_id=?) AND NOT EXISTS (SELECT 1 FROM workbench_prospect_jobs uncertain WHERE uncertain.owner_id=? AND uncertain.sender_id=? AND json_extract(uncertain.input_json,'$.recipientId')=? AND ${unresolvedOutboundSql('uncertain')})`).bind(jobId,c.owner_id,c.member_id,d.id,c.campaign_id,c.lead_id,JSON.stringify(input),JSON.stringify(metadata),`chat-reply:${c.id}`,c.sender_id,time,time,...values,c.owner_id,c.sender_id,c.recipient_id,d.id,c.sender_id,c.owner_id,c.sender_id,c.recipient_id),
    db.prepare("INSERT INTO workbench_prospect_messages(id,conversation_id,owner_id,member_id,source_key,direction,actor,text,status,created_at,job_id,processed) SELECT ?,?,?,?,?,'outbound',?,?,'queued',?,?,1 WHERE EXISTS (SELECT 1 FROM workbench_prospect_jobs WHERE id=?)").bind(replyId,c.id,c.owner_id,c.member_id,`reply:${replyId}`,actor,message,time,jobId,jobId),
   ]};
  }
@@ -217,7 +245,8 @@ export function createProspectingChatStore(db:D1Database,now:()=>number=Date.now
   const read=normalizeRead(row,result);if(c.last_read_at&&read.observedAt<c.last_read_at)throw new DomainError('会话读取结果已过期',409);
   const existing=(await db.prepare('SELECT m.*,m.rowid AS row_order,j.status AS job_status,j.started_at AS job_started_at FROM workbench_prospect_messages m LEFT JOIN workbench_prospect_jobs j ON j.id=m.job_id WHERE m.conversation_id=? ORDER BY m.created_at,m.rowid').bind(c.id).all<MessageRow>()).results;const bySource=new Map(existing.map(m=>[m.source_key,m]));
   const statements:D1PreparedStatement[]=[];
-  const unresolved=!!await db.prepare("SELECT 1 FROM workbench_prospect_jobs WHERE owner_id=? AND sender_id=? AND kind IN ('send','reply') AND status='unknown' AND json_extract(input_json,'$.recipientId')=? LIMIT 1").bind(c.owner_id,c.sender_id,c.recipient_id).first();
+  const unresolved=!!await db.prepare(`SELECT 1 FROM workbench_prospect_jobs uncertain WHERE uncertain.owner_id=? AND uncertain.sender_id=? AND ${unresolvedOutboundSql('uncertain')} AND json_extract(uncertain.input_json,'$.recipientId')=? LIMIT 1`).bind(c.owner_id,c.sender_id,c.recipient_id).first();
+  const resuming=c.mode==='agent'&&c.handoff_reason===RESUME_PENDING;
   const recovering=c.status==='active'&&automatic&&read.reliable&&isTechnicalReadPause(c.handoff_reason)&&!unresolved;
   const greeting=existing.find(m=>m.source_key.startsWith('greeting:'));
   const anchors=greeting?read.messages.flatMap((m,index)=>m.direction==='outbound'&&m.text===greeting.text?[index]:[]):[];
@@ -247,7 +276,7 @@ export function createProspectingChatStore(db:D1Database,now:()=>number=Date.now
   if(read.reliable)for(const m of read.messages.filter(m=>m.direction==='outbound'&&!bySource.has(m.id)&&m.postedAt)){
    statements.push(db.prepare(`UPDATE workbench_prospect_jobs SET status='done',result_json=json_set(COALESCE(result_json,'{}'),'$.outcome','submitted','$.summary','后续会话同步已观察到相同外发消息'),error=NULL,active_key=NULL,updated_at=? WHERE kind='reply' AND status='unknown' AND json_extract(input_json,'$.conversationId')=? AND json_extract(input_json,'$.message')=? AND started_at<=? AND EXISTS (${guard})`).bind(time,c.id,m.text,m.postedAt!,...values));
   }
-  if(recovering){
+  if(recovering&&!resuming){
    const latest=existing.filter(m=>m.direction==='inbound'&&m.eligible===1).at(-1);
    const confirmedOut=existing.filter(m=>m.direction==='outbound'&&(m.status==='sent'||m.job_status==='done'||!m.job_id&&m.status==='received'&&c.last_read_at&&m.created_at<=c.last_read_at)).at(-1);
    const index=latest?read.messages.findIndex(m=>m.id===latest.source_key):-1;
@@ -255,7 +284,25 @@ export function createProspectingChatStore(db:D1Database,now:()=>number=Date.now
    const unanswered=index>=0&&latest&&latest.processed===1&&(!confirmedOut||(latest.row_order??0)>(confirmedOut.row_order??0))&&!newerOutgoingInRead;
    if(unanswered)statements.push(db.prepare(`UPDATE workbench_prospect_messages SET processed=0 WHERE id=? AND EXISTS (${guard}) AND EXISTS (SELECT 1 FROM workbench_prospect_conversations WHERE id=? AND version=? AND ${recoverableReadPauseSql})`).bind(latest.id,...values,c.id,c.version));
   }
-  statements.push(db.prepare(`UPDATE workbench_prospect_conversations SET last_read_at=CASE WHEN ?=1 THEN ? ELSE last_read_at END,last_snapshot_id=?,has_baseline=CASE WHEN ?=1 THEN 1 ELSE has_baseline END,last_message_at=?,last_message_preview=?,mode=CASE WHEN ?=1 AND ${recoverableReadPauseSql} THEN 'agent' ELSE mode END,handoff_reason=CASE WHEN ?=1 AND ${replaceableReadHandoffSql} THEN '会话读取尚不可靠，已暂停自动回复；请稍后重新同步，核实消息后再继续。' WHEN ?=1 AND ${recoverableReadPauseSql} THEN NULL ELSE handoff_reason END,version=version+?,processing_token=CASE WHEN ?=1 THEN NULL ELSE processing_token END,processing_until=CASE WHEN ?=1 THEN NULL ELSE processing_until END,updated_at=? WHERE id=? AND EXISTS (${guard})`).bind(read.reliable?1:0,read.observedAt,read.reliable||read.covered===true?read.snapshotId:null,read.reliable?1:0,last?.postedAt??(last?read.observedAt:c.last_message_at),last?text(last.text,200):c.last_message_preview,recovering?1:0,automatic&&!read.reliable?1:0,recovering?1:0,changed||!read.reliable?1:0,changed||!read.reliable?1:0,changed||!read.reliable?1:0,time,c.id,...values));
+  let resumeVerified=false;
+  const resumeGuard=`EXISTS (${guard}) AND EXISTS (SELECT 1 FROM workbench_prospect_conversations WHERE id=? AND version=? AND mode='agent' AND handoff_reason=? AND ${recoverableReadPauseSql})`;
+  if(recovering&&resuming&&last?.direction==='outbound'){
+   const answeredIds=read.messages.filter(m=>m.direction==='inbound').map(m=>m.id);
+   statements.push(db.prepare(`UPDATE workbench_prospect_messages SET processed=1 WHERE conversation_id=? AND direction='inbound' AND eligible=1 AND source_key IN (SELECT value FROM json_each(?)) AND ${resumeGuard}`).bind(c.id,JSON.stringify(answeredIds),...values,c.id,c.version,RESUME_PENDING));
+  }
+  if(recovering&&resuming&&last?.direction==='inbound'){
+   const previous=bySource.get(last.id),postedAt=last.postedAt??previous?.posted_at;
+   const fresh=postedAt?Date.parse(postedAt)>=Date.parse(c.opened_at):anchor>=0&&read.messages.length-1>anchor;
+   const confirmedOut=existing.filter(m=>m.direction==='outbound'&&(m.status==='sent'||m.job_status==='done'||!m.job_id&&m.status==='received'&&c.last_read_at&&m.created_at<=c.last_read_at)).at(-1);
+   const answered=!!confirmedOut&&(previous?(confirmedOut.row_order??0)>(previous.row_order??0):!!postedAt&&!!confirmedOut.posted_at&&Date.parse(confirmedOut.posted_at)>Date.parse(postedAt));
+   if(answered)statements.push(db.prepare(`UPDATE workbench_prospect_messages SET processed=1 WHERE conversation_id=? AND direction='inbound' AND eligible=1 AND source_key IN (SELECT value FROM json_each(?)) AND ${resumeGuard}`).bind(c.id,JSON.stringify(read.messages.filter(m=>m.direction==='inbound').map(m=>m.id)),...values,c.id,c.version,RESUME_PENDING));
+   if(fresh&&!answered){
+    resumeVerified=true;
+    statements.push(db.prepare(`UPDATE workbench_prospect_messages SET processed=1 WHERE conversation_id=? AND direction='inbound' AND eligible=1 AND source_key!=? AND ${resumeGuard}`).bind(c.id,last.id,...values,c.id,c.version,RESUME_PENDING));
+    statements.push(db.prepare(`UPDATE workbench_prospect_messages SET eligible=1,processed=0 WHERE conversation_id=? AND source_key=? AND direction='inbound' AND ${resumeGuard}`).bind(c.id,last.id,...values,c.id,c.version,RESUME_PENDING));
+   }
+  }
+  statements.push(db.prepare(`UPDATE workbench_prospect_conversations SET last_read_at=CASE WHEN ?=1 THEN ? ELSE last_read_at END,last_snapshot_id=?,has_baseline=CASE WHEN ?=1 THEN 1 ELSE has_baseline END,last_message_at=?,last_message_preview=?,mode=CASE WHEN ?=1 AND ${recoverableReadPauseSql} THEN 'agent' ELSE mode END,handoff_reason=CASE WHEN ?=1 AND ${replaceableReadHandoffSql} THEN '会话读取尚不可靠，已暂停自动回复；请稍后重新同步，核实消息后再继续。' WHEN ?=1 AND ${recoverableReadPauseSql} THEN NULL ELSE handoff_reason END,version=version+?,processing_token=CASE WHEN ?=1 THEN NULL ELSE processing_token END,processing_until=CASE WHEN ?=1 THEN NULL ELSE processing_until END,updated_at=? WHERE id=? AND EXISTS (${guard})`).bind(read.reliable?1:0,read.observedAt,read.reliable||read.covered===true?read.snapshotId:null,read.reliable?1:0,last?.postedAt??(last?read.observedAt:c.last_message_at),last?text(last.text,200):c.last_message_preview,recovering&&(!resuming||resumeVerified)?1:0,automatic&&!read.reliable?1:0,recovering&&(!resuming||resumeVerified)?1:0,changed||!read.reliable?1:0,changed||!read.reliable?1:0,changed||!read.reliable?1:0,time,c.id,...values));
   if(stopObserved){const memory=normalizeChatMemory(c.memory_json),reason='客户明确要求停止联系';
    statements.push(...closeStatements(c,reason,memory,guard,values));
    statements.push(db.prepare(`UPDATE workbench_prospect_conversations SET status='closed',close_reason=?,memory_json=?,processing_token=NULL,processing_until=NULL,version=version+1,updated_at=? WHERE id=? AND EXISTS (${guard})`).bind(reason,JSON.stringify(memory),time,c.id,...values));
@@ -288,7 +335,7 @@ export function createProspectingChatStore(db:D1Database,now:()=>number=Date.now
   const candidates=(await db.prepare(`SELECT c.*,${capturedContactSql},p.status AS campaign_status,p.data_json AS campaign_json,
    (SELECT m.text FROM workbench_prospect_messages m WHERE m.conversation_id=c.id AND m.direction='outbound' ORDER BY m.created_at DESC,m.rowid DESC LIMIT 1) AS last_outbound,
    (SELECT json_group_array(text) FROM (SELECT m.text FROM workbench_prospect_messages m WHERE m.conversation_id=c.id AND m.direction='inbound' AND m.eligible=1 AND m.processed=0 ORDER BY m.created_at,m.rowid LIMIT 100)) AS pending_json,
-   EXISTS (SELECT 1 FROM workbench_prospect_jobs j WHERE j.kind='reply' AND j.status IN ('queued','running') AND json_extract(j.input_json,'$.conversationId')=c.id) AS has_reply,
+   (EXISTS (SELECT 1 FROM workbench_prospect_jobs j WHERE j.kind='reply' AND j.status IN ('queued','running') AND json_extract(j.input_json,'$.conversationId')=c.id) OR EXISTS (SELECT 1 FROM workbench_prospect_jobs uncertain WHERE uncertain.owner_id=c.owner_id AND uncertain.sender_id=c.sender_id AND json_extract(uncertain.input_json,'$.recipientId')=c.recipient_id AND ${unresolvedOutboundSql('uncertain')})) AS has_reply,
    (SELECT COUNT(*) FROM workbench_prospect_jobs counted WHERE counted.owner_id=c.owner_id AND counted.sender_id=c.sender_id AND counted.kind='reply' AND counted.started_at>=?) AS day_count,
    (SELECT COUNT(*) FROM workbench_prospect_jobs counted WHERE counted.owner_id=c.owner_id AND counted.sender_id=c.sender_id AND counted.kind='reply' AND json_extract(counted.input_json,'$.conversationId')=c.id AND counted.started_at>?) AS conversation_count
    FROM workbench_prospect_conversations c JOIN workbench_prospect_campaigns p ON p.id=c.campaign_id AND p.owner_id=c.owner_id AND p.member_id=c.member_id
@@ -300,7 +347,7 @@ export function createProspectingChatStore(db:D1Database,now:()=>number=Date.now
   for(const candidate of candidates){
    const stop=(JSON.parse(candidate.pending_json) as string[]).some(value=>isChatOptOut(value,candidate.last_outbound??'')),data=object(JSON.parse(candidate.campaign_json)),policy=normalizeChatPolicy(data.chatPolicy);
    if(!stop&&stopOnly)continue;
-   if(!stop&&(!candidate.last_snapshot_id||isTechnicalReadPause(candidate.handoff_reason)))continue;
+   if(!stop&&(candidate.mode!=='agent'||!candidate.last_snapshot_id||isTechnicalReadPause(candidate.handoff_reason)))continue;
    if(!stop&&(candidate.campaign_status!=='active'||data.chatEnabled!==true||candidate.has_reply||!withinChatHours(now(),policy)||candidate.day_count>=policy.replyDailyLimit||candidate.conversation_count>=policy.conversationReplyLimit))continue;
    c=await db.prepare("UPDATE workbench_prospect_conversations SET processing_token=?,processing_until=? WHERE id=? AND version=? AND status='active' AND (processing_token IS NULL OR processing_until<=?) RETURNING *").bind(token,new Date(now()+60000).toISOString(),candidate.id,candidate.version,time).first<ConversationRow>();
    if(c){c.contact_captured=candidate.contact_captured;stopRequested=stop;break;}
@@ -315,11 +362,12 @@ export function createProspectingChatStore(db:D1Database,now:()=>number=Date.now
   try{decision=stopRequested?{action:'wait',close:true,reason:'客户明确要求停止联系'}:decide?await decide(ownerId,origin,{policy:normalizeChatPolicy(campaignData.chatPolicy),campaign:{name:String(campaignData.name||''),requirements:String(campaignData.requirements||''),minIntentScore:Number(campaignData.minIntentScore||70)},conversation:{nickname:c.nickname,memory:{...normalizeChatMemory(c.memory_json),contactCaptured:normalizeChatMemory(c.memory_json).contactCaptured||!!c.contact_captured},mode:!unresolved&&campaignData.chatEnabled===true&&task.status==='active'?c.mode:'human'},messages:history,inbound:{id:inbound.id,text:inbound.text},pending:pending.map(m=>({id:m.id,text:m.text}))}):{action:'handoff',reason:'尚未配置可用的会话模型，已转交销售'};if(!decision||!['reply','handoff','wait'].includes(decision.action))throw new Error('invalid decision');if(decision.action==='reply')sendText(decision.reply);}
   catch{decision={action:'handoff',reason:'会话判断暂时不可用，原消息已保留并转交销售'};}
   const guard='SELECT 1 FROM workbench_prospect_conversations WHERE id=? AND version=? AND processing_token=?',values=[c.id,c.version,token],statements:D1PreparedStatement[]=[];
-  const captured=await captureStatement(c,pending,decision,guard,values);if(captured)statements.push(captured);
-  let replyJobId:string|undefined;
-  if(!decision.close&&!unresolved&&decision.action==='reply'&&c.mode==='agent'&&task.status==='active'&&campaignData.chatEnabled===true&&c.last_snapshot_id){try{const d=await ready(c);const queued=replyStatements(c,d,decision.reply!,'agent',guard,values,{evidenceIds:decision.evidenceIds?.filter(id=>typeof id==='string').slice(0,20),decisionReason:text(decision.reason,500)},Number(campaignData.chatPolicyVersion)||0);replyJobId=queued.jobId;statements.push(...queued.statements);}catch(error){decision={...decision,action:'handoff',reason:error instanceof DomainError?error.message:'回复未能可靠排队，请核对助手连接与原会话后人工跟进。'};}}
-  if(c.mode==='agent'||decision.close)statements.push(db.prepare(`UPDATE workbench_prospect_messages SET processed=1 WHERE conversation_id=? AND direction='inbound' AND eligible=1 AND processed=0 AND rowid<=? AND EXISTS (${guard})`).bind(c.id,inbound.row_order,...values));
-  const memory=normalizeChatMemory(decision.memory??JSON.parse(c.memory_json||'{}'));
+  let replyJobId:string|undefined,syncPause:string|undefined;
+  if(!decision.close&&!unresolved&&decision.action==='reply'&&c.mode==='agent'&&task.status==='active'&&campaignData.chatEnabled===true&&c.last_snapshot_id){try{const d=await ready(c);const queued=replyStatements(c,d,decision.reply!,'agent',guard,values,{evidenceIds:decision.evidenceIds?.filter(id=>typeof id==='string').slice(0,20),decisionReason:text(decision.reason,500)},Number(campaignData.chatPolicyVersion)||0);replyJobId=queued.jobId;statements.push(...queued.statements);}catch(error){if(error instanceof DomainError&&error.status===503&&temporaryReadyReasons.includes(error.message)){syncPause=`会话同步暂时失败：${error.message}；请稍后重新同步，核实消息后再继续。`;decision={...decision,action:'wait',reason:syncPause};}else decision={...decision,action:'handoff',reason:error instanceof DomainError?error.message:'回复未能可靠排队，请核对助手连接与原会话后人工跟进。'};}}
+  if(syncPause)statements.push(db.prepare(`UPDATE workbench_prospect_conversations SET last_snapshot_id=NULL,handoff_reason=? WHERE id=? AND EXISTS (${guard})`).bind(syncPause,c.id,...values));
+  const captured=syncPause?null:await captureStatement(c,pending,decision,guard,values);if(captured)statements.push(captured);
+  if(!syncPause&&(c.mode==='agent'||decision.close))statements.push(db.prepare(`UPDATE workbench_prospect_messages SET processed=1 WHERE conversation_id=? AND direction='inbound' AND eligible=1 AND processed=0 AND rowid<=? AND EXISTS (${guard})`).bind(c.id,inbound.row_order,...values));
+  const memory=normalizeChatMemory(syncPause?JSON.parse(c.memory_json||'{}'):decision.memory??JSON.parse(c.memory_json||'{}'));
   if(decision.close)statements.push(...closeStatements(c,text(safeProspectError(decision.reason),500)||'客户要求停止联系',memory,guard,values));
   const handoff=decision.action==='handoff'||unresolved;if(handoff&&!decision.close)memory.stage='handoff';if(captured||c.contact_captured)memory.contactCaptured=true;if(unresolved)decision.reason='上一条回复结果待确认，已保留人工接管';
   statements.push(db.prepare(`UPDATE workbench_prospect_conversations SET memory_json=?,status=CASE WHEN ?=1 THEN 'closed' ELSE status END,close_reason=CASE WHEN ?=1 THEN ? ELSE close_reason END,mode=CASE WHEN ?=1 THEN 'human' ELSE mode END,handoff_reason=CASE WHEN ?=1 THEN ? ELSE handoff_reason END,version=version+1,processing_token=NULL,processing_until=NULL,updated_at=? WHERE id=? AND version=? AND processing_token=?`).bind(JSON.stringify(memory),decision.close?1:0,decision.close?1:0,text(safeProspectError(decision.reason),500)||'客户要求停止联系',handoff?1:0,handoff?1:0,text(safeProspectError(decision.reason),500)||'已转交销售',stamp(),...values));

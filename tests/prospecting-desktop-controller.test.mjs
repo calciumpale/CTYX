@@ -351,7 +351,7 @@ test('temporary account verification keeps the same browser open beyond four unr
   assert.equal(polls, 8); assert.equal(retryStates.length, 8);
   for (const state of retryStates) {
     assert.equal(state.running, true); assert.equal(state.browserOpen, true); assert.equal(state.authenticated, false);
-    assert.match(state.message, /核实|核验/); assert.match(state.message, /重试/);
+    assert.match(state.message, /核实|核验/); assert.match(state.message, /等待账号恢复/);
   }
   assert.equal(calls.opens, 1); assert.equal(calls.browserCloses, 0); assert.equal(calls.journalCloses, 0);
   assert.equal(data.accountId, account.accountId); assert.deepEqual(calls.bindings, []);
@@ -440,16 +440,16 @@ test('a stalled passive proof recovers automatically in the existing session aft
   sleep:async(ms,{signal})=>{now+=ms;if((recoveries||polls>=20)&&!signal.aborted)await new Promise(done=>signal.addEventListener('abort',done,{once:true}));},
  });data.accountId=account.accountId;t.after(()=>controller.stop());
  await controller.start();await until(()=>recoveries===1);
- assert.equal(polls,4);assert.equal(controller.status().authenticated,true);assert.equal(controller.status().phase,'running');assert.equal(calls.opens,1);assert.equal(calls.browserCloses,0);assert.equal(calls.navigations,0);
+ assert.equal(polls,13);assert.equal(controller.status().authenticated,true);assert.equal(controller.status().phase,'running');assert.equal(calls.opens,1);assert.equal(calls.browserCloses,0);assert.equal(calls.navigations,0);
 });
 
 test('exhausted recovery stays connected for a manual recheck without an automatic reload loop',async t=>{
  let now=0,polls=0,recoveries=0,restored=false;const resume=deferred();
  const {controller,calls,data}=fakeController({now:()=>now,
   runOnce:async(_config,options)=>{polls++;if(options.recoverAccount)recoveries++;return restored?{authenticated:true}:{authenticated:false,verificationPending:true};},
-  sleep:async(ms,{signal})=>{now+=ms;if(polls===20)await resume.promise;if(polls>20&&!signal.aborted)await new Promise(done=>signal.addEventListener('abort',done,{once:true}));},
+  sleep:async(ms,{signal})=>{now+=ms;if(polls===75)await resume.promise;if(polls>75&&!signal.aborted)await new Promise(done=>signal.addEventListener('abort',done,{once:true}));},
  });data.accountId=account.accountId;t.after(()=>{resume.resolve();return controller.stop();});
- await controller.start();await until(()=>polls===20);
+ await controller.start();await until(()=>polls===75);
  assert.equal(recoveries,2);assert.equal(controller.status().phase,'verification_required');assert.equal(controller.status().running,true);assert.equal(controller.status().browserOpen,true);
  restored=true;await controller.connect();resume.resolve();await until(()=>controller.status().authenticated);
  assert.equal(recoveries,3);assert.equal(calls.opens,1);assert.equal(calls.browserCloses,0);

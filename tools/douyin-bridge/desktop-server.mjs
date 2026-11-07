@@ -6,6 +6,7 @@ import {homedir} from 'node:os';
 import {dirname,join,resolve} from 'node:path';
 import {fileURLToPath,pathToFileURL} from 'node:url';
 import {BridgeError,loadConfig,saveConfig,validateConfig,safeError} from './bridge-core.mjs';
+import {createConnectionDiagnostics} from './connection-diagnostics.mjs';
 
 const here=dirname(fileURLToPath(import.meta.url));
 export const DEFAULT_SITE_ORIGIN='https://ctai-marketing-workbench-20261023.bright-newt-8569.chatgpt.site';
@@ -32,7 +33,7 @@ export async function readDesktopConfig(configPath,siteOrigin,serviceAccess){
  if(serviceAccess?.origin===config.origin&&serviceAccess.sitesToken)config.sitesToken=serviceAccess.sitesToken;
  return validateConfig(config);
 }
-export async function startDesktopServer({controller,configPath,siteOrigin=DEFAULT_SITE_ORIGIN,serviceAccess,downloadsPath=join(homedir(),'Downloads'),port=0}={}){
+export async function startDesktopServer({controller,configPath,siteOrigin=DEFAULT_SITE_ORIGIN,serviceAccess,downloadsPath=join(homedir(),'Downloads'),port=0,diagnostics}={}){
  const trustedOrigin=new URL(siteOrigin).origin;
  if(new URL(trustedOrigin).protocol!=='https:')throw new Error('The installed workbench requires an HTTPS origin');
  const launchToken=token(),sessionToken=token(),csrf=token();let origin;
@@ -79,6 +80,10 @@ export async function startDesktopServer({controller,configPath,siteOrigin=DEFAU
    if(!path.startsWith('/api/'))return json(response,{error:'页面不存在。'},404);
    if(!same(cookieValue(request.headers.cookie,'desktop_session'),sessionToken))return json(response,{error:'请从桌面应用打开控制面板。'},401);
    if(request.method==='GET'&&path==='/api/state')return json(response,await state());
+   if(request.method==='GET'&&path==='/api/diagnostics'){
+    let events=[];try{events=await diagnostics?.read()||[];}catch{/* An unavailable local log does not affect the panel. */}
+    return json(response,{events});
+   }
    if(request.method!=='POST')return json(response,{error:'操作方式不正确。'},405);
    if(request.headers.origin!==origin)return json(response,{error:'不接受跨站请求。'},403);
    if(!same(request.headers['x-desktop-csrf'],csrf))return json(response,{error:'操作凭证失效，请重新打开助手。'},403);
@@ -104,11 +109,12 @@ async function main(){
  const siteOrigin=process.env.DESKTOP_SITE_ORIGIN||DEFAULT_SITE_ORIGIN;
  let serviceAccess;try{serviceAccess=await privateJson(join(directory,'douyin-service-access.json'));}catch{/* Missing credentials are shown as a setup state, never logged. */}
  const {createDesktopController}=await import('./desktop-controller.mjs');
- const controller=createDesktopController({configPath,dependencies:{loadConfig:path=>readDesktopConfig(path,siteOrigin,serviceAccess)}});
- const app=await startDesktopServer({controller,configPath,siteOrigin,serviceAccess});
+ const diagnostics=createConnectionDiagnostics(join(directory,'diagnostics','connection-events.json'));
+ const controller=createDesktopController({configPath,dependencies:{loadConfig:path=>readDesktopConfig(path,siteOrigin,serviceAccess),onDiagnostic:event=>diagnostics.record(event)}});
+ const app=await startDesktopServer({controller,configPath,siteOrigin,serviceAccess,diagnostics});
  // Native launcher consumes this line privately. Never copy it to the user log.
  process.stdout.write(`${JSON.stringify({event:'ready',url:app.url})}\n`);
- let shuttingDown=false;const stop=()=>{if(shuttingDown)return;shuttingDown=true;const timer=setTimeout(()=>process.exit(0),5000);timer.unref();app.close().finally(()=>process.exit(0));};
+ let shuttingDown=false;const stop=()=>{if(shuttingDown)return;shuttingDown=true;const timer=setTimeout(()=>process.exit(0),5000);timer.unref();app.close().finally(async()=>{await diagnostics.flush();process.exit(0);});};
  process.once('SIGTERM',stop);process.once('SIGINT',stop);
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href)main().catch(()=>{process.stderr.write('助手无法启动，请重新打开应用。\n');process.exitCode=1;});

@@ -11,12 +11,16 @@ test('only business members can access prospecting and only exact POST bridge ro
  assert.throws(()=>assertMemberApi('admin','/api/prospecting','GET'));assert.throws(()=>assertMemberApi('sales','/api/prospecting','DELETE'));
  assert.equal(memberRouteAccess(new Request('https://site.test/api/prospecting-bridge/poll',{method:'POST'})),'service');
  assert.equal(memberRouteAccess(new Request('https://site.test/api/prospecting-bridge/poll')),'member');
+ assert.equal(memberRouteAccess(new Request('https://site.test/api/prospecting-bridge/status',{method:'POST'})),'service');
+ assert.equal(memberRouteAccess(new Request('https://site.test/api/prospecting-bridge/status')),'member');
  assert.equal(memberRouteAccess(new Request('https://site.test/api/prospecting-bridge/arbitrary',{method:'POST'})),'member');
 });
 test('API rejects missing trusted identity, admin and browser-origin bridge requests before reading data',async()=>{
  const service=createProspectingService({db:{} as D1Database,readModel:async()=>null});
  assert.equal((await service.handle(new Request('https://site.test/api/prospecting'))).status,401);
  const bridge=await service.bridge(new Request('https://site.test/api/prospecting-bridge/poll',{method:'POST',headers:{origin:'https://other.test','Content-Type':'application/json'},body:'{}'}),'poll');assert.equal(bridge.status,403);
+ assert.equal((await service.deviceStatus(new Request('https://site.test/api/prospecting-bridge/status'))).status,405);
+ for(const headers of [new Headers({origin:'https://site.test'}),new Headers({'sec-fetch-site':'cross-site'})])assert.equal((await service.deviceStatus(new Request('https://site.test/api/prospecting-bridge/status',{method:'POST',headers,body:'{}'}))).status,403);
 });
 test('model output is evidence-only and failures preserve reviewable rule drafts',async()=>{
  const campaign=normalizeCampaignInput({requirements:'销售培训软件面向中小企业',keywords:['销售培训']});

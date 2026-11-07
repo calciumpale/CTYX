@@ -12,7 +12,11 @@
 2. 在助手中点击“读取下载的配对配置”；也可通过“选择配置文件”导入下载的 JSON。
 3. 点击“连接抖音”。浏览器提示登录时，在浏览器中完成扫码。首次绑定按提示确认当前账号。
 
-日常使用点击“连接抖音”即可。助手复用本次已打开的专用窗口和本机保存的登录状态，核实原绑定账号后开始同步；空闲轮询不打开标签、不刷新或切换页面。临时核验失败会等待原页面恢复，不会因此关闭窗口。关闭窗口会停止本实例。配对和登录状态保存在本机。私站访问凭证由安装者单独保存于 `~/.config/marketing-workbench/douyin-service-access.json`，权限为 `0600`，不包含在应用包中。
+日常使用点击“连接抖音”即可。助手复用本次已打开的专用窗口和本机保存的登录状态，核实原绑定账号后开始同步。工作台连接正常只表示助手能与工作台保持联系，当前抖音账号核验通过后才会执行任务。
+
+短暂核验失败会保留浏览器和本地执行记录，自动恢复最多 2 轮，自动轮次之间至少间隔 60 秒；用尽后显示“需要重新核验账号”。点击“重新核验账号”会复用原身份核验标签，不进入聊天页，不要求先停止助手。后台联系、空闲检查和被动核验不打开标签、不刷新或切换页面。登录失效、安全验证和账号变化需要本人在原抖音窗口完成登录、验证或切回已配对账号，再点击连接或重新核验；助手不会自动处理这些确认。
+
+“连接诊断”默认收起，只显示最近与工作台联系、最近账号核验时间。仅含固定状态字段的详细诊断保存在本机 `~/.config/marketing-workbench/diagnostics/connection-events.json`，不会自动上传。关闭窗口会停止本实例。配对和登录状态保存在本机。私站访问凭证由安装者单独保存于 `~/.config/marketing-workbench/douyin-service-access.json`，权限为 `0600`，不包含在应用包中。
 
 已安装的 `.app` 不会随工作台网页发布自动更新。更新桌面助手前先退出旧版，再由维护者使用最新源码运行 `node scripts/install-douyin-mac.mjs` 重新安装；配置、专用 profile 和发送记录位于应用包外，会保留。网页下载的 ZIP 是命令行版，不能替换已安装 `.app` 的内部脚本；旧 `.command` 启动方式也不会自动更新它所引用的旧脚本。
 
@@ -50,7 +54,7 @@ node tools/douyin-bridge/bridge.mjs run
 
 `setup --input -` 从标准输入读取 JSON；`--config /绝对路径/config.json` 可以指定保存位置。配置强制 0600、检查当前所有者并拒绝符号链接。默认位于 `~/.config/marketing-workbench/douyin-bridge.json`。配对下载文件也包含凭证，请妥善存储，完成配置后可自行删除下载副本。
 
-`doctor` 只检查本机配对和待补交记录，不启动浏览器、不连接抖音、不核实实时登录，输出 `loginChecked: false`。实时账号状态在显式点击“连接抖音”或执行 `login` / `run` 时核实。
+`doctor` 只检查本机配对和待补交记录，不启动浏览器、不连接抖音、不核实实时登录，输出 `loginChecked: false`。实时账号状态在显式连接和运行期间核实；被动检查不触发页面导航。
 
 `login` 会打开可见专用浏览器，让你亲自扫码，确认账号后按 Enter。它不会绕过验证码。登录后如果页面没有可确认的个人主页链接，请打开右上角个人主页菜单。只有能从可见主页链接确认账号才报告已登录；遇到页面改版宁可暂停，也不会猜测当前账号。
 
@@ -76,8 +80,11 @@ node tools/douyin-bridge/bridge.mjs run
 | 接口 | 请求 | 行为 |
 |---|---|---|
 | `POST /api/prospecting-bridge/poll` | `deviceId, authenticated, accountId, accountName, message?, conversationVersion?` | 返回 `job` 或 `null`。支持会话同步与后续回复的助手上报 `conversationVersion: 1` |
+| `POST /api/prospecting-bridge/status` | `deviceId` | 后台更新设备最近联系时间；不改变账号核验状态、不领取或续期任务 |
 | `POST /api/prospecting-bridge/heartbeat` | `deviceId, jobId, leaseToken` | 每 30 秒续期；点击发送前再次确认 `ok: true` |
 | `POST /api/prospecting-bridge/complete` | `deviceId, jobId, leaseToken, result` 或 `error` | 失败时保留本地结果待补交 |
+
+后台联系使用新增的 `status` 接口，需要同步更新工作台网页端。原有轮询、任务续期和结果上报接口继续保留，旧版助手仍可连接；工作台最近联系时间和抖音账号核验状态分别显示，不能互相替代。
 
 结果字段与 `app/lib/prospecting-types.ts` 一致。收到重复任务不会重新执行，最多重新提交已保存结果。400/404/405/409/410/413/415/422 等明确永久拒绝记录 `reportRejected` 与 HTTP 状态、时间和本地结果证据，停止重复上报并放行后续任务；不会重新执行该任务。断网、429 限流、服务端暂时错误仍只重试结果上报。401/403 需检查设备或私站凭证，不能靠重新发消息解决。
 

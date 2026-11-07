@@ -74,6 +74,13 @@ export class DouyinBrowserAdapter {
       return accounts.size === 1 ? [...accounts.values()][0] : { authenticated: false, hasSelfLink, ...(accounts.size > 1 ? { ambiguous: true } : {}), message: '未能从页面核实当前账号，请完成登录并打开顶部个人主页菜单。' };
     });
   }
+  async loginRequired(page) {
+    return page.evaluate(() => {
+      const visible = node => node instanceof HTMLElement && !!(node.offsetWidth || node.offsetHeight || node.getClientRects().length) && getComputedStyle(node).visibility !== 'hidden';
+      const controls = document.querySelectorAll('header button, header [role="button"], header a, [data-e2e="douyin-header"] button, [data-e2e="douyin-header"] [role="button"], [data-e2e="login-button"], [role="dialog"] button');
+      return [...controls].some(node => visible(node) && /^(?:登录|登录[\/／]?注册|立即登录|扫码登录)$/.test(node.innerText.trim().replace(/\s+/g, '')));
+    });
+  }
   async ownProfileProof(page, signal, expectedId) {
     const url = new URL(page.url());
     const profile = /^\/user\/([a-zA-Z0-9_.-]{4,140})\/?$/.exec(url.pathname);
@@ -236,6 +243,47 @@ export class DouyinBrowserAdapter {
     this.passiveAccount = undefined;
     return status;
   }
+  async recoverAccountStatus({ signal, allowReadOnly = true, expectedAccountId } = {}) {
+    checkAbort(signal);
+    const pending = reason => ({ authenticated: false, verificationPending: true, needsAccountVerification: true, verificationReason: reason, message: '暂未核实当前账号，请等待页面恢复；本轮不领取任务。' });
+    const page = this.activePage, identity = this.identityPage;
+    // A bounded recovery may refresh only the identity tab that this session
+    // already owns. Never reopen a tab the user closed or replace a chat/draft.
+    if (!page || page.isClosed() || !/^https:\/\/(?:www\.)?douyin\.com\//.test(page.url())) return { authenticated: false, message: '抖音任务页面已关闭或离开，请点击“连接抖音”恢复。' };
+    if (!identity || identity.isClosed() || !/^https:\/\/(?:www\.)?douyin\.com\//.test(identity.url())) return { authenticated: false, message: '身份核验页面已关闭或离开，请点击“连接抖音”恢复。' };
+    const expected = canonicalAccount(expectedAccountId) ? expectedAccountId : this.senderProof?.accountId;
+    if (!expected) return this.accountStatus({ signal, allowReadOnly, expectedAccountId, passive: true });
+    try {
+      await this.guard(page, signal); await this.guard(identity, signal);
+      if (await this.loginRequired(page) || await this.loginRequired(identity)) return { authenticated: false, message: '抖音页面要求重新登录，请完成登录后点击“连接抖音”。' };
+      const header = await this.currentAccount(page);
+      if (header.ambiguous) return pending('account_ambiguous');
+      if (header.authenticated && header.accountId !== expected) fail('当前登录账号与已配对账号不一致。', 'ACCOUNT_CHANGED');
+      try { await identity.goto(`${HOME}user/${expected}`, { waitUntil: 'domcontentloaded', timeout: 30000 }); }
+      catch {
+        checkAbort(signal);
+        return identity.isClosed() ? { authenticated: false, message: '身份核验页面已关闭，请点击“连接抖音”恢复。' } : pending('navigation_failed');
+      }
+      if (!/^https:\/\/(?:www\.)?douyin\.com\//.test(identity.url())) return { authenticated: false, message: '身份核验页面已离开抖音，请点击“连接抖音”恢复。' };
+      await this.guard(identity, signal);
+      if (await this.loginRequired(identity)) return { authenticated: false, message: '抖音页面要求重新登录，请完成登录后点击“连接抖音”。' };
+      const proof = await this.ownProfileProof(identity, signal, expected);
+      if (!proof) return pending('owner_proof_missing');
+      if (this.senderProof?.accountId === expected && proof.handle !== this.senderProof.handle) fail('当前登录账号的本人身份已变化，请重新确认。', 'ACCOUNT_CHANGED');
+      await this.guard(page, signal);
+      const latestHeader = await this.currentAccount(page);
+      if (latestHeader.ambiguous) return pending('account_ambiguous');
+      if (latestHeader.authenticated && latestHeader.accountId !== expected) fail('当前登录账号与已配对账号不一致。', 'ACCOUNT_CHANGED');
+      this.senderProof = { accountId: expected, handle: proof.handle, accountName: proof.name || this.senderProof?.accountName || '已登录抖音账号' };
+      const account = { authenticated: true, accountId: expected, accountName: this.senderProof.accountName, verifiedReadOnlyAccountId: `dy-readonly-${digest(proof.handle).slice(0, 24)}` };
+      this.passiveAccount = { account, handle: proof.handle, checkedAt: Date.now(), context: this.context, page, identityPage: identity };
+      return account;
+    } catch (error) {
+      checkAbort(signal);
+      if (error?.code === 'HUMAN_ACTION_REQUIRED' || error?.code === 'ACCOUNT_CHANGED') throw error;
+      return pending('account_read_interrupted');
+    }
+  }
   async passiveAccountStatus({ signal, allowReadOnly, expectedAccountId }) {
     checkAbort(signal);
     const pending = { authenticated: false, verificationPending: true, message: '暂未核实当前账号，正在等待页面恢复；本轮不领取任务。' };
@@ -243,17 +291,22 @@ export class DouyinBrowserAdapter {
     // Health checks must not resurrect a tab or navigate away from a draft.
     if (!page || page.isClosed() || !/^https:\/\/(?:www\.)?douyin\.com\//.test(page.url())) return { authenticated: false, message: '抖音任务页面已关闭或离开，请点击“连接抖音”恢复。' };
     await this.guard(page, signal);
+    if (await this.loginRequired(page)) return { authenticated: false, message: '抖音页面要求重新登录，请完成登录后点击“连接抖音”。' };
     const status = await this.currentAccount(page);
     const expected = canonicalAccount(expectedAccountId) ? expectedAccountId : this.senderProof?.accountId;
     if (status.ambiguous || status.authenticated && expected && status.accountId !== expected) {
       this.passiveAccount = undefined;
       return status.ambiguous ? { ...status, verificationPending: true } : status;
     }
-    if (!status.authenticated && !status.hasSelfLink) return pending;
+    // A task/chat header may be absent while the independent owner tab remains
+    // healthy. Missing navigation chrome alone is not evidence of logout.
+    if (!status.authenticated && !status.hasSelfLink && !this.passiveAccount && !this.senderProof) return { ...pending, needsAccountVerification: true, verificationReason: 'task_header_missing' };
     let cached = this.passiveAccount;
     if (!cached && status.authenticated && !this.senderProof) return status;
     const identity = this.identityPage;
     if (!identity || identity.isClosed()) return { authenticated: false, message: '身份核验页面已关闭，请点击“连接抖音”恢复。' };
+    await this.guard(identity, signal);
+    if (await this.loginRequired(identity)) return { authenticated: false, message: '抖音页面要求重新登录，请完成登录后点击“连接抖音”。' };
     if (cached && (cached.context !== this.context || cached.page !== page || cached.identityPage !== identity)) cached = undefined;
     const account = cached?.account;
     const matched = account && (account.accountId === expectedAccountId || account.accountId === expected || !expectedAccountId && !expected);
@@ -265,14 +318,14 @@ export class DouyinBrowserAdapter {
     const candidate = matched ? account : this.senderProof && (!expected || this.senderProof.accountId === expected)
       ? { authenticated: true, accountId: this.senderProof.accountId, accountName: this.senderProof.accountName, verifiedReadOnlyAccountId: `dy-readonly-${digest(this.senderProof.handle).slice(0, 24)}` } : undefined;
     if (!candidate) {
-      // During an explicit connect, newly rendered owner controls can request
-      // one final strict check. The idle runner never follows this with a goto.
+      // Newly rendered owner controls can request a bounded recovery. This DOM
+      // read stays passive; the controller owns whether another check may load.
       const newlySignedIn = !cached && !this.senderProof && await this.ownProfileProof(identity, signal);
-      return newlySignedIn ? { ...pending, needsAccountVerification: true } : pending;
+      return newlySignedIn ? { ...pending, needsAccountVerification: true, verificationReason: 'owner_proof_missing' } : pending;
     }
     if (!allowReadOnly && READ_ONLY_ACCOUNT.test(candidate.accountId)) return pending;
     const proof = await this.ownProfileProof(identity, signal, READ_ONLY_ACCOUNT.test(candidate.accountId) ? 'self' : candidate.accountId);
-    if (!proof || proof.handle !== (matched ? cached.handle : this.senderProof?.handle)) return pending;
+    if (!proof || proof.handle !== (matched ? cached.handle : this.senderProof?.handle)) return { ...pending, needsAccountVerification: true, verificationReason: /^\/user\/self\/?$/.test(new URL(identity.url()).pathname) ? 'identity_route_changed' : 'owner_proof_missing' };
     this.passiveAccount = { account: candidate, handle: proof.handle, checkedAt: Date.now(), context: this.context, page, identityPage: identity };
     return { ...candidate };
   }

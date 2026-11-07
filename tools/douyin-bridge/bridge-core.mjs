@@ -322,7 +322,16 @@ export async function apiRequest(config, action, body, { fetchImpl = fetch, sign
   try { return await response.json(); } catch { fail('工作台响应格式无法识别。', 'API_FORMAT'); }
 }
 
-export async function runOnce(rawConfig, { adapter, journal, fetchImpl = fetch, signal, heartbeatMs = 30000, jobTimeoutMs = 600000, logger = () => {} } = {}) {
+export async function deviceStatusHeartbeat(rawConfig, { fetchImpl = fetch, signal } = {}) {
+  const config = validateConfig(rawConfig);
+  const result = await apiRequest(config, 'status', { deviceId: config.deviceId }, { fetchImpl, signal });
+  if (result?.ok !== true) fail('工作台未确认助手在线状态。', 'API_FORMAT');
+  return { ok: true };
+}
+
+const VERIFICATION_REASONS = new Set(['owner_proof_missing', 'identity_route_changed', 'task_header_missing', 'account_ambiguous', 'account_read_interrupted', 'navigation_failed']);
+
+export async function runOnce(rawConfig, { adapter, journal, fetchImpl = fetch, signal, heartbeatMs = 30000, jobTimeoutMs = 600000, recoverAccount = false, logger = () => {} } = {}) {
   const config = validateConfig(rawConfig);
   await journal.bindConfig(config);
   const request = (action, body, requestSignal = signal) => apiRequest(config, action, body, { fetchImpl, signal: requestSignal });
@@ -340,8 +349,13 @@ export async function runOnce(rawConfig, { adapter, journal, fetchImpl = fetch, 
   for (const entry of journal.data.entries.filter(item => !item.reported && !item.reportRejected && (item.result || item.error))) if (!await report(entry)) return { worked: false, pendingReport: true };
   checkAbort(signal);
   let account;
-  try { account = await adapter.accountStatus({ signal, expectedAccountId: journal.data.accountId, passive: true }); } catch (error) {
+  try {
+    account = recoverAccount && typeof adapter.recoverAccountStatus === 'function'
+      ? await adapter.recoverAccountStatus({ signal, expectedAccountId: journal.data.accountId, allowReadOnly: true })
+      : await adapter.accountStatus({ signal, expectedAccountId: journal.data.accountId, passive: true });
+  } catch (error) {
     if (error?.code === 'HUMAN_ACTION_REQUIRED') return { worked: false, humanActionRequired: true };
+    if (error?.code === 'ACCOUNT_CHANGED') throw error;
     account = { authenticated: false, message: safeError(error) };
   }
   // A temporary readonly fallback is not evidence that the signed-in user
@@ -361,7 +375,11 @@ export async function runOnce(rawConfig, { adapter, journal, fetchImpl = fetch, 
   if (verifiedReadOnlyAccountId && polled.verifiedAccountId !== account.accountId) fail('工作台未确认同账号身份升级，请保持原配对并重新确认账号。', 'ACCOUNT_CHANGED');
   if (upgrading) await journal.bindAccount(account.accountId);
   if (!polled.job) return { worked: false, authenticated: account.authenticated,
-    ...(!changed && account.authenticated === false && account.verificationPending === true ? { verificationPending: true } : {}) };
+    ...(!changed && account.authenticated === false && account.verificationPending === true ? {
+      verificationPending: true,
+      ...(account.needsAccountVerification === true ? { needsAccountVerification: true } : {}),
+      ...(VERIFICATION_REASONS.has(account.verificationReason) ? { verificationReason: account.verificationReason } : {}),
+    } : {}) };
   const job = validateJob(polled.job); const prior = journal.get(job.id); const entry = await journal.start(job);
   if (prior) {
     if (!entry.result && !entry.error) await journal.finish(job.id, outbound(job.kind) ? { result: { outcome: 'unknown', error: '已有执行记录，不能重复执行。' } } : { error: '任务已有执行记录。' });

@@ -43,8 +43,41 @@ function fixture(){
  function poll(device:{deviceId:string;deviceToken:string},signal?:AbortSignal,conversationVersion?:number){
   return service.bridge(new Request('https://prospecting-poll.test/api/prospecting-bridge/poll',{method:'POST',headers:{Authorization:`Bearer ${device.deviceToken}`,'Content-Type':'application/json'},body:JSON.stringify({...sender,deviceId:device.deviceId,...(conversationVersion?{conversationVersion}:{})}),signal}),'poll');
  }
- return{sqlite,store,hooks,connect,campaign,poll};
+ function status(device:{deviceId:string;deviceToken:string},extra:Record<string,unknown>={}){
+  return service.deviceStatus(new Request('https://prospecting-poll.test/api/prospecting-bridge/status',{method:'POST',headers:{Authorization:`Bearer ${device.deviceToken}`,'Content-Type':'application/json'},body:JSON.stringify({deviceId:device.deviceId,...extra})}));
+ }
+ return{sqlite,store,hooks,connect,campaign,poll,status};
 }
+
+test('liveness cannot claim queued sends, renew leases, analyze leads or upgrade browser identity',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const device=await f.connect();const running=await f.campaign('running');
+ await f.store.review('owner-a','member-a',running.campaign.id,running.lead.id,running.lead.version,'approve',running.lead.greeting,'销售');
+ const claimed=(await f.store.claim(device.deviceId))!;const queued=await f.campaign('queued');
+ await f.store.review('owner-a','member-a',queued.campaign.id,queued.lead.id,queued.lead.version,'approve',queued.lead.greeting,'销售');await f.campaign('analysis');
+ await f.store.seen(device.deviceId,{authenticated:false,message:'尚未核实'});
+ f.sqlite.prepare('UPDATE workbench_prospect_devices SET last_seen_at=? WHERE id=?').run('2000-01-01T00:00:00.000Z',device.deviceId);
+ const deviceBefore=f.sqlite.prepare('SELECT * FROM workbench_prospect_devices WHERE id=?').get(device.deviceId)!;
+ const jobsBefore=f.sqlite.prepare('SELECT * FROM workbench_prospect_jobs ORDER BY id').all();const leadsBefore=f.sqlite.prepare('SELECT * FROM workbench_prospect_leads ORDER BY id').all();
+ t.mock.method(globalThis,'fetch',async()=>{assert.fail('liveness must never call a model');});
+ const response=await f.status(device,{authenticated:true,accountId:'MS4wOther001',accountName:'伪造身份',message:'伪造状态',jobId:claimed.id,leaseToken:claimed.leaseToken,ownerId:'other-owner',memberId:'other-member'});
+ assert.equal(response.status,200);assert.deepEqual(await response.json(),{ok:true});
+ const after=f.sqlite.prepare('SELECT * FROM workbench_prospect_devices WHERE id=?').get(device.deviceId)!;
+ assert.notEqual(after.last_seen_at,deviceBefore.last_seen_at);assert.deepEqual({...after,last_seen_at:deviceBefore.last_seen_at},{...deviceBefore});
+ assert.deepEqual(f.sqlite.prepare('SELECT * FROM workbench_prospect_jobs ORDER BY id').all(),jobsBefore);
+ assert.deepEqual(f.sqlite.prepare('SELECT * FROM workbench_prospect_leads ORDER BY id').all(),leadsBefore);
+});
+
+test('liveness authenticates exact device tokens and cannot touch another member or owner',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const device=await f.connect();
+ f.sqlite.exec("INSERT INTO workbench_member_accounts VALUES ('member-b','owner-b','sales','销售','sales','sales-2',1,'salt','hash',100000,'now','now')");
+ const other=await f.store.connect('owner-b','member-b','other');
+ assert.equal((await f.status({...other,deviceToken:device.deviceToken})).status,401);
+ assert.equal(f.sqlite.prepare('SELECT last_seen_at FROM workbench_prospect_devices WHERE id=?').get(other.deviceId)!.last_seen_at,null);
+ assert.equal((await f.status(device,{ownerId:'owner-b',memberId:'member-b'})).status,200);
+ assert.equal(f.sqlite.prepare('SELECT last_seen_at FROM workbench_prospect_devices WHERE id=?').get(other.deviceId)!.last_seen_at,null);
+ await f.store.disconnect('owner-a','member-a');assert.equal((await f.status(device)).status,401);
+ f.sqlite.exec("UPDATE workbench_member_accounts SET enabled=0 WHERE account_id='member-b'");assert.equal((await f.status(other)).status,401);
+});
 
 function modelReply(init?:RequestInit){
  const request=JSON.parse(String(init?.body)) as {messages:{role:string;content:string}[]};

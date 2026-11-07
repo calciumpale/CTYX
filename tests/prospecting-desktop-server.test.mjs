@@ -8,16 +8,31 @@ import {startDesktopServer} from '../tools/douyin-bridge/desktop-server.mjs';
 import * as desktop from '../tools/douyin-bridge/desktop-server.mjs';
 
 const siteOrigin='https://workbench.example.test';
-async function fixture(t){
+async function fixture(t,options={}){
  const directory=await mkdtemp(join(tmpdir(),'抖音 助手 HTTP '));
  const calls=[];
  const controller={status:()=>({phase:'idle',running:false,authenticated:false,message:'尚未启动',pendingResults:0}),connect:async()=>{calls.push('connect');return controller.status();},confirmConnection:async()=>{calls.push('confirm-connect');return controller.status();},startLogin:async()=>{calls.push('login');return controller.status();},confirmLogin:async()=>{calls.push('confirm');return controller.status();},start:async()=>{calls.push('start');return controller.status();},stop:async()=>{calls.push('stop');return controller.status();}};
  const configPath=join(directory,'config.json');
- const app=await startDesktopServer({controller,configPath,siteOrigin,serviceAccess:{origin:siteOrigin,sitesToken:'private-gateway-test-token'},downloadsPath:directory});
+ const app=await startDesktopServer({controller,configPath,siteOrigin,serviceAccess:{origin:siteOrigin,sitesToken:'private-gateway-test-token'},downloadsPath:directory,...options});
  t.after(async()=>{await app.close();await rm(directory,{recursive:true,force:true});});
  async function login(){const response=await fetch(`${app.origin}/api/session`,{method:'POST',headers:{Origin:app.origin,'Content-Type':'application/json'},body:JSON.stringify({token:app.launchToken})});assert.equal(response.status,200);return {Cookie:response.headers.get('set-cookie').split(';')[0],'X-Desktop-CSRF':(await response.json()).csrf,Origin:app.origin,'Content-Type':'application/json'};}
  return{app,calls,configPath,login,directory};
 }
+test('local diagnostics require the existing desktop session and never expose launch or config tokens',async t=>{
+ const events=[{event:'state',timestamp:'2026-11-07T01:02:03.000Z',phase:'recovering',authenticated:false}];
+ const f=await fixture(t,{diagnostics:{read:async()=>events}});
+ assert.equal((await fetch(`${f.app.origin}/api/diagnostics`)).status,401);
+ assert.equal((await fetch(`${f.app.origin}/api/diagnostics`,{headers:{Cookie:'desktop_session=wrong'}})).status,401);
+ const headers=await f.login();const response=await fetch(`${f.app.origin}/api/diagnostics`,{headers});assert.equal(response.status,200);
+ assert.deepEqual(await response.json(),{events});assert.equal(response.headers.get('cache-control'),'no-store');
+ assert.equal((await fetch(`${f.app.origin}/api/diagnostics`,{method:'POST',headers,body:'{}'})).status,404);
+});
+test('diagnostics are optional and a failed local read cannot break desktop state',async t=>{
+ const absent=await fixture(t),absentHeaders=await absent.login();assert.deepEqual(await(await fetch(`${absent.app.origin}/api/diagnostics`,{headers:absentHeaders})).json(),{events:[]});
+ const broken=await fixture(t,{diagnostics:{read:async()=>{throw new Error('raw-secret');}}}),headers=await broken.login();
+ const response=await fetch(`${broken.app.origin}/api/diagnostics`,{headers});assert.equal(response.status,200);assert.deepEqual(await response.json(),{events:[]});
+ assert.equal((await fetch(`${broken.app.origin}/api/state`,{headers})).status,200);
+});
 test('desktop changes reject missing session, wrong Origin, wrong Host and form posts',async t=>{
  const f=await fixture(t);
  assert.equal((await fetch(`${f.app.origin}/api/state`)).status,401);

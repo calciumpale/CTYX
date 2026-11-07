@@ -248,3 +248,98 @@ browserTest('a transient DOM read interruption stays unauthenticated and recover
   assert.equal((await adapter.accountStatus({ passive: true, expectedAccountId: 'sender-1' })).accountId, 'sender-1');
   assert.equal(state.requests.length, before);
 });
+
+browserTest('bounded recovery repairs an expired canonical proof on SELF without replacing the chat or draft', async t => {
+  const { adapter, page, state } = await fixture(t);
+  await adapter.accountStatus({ expectedAccountId: 'sender-1' });
+  await adapter.identityNavigate('https://www.douyin.com/user/self');
+  adapter.passiveAccount.checkedAt -= 15001;
+  assert.equal((await adapter.accountStatus({ passive: true, expectedAccountId: 'sender-1' })).verificationPending, true);
+  const before = state.requests.length, pages = adapter.context.pages().length;
+  const recovered = await adapter.recoverAccountStatus({ expectedAccountId: 'sender-1' });
+  assert.equal(recovered.authenticated, true); assert.equal(recovered.accountId, 'sender-1');
+  assert.deepEqual(state.requests.slice(before), ['/user/sender-1']);
+  assert.equal(adapter.context.pages().length, pages);
+  assert.equal(page.url(), 'https://www.douyin.com/user/recipient-1');
+  assert.equal(await page.locator('textarea').inputValue(), '保留的私信草稿');
+  assert.equal((await adapter.accountStatus({ passive: true, expectedAccountId: 'sender-1' })).authenticated, true);
+});
+
+browserTest('a missing task header retains independently proved owner health without scheduling repeated recovery', async t => {
+  const { adapter, page, state } = await fixture(t);
+  await adapter.accountStatus({ expectedAccountId: 'sender-1' });
+  await page.locator('header').evaluate(node => node.remove());
+  const before = state.requests.length;
+  for (let i = 0; i < 3; i++) {
+    adapter.passiveAccount.checkedAt -= 15001;
+    assert.equal((await adapter.accountStatus({ passive: true, expectedAccountId: 'sender-1' })).accountId, 'sender-1');
+  }
+  assert.equal(state.requests.length, before);
+  state.canonical = ownProfile(handle, false); state.self = ownProfile(handle, false);
+  assert.equal((await adapter.verifiedSender(page, 'sender-1')).authenticated, false);
+});
+
+browserTest('bounded recovery repairs the SELF state left by a transient canonical proof failure', async t => {
+  const { adapter, page, state } = await fixture(t);
+  await adapter.accountStatus({ expectedAccountId: 'sender-1' });
+  state.canonical = ownProfile(handle, false);
+  assert.equal((await adapter.accountStatus({ expectedAccountId: 'sender-1' })).verificationPending, true);
+  assert.equal(adapter.identityPage.url(), 'https://www.douyin.com/user/self');
+  assert.equal(adapter.senderProof, undefined);
+  state.canonical = ownProfile();
+  const before = state.requests.length;
+  const recovered = await adapter.recoverAccountStatus({ expectedAccountId: 'sender-1' });
+  assert.equal(recovered.accountId, 'sender-1'); assert.equal(recovered.authenticated, true);
+  assert.deepEqual(state.requests.slice(before), ['/user/sender-1']);
+  assert.equal(await page.locator('textarea').inputValue(), '保留的私信草稿');
+});
+
+browserTest('bounded recovery does not resurrect a closed task or identity tab or navigate an off-origin task', async t => {
+  for (const missing of ['task', 'identity', 'origin']) {
+    const { adapter, page, state } = await fixture(t);
+    await adapter.accountStatus({ expectedAccountId: 'sender-1' });
+    if (missing === 'task') await page.close();
+    else if (missing === 'identity') await adapter.identityPage.close();
+    else await page.goto('about:blank');
+    const before = state.requests.length, pages = adapter.context.pages().length;
+    const recovered = await adapter.recoverAccountStatus({ expectedAccountId: 'sender-1' });
+    assert.equal(recovered.authenticated, false); assert.equal(recovered.verificationPending, undefined);
+    assert.equal(state.requests.length, before); assert.equal(adapter.context.pages().length, pages);
+  }
+});
+
+browserTest('bounded recovery blocks a changed current account and a visible challenge before any navigation', async t => {
+  for (const blocked of ['account', 'captcha']) {
+    const { adapter, page, state } = await fixture(t);
+    await adapter.accountStatus({ expectedAccountId: 'sender-1' });
+    if (blocked === 'account') await page.locator('header').evaluate(node => { node.innerHTML = '<a aria-label="我的主页" href="/user/sender-2">其他账号</a>'; });
+    else await adapter.identityPage.locator('main').evaluate(node => node.insertAdjacentHTML('beforeend', '<div data-e2e="captcha">安全验证</div>'));
+    const before = state.requests.length;
+    await assert.rejects(adapter.recoverAccountStatus({ expectedAccountId: 'sender-1' }), error => error.code === (blocked === 'account' ? 'ACCOUNT_CHANGED' : 'HUMAN_ACTION_REQUIRED'));
+    assert.equal(state.requests.length, before);
+  }
+});
+
+browserTest('bounded recovery cannot authorize a session whose canonical owner proof is still missing', async t => {
+  const { adapter, page, state } = await fixture(t);
+  await adapter.accountStatus({ expectedAccountId: 'sender-1' });
+  state.canonical = ownProfile(handle, false); state.self = ownProfile(handle, false);
+  const before = state.requests.length;
+  const recovered = await adapter.recoverAccountStatus({ expectedAccountId: 'sender-1' });
+  assert.equal(recovered.authenticated, false); assert.equal(recovered.verificationPending, true);
+  assert.equal(recovered.needsAccountVerification, true); assert.equal(recovered.verificationReason, 'owner_proof_missing');
+  assert.deepEqual(state.requests.slice(before), ['/user/sender-1']);
+  assert.equal((await adapter.verifiedSender(page, 'sender-1')).authenticated, false);
+});
+
+browserTest('an explicit visible login control overrides stale owner health without navigating', async t => {
+  const { adapter, page, state } = await fixture(t);
+  await adapter.accountStatus({ expectedAccountId: 'sender-1' });
+  await page.locator('header').evaluate(node => { node.innerHTML = '<button>登录</button>'; });
+  const before = state.requests.length;
+  const passive = await adapter.accountStatus({ passive: true, expectedAccountId: 'sender-1' });
+  assert.equal(passive.authenticated, false); assert.equal(passive.verificationPending, undefined);
+  const recovered = await adapter.recoverAccountStatus({ expectedAccountId: 'sender-1' });
+  assert.equal(recovered.authenticated, false); assert.equal(recovered.verificationPending, undefined);
+  assert.equal(state.requests.length, before);
+});

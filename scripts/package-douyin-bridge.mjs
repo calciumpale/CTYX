@@ -10,7 +10,7 @@ const root=dirname(dirname(fileURLToPath(import.meta.url)));
 const source=join(root,'tools','douyin-bridge');
 const destination=join(root,'public','downloads','douyin-bridge.zip');
 // Explicit source files only: never recurse into credentials, profiles, logs or dependencies.
-const sourceFiles=['bridge.mjs','bridge-core.mjs','browser-adapter.mjs','retry-transcript.mjs','conversation-transcript.mjs','package.json','package-lock.json','README.md'];
+const sourceFiles=['bridge.mjs','bridge-core.mjs','connection-recovery.mjs','browser-adapter.mjs','retry-transcript.mjs','conversation-transcript.mjs','package.json','package-lock.json','README.md'];
 const installation=`# 下载版抖音助手安装说明
 
 本下载包可以独立使用，无需下载营销工作台源码。请先解压 ZIP，再在解压后的 douyin-bridge 文件夹中打开终端。以下命令都在这个文件夹中运行。

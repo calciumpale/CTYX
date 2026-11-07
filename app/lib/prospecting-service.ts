@@ -78,6 +78,16 @@ export function createProspectingService(deps:Dependencies){
    return json({snapshot:await snapshot(ownerId,memberId,origin,campaignId),...(campaignId?{campaignId}:{}),...(deviceCredentials?{deviceCredentials}:{}),message});
   }catch(error){return failure(error);}
  }
+ async function deviceStatus(request:Request):Promise<Response>{
+  try{
+   if(request.method!=='POST')throw new DomainError('只允许POST请求',405);
+   if(request.headers.has('origin')||request.headers.get('sec-fetch-site')==='cross-site')throw new DomainError('设备接口不接受浏览器跨站请求',403);
+   const input=await readMeetingBody(request,16000),deviceId=prospectId(input.deviceId);
+   await store.authenticate(deviceId,request.headers.get('authorization')?.replace(/^Bearer /,'')??'');
+   await store.touchDevice(deviceId);
+   return json({ok:true});
+  }catch(error){return failure(error);}
+ }
  async function bridge(request:Request,action:'poll'|'heartbeat'|'complete'):Promise<Response>{
   try{
    if(request.method!=='POST')throw new DomainError('只允许POST请求',405);
@@ -116,5 +126,5 @@ export function createProspectingService(deps:Dependencies){
    await store.complete(deviceId,jobId,lease,input.result,typeof input.error==='string'?input.error:undefined);return json({ok:true});
   }catch(error){return failure(error);}
  }
- return{handle,bridge};
+ return{handle,bridge,deviceStatus};
 }

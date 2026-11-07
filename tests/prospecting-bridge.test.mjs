@@ -7,6 +7,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { BridgeError, validateConfig, saveConfig, loadConfig, normalizeMediaCrawler, validateJob, runOnce, Journal } from '../tools/douyin-bridge/bridge-core.mjs';
 import { DouyinBrowserAdapter } from '../tools/douyin-bridge/browser-adapter.mjs';
+import * as bridgeCore from '../tools/douyin-bridge/bridge-core.mjs';
 
 const config = { origin: 'https://workbench.example', deviceId: 'device-1', deviceToken: 'private-device-token' };
 const sendJob = (id = 'job-1') => ({ id, campaignId: 'campaign-1', kind: 'send', leaseToken: 'lease-1', input: { senderAccountId: 'sender-1', recipientId: 'recipient-1', profileUrl: 'https://www.douyin.com/user/recipient-1', message: '你好，想了解你的需求。' } });
@@ -239,6 +240,54 @@ test('explicit account change and challenges never become temporary identity-ver
   assert.equal(changed.authenticated, false); assert.equal(changed.verificationPending, undefined);
   const challenge = await runOnce(config, { journal, adapter: { accountStatus: () => { throw new BridgeError('安全验证', 'HUMAN_ACTION_REQUIRED'); } }, fetchImpl: async () => { polls++; return response({ job: null }); } });
   assert.deepEqual(challenge, { worked: false, humanActionRequired: true }); assert.equal(polls, 1);
+});
+
+test('a bounded recovery request uses the dedicated adapter operation and subsequent polls remain passive', async t => {
+  const journal = await journalFor(t); await journal.bindAccount('sender-1');
+  const calls = [], bodies = [];
+  const adapter = {
+    async recoverAccountStatus(options) { calls.push(['recover', options]); return account(); },
+    async accountStatus(options) { calls.push(['passive', options]); return account(); },
+  };
+  const fetchImpl = async (_url, options) => { bodies.push(JSON.parse(options.body)); return response({ job: null }); };
+  assert.equal((await runOnce(config, { journal, adapter, fetchImpl, recoverAccount: true })).authenticated, true);
+  await runOnce(config, { journal, adapter, fetchImpl });
+  assert.deepEqual(calls.map(([kind]) => kind), ['recover', 'passive']);
+  assert.equal(calls[0][1].expectedAccountId, 'sender-1'); assert.equal(calls[0][1].allowReadOnly, true);
+  assert.equal(calls[1][1].passive, true); assert.equal(bodies.every(body => body.authenticated), true);
+  assert.equal(journal.data.entries.length, 0);
+});
+
+test('a recovery request never substitutes active navigation on an adapter without a recovery operation', async t => {
+  const journal = await journalFor(t); await journal.bindAccount('sender-1');
+  const result = await runOnce(config, { journal, recoverAccount: true, adapter: { accountStatus: options => {
+    assert.equal(options.passive, true); return { authenticated: false, verificationPending: true, needsAccountVerification: true, verificationReason: 'owner_proof_missing' };
+  } }, fetchImpl: async () => response({ job: null }) });
+  assert.deepEqual(result, { worked: false, authenticated: false, verificationPending: true, needsAccountVerification: true, verificationReason: 'owner_proof_missing' });
+});
+
+test('pending verification exposes only an allowlisted reason and never forwards the recovery hint to the server', async t => {
+  const journal = await journalFor(t); await journal.bindAccount('sender-1'); let polled;
+  const result = await runOnce(config, { journal, adapter: { accountStatus: () => ({ authenticated: false, verificationPending: true, needsAccountVerification: true, verificationReason: 'raw private failure text' }) }, fetchImpl: async (_url, options) => { polled = JSON.parse(options.body); return response({ job: null }); } });
+  assert.equal(result.needsAccountVerification, true); assert.equal(result.verificationReason, undefined);
+  assert.equal(polled.needsAccountVerification, undefined); assert.equal(polled.verificationReason, undefined);
+  assert.ok(!JSON.stringify(result).includes('private failure'));
+});
+
+test('a definite account change from bounded recovery stops instead of becoming temporary pending', async t => {
+  const journal = await journalFor(t); await journal.bindAccount('sender-1'); let polls = 0;
+  await assert.rejects(runOnce(config, { journal, recoverAccount: true, adapter: {
+    accountStatus: account,
+    recoverAccountStatus: () => { throw new BridgeError('账号发生变化', 'ACCOUNT_CHANGED'); },
+  }, fetchImpl: async () => { polls++; return response({ job: null }); } }), error => error.code === 'ACCOUNT_CHANGED');
+  assert.equal(polls, 0);
+});
+
+test('device status heartbeat sends liveness without an identity claim or a job lease', async () => {
+  const requests = [];
+  assert.equal(typeof bridgeCore.deviceStatusHeartbeat, 'function');
+  await bridgeCore.deviceStatusHeartbeat(config, { fetchImpl: async (url, options) => { requests.push({ url, body: JSON.parse(options.body) }); return response({ ok: true }); } });
+  assert.deepEqual(requests, [{ url: `${config.origin}/api/prospecting-bridge/status`, body: { deviceId: config.deviceId } }]);
 });
 
 const browserTest = process.env.PROSPECT_BROWSER_TEST === '1' ? test : test.skip;

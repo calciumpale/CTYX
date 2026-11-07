@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto';
 import { dirname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { BridgeError, Journal, loadConfig, runOnce, validateConfig, verifiedAccountUpgrade } from './bridge-core.mjs';
+import { BridgeError, Journal, loadConfig, runOnce, deviceStatusHeartbeat, validateConfig, verifiedAccountUpgrade } from './bridge-core.mjs';
 import { openBrowser } from './browser-adapter.mjs';
+import { createConnectionRecovery } from './connection-recovery.mjs';
 
 const HOME = 'https://www.douyin.com/';
 const RECOVERABLE_SESSION_ERRORS = new Set(['HUMAN_ACTION_REQUIRED', 'UNAUTHENTICATED', 'ACCOUNT_CHANGED']);
@@ -46,9 +47,14 @@ export class DesktopController {
   #runAbort;
   #stopPromise;
   #stopping = false;
+  #recovery;
+  #heartbeatTimer;
+  #heartbeatAbort;
+  #heartbeatInFlight;
+  #heartbeatFailure;
   #snapshot = {
     phase: 'idle', busy: false, running: false, authenticated: false,
-    configured: false, pendingResults: 0,
+    configured: false, pendingResults: 0, heartbeatState: 'idle', recoveryAttempt: 0,
     message: '先导入配对配置，再点击“连接抖音”。首次使用需要扫码并确认账号。',
     updatedAt: new Date().toISOString(),
   };
@@ -59,9 +65,11 @@ export class DesktopController {
     this.#pollIntervalMs = Number.isFinite(pollIntervalMs) ? Math.max(250, pollIntervalMs) : 5000;
     this.#deps = {
       loadConfig, openJournal: path => Journal.open(path), openBrowser, runOnce,
+      now: Date.now, heartbeat: deviceStatusHeartbeat, setInterval, clearInterval, onDiagnostic: () => {},
       sleep: (ms, { signal }) => delay(ms, undefined, { signal }),
       ...dependencies,
     };
+    this.#recovery = createConnectionRecovery({ now: this.#deps.now });
   }
 
   status() {
@@ -73,7 +81,48 @@ export class DesktopController {
   }
 
   #set(values) {
-    this.#snapshot = { ...this.#snapshot, ...values, updatedAt: new Date().toISOString() };
+    const previous = this.#snapshot;
+    this.#snapshot = { ...previous, ...values, updatedAt: new Date(this.#deps.now()).toISOString() };
+    if (['phase','authenticated','errorCode','heartbeatState','recoveryAttempt'].some(key => previous[key] !== this.#snapshot[key])) {
+      const current = this.#snapshot;
+      try { Promise.resolve(this.#deps.onDiagnostic({ event: values.heartbeatState !== undefined ? 'liveness' : 'state', timestamp: current.updatedAt, phase: current.phase,
+        running: current.running, authenticated: current.authenticated, errorCode: current.errorCode,
+        reasonCode: current.heartbeatState === 'retrying' ? 'heartbeat_unavailable' : current.verificationReason, recoveryAttempt: current.recoveryAttempt })).catch(() => {}); } catch { /* Diagnostics cannot stop work. */ }
+    }
+  }
+
+  #startHeartbeat(signal) {
+    this.#heartbeatAbort = new AbortController();
+    const heartbeatSignal = AbortSignal.any([signal, this.#heartbeatAbort.signal]);
+    const tick = async () => {
+      if (heartbeatSignal.aborted || this.#heartbeatInFlight) return;
+      this.#heartbeatInFlight = (async () => {
+        try {
+          const result = await this.#deps.heartbeat(this.#config, { signal: heartbeatSignal });
+          if (heartbeatSignal.aborted) return;
+          if (result?.ok !== true) throw new BridgeError('工作台连接尚未确认。', 'NETWORK');
+          this.#set({ heartbeatState: 'online', lastHeartbeatAt: new Date(this.#deps.now()).toISOString() });
+        } catch (error) {
+          if (heartbeatSignal.aborted) return;
+          if (error?.code === 'API_REJECTED' && [404,405].includes(error.status)) {
+            // Compatibility with an older workbench: ordinary polling still works.
+            this.#deps.clearInterval(this.#heartbeatTimer); this.#set({ heartbeatState: 'idle' });
+          } else if (error?.code === 'API_REJECTED' && [401,403].includes(error.status)) {
+            this.#heartbeatFailure = this.#publicFailure(error); this.#runAbort?.abort();
+          } else this.#set({ heartbeatState: 'retrying' });
+        }
+      })();
+      try { await this.#heartbeatInFlight; } finally { this.#heartbeatInFlight = undefined; }
+    };
+    this.#heartbeatTimer = this.#deps.setInterval(tick, 15000);
+    this.#heartbeatTimer?.unref?.();
+  }
+
+  async #stopHeartbeat() {
+    this.#deps.clearInterval(this.#heartbeatTimer); this.#heartbeatTimer = undefined;
+    this.#heartbeatAbort?.abort();
+    await this.#heartbeatInFlight;
+    this.#heartbeatAbort = undefined;
   }
 
   #check(signal) {
@@ -201,12 +250,22 @@ export class DesktopController {
 
   #startLoop(account) {
     this.#runAbort = new AbortController();
-    this.#set({ ...account, phase: 'running', running: true, message: '抖音已连接，正在同步工作台任务。' });
+    this.#heartbeatFailure = undefined;
+    this.#recovery = createConnectionRecovery({ now: this.#deps.now });
+    this.#set({ ...account, phase: 'running', running: true, recoveryAttempt: 0, nextRetryAt: undefined,
+      lastVerifiedAt: new Date(this.#deps.now()).toISOString(), errorCode: undefined, verificationReason: undefined,
+      message: '抖音已连接，正在同步工作台任务。' });
+    this.#startHeartbeat(this.#runAbort.signal);
     this.#loopPromise = this.#runLoop(this.#runAbort.signal);
   }
 
   async connect() {
-    if (this.#loopPromise && !this.#stopping) return this.status();
+    if (this.#loopPromise && !this.#stopping) {
+      if (!this.#snapshot.authenticated && !this.#snapshot.busy) {
+        this.#recovery.request(); this.#set({ phase: 'verifying', message: '已请求重新核验账号，专用浏览器保持打开。' });
+      }
+      return this.status();
+    }
     return this.#connect();
   }
 
@@ -250,49 +309,63 @@ export class DesktopController {
   }
 
   async #runLoop(signal) {
-    let exitState;
+    let exitState, networkFailures = 0;
     try {
       while (!signal.aborted) {
+        let waitMs = this.#pollIntervalMs;
         try {
+          const recoverAccount = this.#recovery.takeRecovery();
+          if (recoverAccount) this.#set({ phase: 'recovering', busy: true, recoveryAttempt: this.#recovery.status().attempts,
+            nextRetryAt: undefined, message: '正在重新核验抖音账号，聊天页面保持原样。' });
           const result = await this.#deps.runOnce(this.#config, {
             adapter: this.#browser.adapter, journal: this.#journal, signal,
+            recoverAccount,
             // Never forward raw strings into the desktop panel. The result below
             // provides enough public progress without exposing task bodies.
             logger: () => {},
           });
           if (signal.aborted) break;
+          networkFailures = 0; this.#recovery.observe(result);
           if (result?.humanActionRequired) {
             exitState = { phase: 'error', authenticated: false, ...this.#publicFailure({ code: 'HUMAN_ACTION_REQUIRED' }) };
             break;
           }
           if (result?.authenticated === false) {
             if (result.verificationPending === true) {
-              this.#set({ authenticated: false, errorCode: undefined, message: '暂未核实当前账号，正在重试，专用浏览器保持打开。本轮未领取任务。' });
+              const recovery = this.#recovery.status();
+              this.#set({ phase: recovery.manualRequired ? 'verification_required' : 'verifying', busy: false, authenticated: false,
+                recoveryAttempt: recovery.attempts, nextRetryAt: recovery.nextAt === null ? undefined : new Date(recovery.nextAt).toISOString(),
+                verificationReason: result.verificationReason, errorCode: undefined,
+                message: recovery.manualRequired ? '自动核验暂未完成，专用浏览器已保留。请检查抖音页面后点击“重新核验账号”。' : '暂未核实当前账号，正在重试；专用浏览器保持打开，本轮不领取任务。' });
             } else {
               exitState = { phase: 'login_required', authenticated: false, errorCode: 'UNAUTHENTICATED', message: '登录或账号确认已失效，同步已暂停，专用浏览器已保留。请完成登录或切回已配对账号，再点击“连接抖音”。' };
               break;
             }
           } else {
-            if (result?.authenticated === true) this.#set({ authenticated: true });
-            this.#set({ errorCode: undefined, message: result?.pendingReport ? '结果已保存在本机，正在等待补交；不会重新执行发送。' : result?.worked ? '任务结果已处理，可在工作台查看详情。' : '同步运行中，等待工作台任务。' });
+            if (result?.authenticated === true) this.#set({ authenticated: true, lastVerifiedAt: new Date(this.#deps.now()).toISOString() });
+            this.#set({ phase: 'running', busy: false, recoveryAttempt: this.#recovery.status().attempts, nextRetryAt: undefined, verificationReason: undefined,
+              errorCode: undefined, message: result?.pendingReport ? '结果已保存在本机，正在等待补交；不会重新执行发送。' : result?.worked ? '任务结果已处理，可在工作台查看详情。' : '同步运行中，等待工作台任务。' });
           }
         } catch (error) {
           if (signal.aborted) break;
           const retryable = error?.code === 'NETWORK' || (error?.code === 'API_REJECTED' && (error.status === 408 || error.status === 429 || error.status >= 500));
           if (!retryable) { exitState = { phase: 'error', authenticated: false, ...this.#publicFailure(error) }; break; }
-          this.#set(this.#publicFailure(error));
+          networkFailures++; waitMs = Math.min(30000, this.#pollIntervalMs * 2 ** Math.min(networkFailures - 1, 4));
+          this.#set({ ...this.#publicFailure(error), phase: this.#snapshot.authenticated ? 'running' : 'verifying', busy: false });
         }
-        await this.#deps.sleep(this.#pollIntervalMs, { signal });
+        await this.#deps.sleep(waitMs, { signal });
       }
     } catch (error) {
       if (!signal.aborted) exitState = { phase: 'error', authenticated: false, ...this.#publicFailure(error) };
     } finally {
+      await this.#stopHeartbeat();
+      if (this.#heartbeatFailure) exitState = { phase: 'error', authenticated: false, ...this.#heartbeatFailure };
       // Login and account recovery reuse this dedicated browser and its journal.
       // Explicit stop and permanent errors still release both resources.
       const preserveSession = RECOVERABLE_SESSION_ERRORS.has(exitState?.errorCode) && !signal.aborted && !this.#stopping;
       const released = preserveSession || await this.#release();
       this.#loopPromise = undefined; this.#runAbort = undefined;
-      if (!this.#stopping) this.#set({ running: false, busy: false, ...(released ? exitState || { phase: 'stopped', authenticated: false, message: '同步已停止。' } : { phase: 'error', authenticated: false, ...this.#publicFailure({ code: 'RESOURCE_RELEASE' }) }) });
+      if (!this.#stopping) this.#set({ running: false, busy: false, heartbeatState: 'idle', ...(released ? exitState || { phase: 'stopped', authenticated: false, message: '同步已停止。' } : { phase: 'error', authenticated: false, ...this.#publicFailure({ code: 'RESOURCE_RELEASE' }) }) });
     }
   }
 

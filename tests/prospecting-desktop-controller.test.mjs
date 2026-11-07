@@ -432,3 +432,71 @@ test('stop after dispatch keeps real journal unknown and restart only reports th
   await controller.start(); await until(() => reports === 1); await controller.stop();
   assert.equal(sends, 1);
 });
+
+test('a stalled passive proof recovers automatically in the existing session after a bounded delay',async t=>{
+ let now=0,polls=0,recoveries=0;
+ const {controller,calls,data}=fakeController({now:()=>now,
+  runOnce:async(_config,options)=>{polls++;if(options.recoverAccount){recoveries++;return{authenticated:true,worked:false};}return{authenticated:false,verificationPending:true,worked:false};},
+  sleep:async(ms,{signal})=>{now+=ms;if((recoveries||polls>=20)&&!signal.aborted)await new Promise(done=>signal.addEventListener('abort',done,{once:true}));},
+ });data.accountId=account.accountId;t.after(()=>controller.stop());
+ await controller.start();await until(()=>recoveries===1);
+ assert.equal(polls,4);assert.equal(controller.status().authenticated,true);assert.equal(controller.status().phase,'running');assert.equal(calls.opens,1);assert.equal(calls.browserCloses,0);assert.equal(calls.navigations,0);
+});
+
+test('exhausted recovery stays connected for a manual recheck without an automatic reload loop',async t=>{
+ let now=0,polls=0,recoveries=0,restored=false;const resume=deferred();
+ const {controller,calls,data}=fakeController({now:()=>now,
+  runOnce:async(_config,options)=>{polls++;if(options.recoverAccount)recoveries++;return restored?{authenticated:true}:{authenticated:false,verificationPending:true};},
+  sleep:async(ms,{signal})=>{now+=ms;if(polls===20)await resume.promise;if(polls>20&&!signal.aborted)await new Promise(done=>signal.addEventListener('abort',done,{once:true}));},
+ });data.accountId=account.accountId;t.after(()=>{resume.resolve();return controller.stop();});
+ await controller.start();await until(()=>polls===20);
+ assert.equal(recoveries,2);assert.equal(controller.status().phase,'verification_required');assert.equal(controller.status().running,true);assert.equal(controller.status().browserOpen,true);
+ restored=true;await controller.connect();resume.resolve();await until(()=>controller.status().authenticated);
+ assert.equal(recoveries,3);assert.equal(calls.opens,1);assert.equal(calls.browserCloses,0);
+});
+
+test('independent liveness remains active during a long job and cannot upgrade browser authentication',async t=>{
+ let tick,cleared=false,beats=0,signalSeen;
+ const {controller,data}=fakeController({
+  setInterval:callback=>{tick=callback;return{unref(){}};},clearInterval:()=>{cleared=true;},
+  heartbeat:async(_config,{signal})=>{beats++;signalSeen=signal;return{ok:true};},
+  runOnce:async(_config,{signal})=>{await new Promise(done=>signal.addEventListener('abort',done,{once:true}));return{authenticated:false,verificationPending:true};},
+ });data.accountId=account.accountId;t.after(()=>controller.stop());
+ await controller.start();assert.equal(typeof tick,'function');await tick();assert.equal(beats,1);assert.equal(controller.status().heartbeatState,'online');assert.ok(controller.status().lastHeartbeatAt);
+ await controller.stop();assert.equal(cleared,true);assert.equal(signalSeen.aborted,true);await tick();assert.equal(beats,1);assert.equal(controller.status().authenticated,false);
+});
+
+test('connection diagnostics discard identities, credentials and raw provider errors',async t=>{
+ const events=[];let tick;
+ const {controller,data}=fakeController({onDiagnostic:event=>events.push(event),setInterval:cb=>{tick=cb;return{unref(){}};},clearInterval(){},heartbeat:async()=>{throw new BridgeError('raw device-private-token sites-private-token','NETWORK');}});data.accountId=account.accountId;t.after(()=>controller.stop());
+ await controller.start();await tick();assert.equal(controller.status().heartbeatState,'retrying');assert.equal(controller.status().running,true);assert.equal(controller.status().browserOpen,true);
+ assert.ok(events.length);assert.doesNotMatch(JSON.stringify(events),/device-private-token|sites-private-token|sender-1|测试账号|raw/);
+});
+
+test('a synchronous fatal worker error cannot leave the background heartbeat running',async t=>{
+ let tick,cleared=false,beats=0;
+ const {controller,data}=fakeController({runOnce(){throw new BridgeError('invalid local journal','JOURNAL_FORMAT');},setInterval:callback=>{tick=callback;return{unref(){}};},clearInterval(){cleared=true;},heartbeat:async()=>{beats++;return{ok:true};}});data.accountId=account.accountId;t.after(()=>controller.stop());
+ await controller.start();await until(()=>controller.status().phase==='error');assert.equal(cleared,true);await tick();assert.equal(beats,0);
+});
+
+test('diagnostics callbacks cannot interrupt work when they throw or reject',async t=>{
+ for(const onDiagnostic of [()=>{throw Error('private diagnostic failure');},()=>Promise.reject(Error('private diagnostic failure'))]){
+  const {controller,data}=fakeController({onDiagnostic});data.accountId=account.accountId;t.after(()=>controller.stop());await controller.start();await until(()=>controller.status().running);assert.equal(controller.status().authenticated,true);assert.doesNotMatch(controller.status().message,/private/);await controller.stop();
+ }
+});
+
+test('network retries back off without reopening a healthy browser and reset after recovery',async t=>{
+ let polls=0;const waits=[];
+ const {controller,calls,data}=fakeController({runOnce:async()=>{if(++polls<=5)throw new BridgeError('transient','NETWORK');return{authenticated:true};},sleep:async(ms,{signal})=>{waits.push(ms);if(polls>=6&&!signal.aborted)await new Promise(done=>signal.addEventListener('abort',done,{once:true}));}});data.accountId=account.accountId;t.after(()=>controller.stop());
+ await controller.start();await until(()=>polls===6);assert.deepEqual(waits,[5000,10000,20000,30000,30000,5000]);assert.equal(calls.opens,1);assert.equal(calls.browserCloses,0);assert.equal(controller.status().authenticated,true);
+});
+
+test('a liveness success cannot authenticate a browser whose ownership proof is pending',async t=>{
+ let tick;const {controller,data}=fakeController({runOnce:async()=>({authenticated:false,verificationPending:true}),setInterval:cb=>{tick=cb;return{unref(){}};},clearInterval(){},heartbeat:async()=>({ok:true})});data.accountId=account.accountId;t.after(()=>controller.stop());
+ await controller.start();await until(()=>controller.status().authenticated===false);await tick();assert.equal(controller.status().heartbeatState,'online');assert.equal(controller.status().authenticated,false);assert.equal(controller.status().phase,'verifying');
+});
+
+test('revoked device access during a long job aborts work and stops the background heartbeat',async t=>{
+ let tick;const {controller,calls,data}=fakeController({setInterval:cb=>{tick=cb;return{unref(){}};},clearInterval(){},heartbeat:async()=>{const error=new BridgeError('revoked','API_REJECTED');error.status=401;throw error;},runOnce:async(_config,{signal})=>{await new Promise(done=>signal.addEventListener('abort',done,{once:true}));return{authenticated:false};}});data.accountId=account.accountId;t.after(()=>controller.stop());
+ await controller.start();await tick();await until(()=>controller.status().phase==='error');assert.equal(controller.status().errorCode,'API_REJECTED');assert.equal(controller.status().running,false);assert.equal(calls.browserCloses,1);
+});

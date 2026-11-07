@@ -34,6 +34,12 @@ export function createProspectingStore(db:D1Database,now:()=>number=Date.now){
  function deviceView(d:DeviceRow|null):ProspectDeviceView{return d?{id:d.id,label:d.label,online:online(d),authenticated:!!d.authenticated,...(d.account_id?{accountId:d.account_id}:{}),...(d.account_name?{accountName:d.account_name}:{}),...(d.last_seen_at?{lastSeenAt:d.last_seen_at}:{}),...(d.message?{message:d.message}:{})}:{online:false,authenticated:false};}
  async function device(ownerId:string,memberId:string){await member(ownerId,memberId);const d=await currentDevice(ownerId,memberId);if(d)await expire(d.id);return deviceView(d);}
  async function authenticate(id:string,token:string):Promise<DeviceRow>{const d=await findDevice(id);if(!d||!/^[a-f0-9]{64}$/.test(token)||d.token_hash!==await prospectHash(token))throw new DomainError('设备凭证无效或已停用',401);return d;}
+ // Liveness is independent of browser verification and job/lease processing.
+ // Keep the member guard in the write so a revoked member cannot stay online.
+ async function touchDevice(id:string){
+  const result=await db.prepare("UPDATE workbench_prospect_devices SET last_seen_at=? WHERE id=? AND enabled=1 AND EXISTS (SELECT 1 FROM workbench_member_accounts a WHERE a.owner_id=workbench_prospect_devices.owner_id AND a.account_id=workbench_prospect_devices.member_id AND a.enabled=1 AND a.role IN ('sales','manager'))").bind(stamp(),id).run();
+  if(!result.meta.changes)throw new DomainError('设备凭证无效或已停用',401);
+ }
  async function disconnect(ownerId:string,memberId:string){
   await member(ownerId,memberId);const time=stamp();
   await db.batch([
@@ -267,5 +273,5 @@ export function createProspectingStore(db:D1Database,now:()=>number=Date.now){
    catch(error){if(!(error instanceof DomainError))throw error;const terminal=/已安排|已触达|停止联系/.test(error.message);await db.prepare("UPDATE workbench_prospect_leads SET data_json=json_set(data_json,'$.error',?,'$.autoSuppressed',?),updated_at=? WHERE campaign_id=? AND id=? AND job_id IS NULL AND version=?").bind(error.message,terminal?1:0,stamp(),c.id,lead.id,lead.version).run();}
   }
  }
- return{chat,enqueueAutomatic,connect,disconnect,authenticate,device,seen,createCampaign,campaigns,campaign,leads,jobs,setPaused,createJob,insertComments,review,retrySend,claim,leased,renew,complete,pendingAnalysis,saveAnalysis,retryAnalysis};
+ return{chat,enqueueAutomatic,connect,disconnect,authenticate,touchDevice,device,seen,createCampaign,campaigns,campaign,leads,jobs,setPaused,createJob,insertComments,review,retrySend,claim,leased,renew,complete,pendingAnalysis,saveAnalysis,retryAnalysis};
 }

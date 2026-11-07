@@ -15,6 +15,23 @@ function fixture(){
 }
 const campaignInput=normalizeCampaignInput({requirements:'为中小企业提供销售培训工具',keywords:['销售培训'],greetingTemplate:'你好，可以介绍产品的试用方式。'});
 const readOnlyAccountId='dy-readonly-0123456789abcdef01234567';
+test('device liveness updates only last seen without authorizing an unverified browser',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const credentials=await f.store.connect('owner-a','member-a','本机');
+ await f.store.seen(credentials.deviceId,{authenticated:false,accountName:'未核实',message:'需要核实登录'});
+ const before=f.sqlite.prepare('SELECT * FROM workbench_prospect_devices WHERE id=?').get(credentials.deviceId)!;
+ f.advance(100000);await f.store.touchDevice(credentials.deviceId);
+ const after=f.sqlite.prepare('SELECT * FROM workbench_prospect_devices WHERE id=?').get(credentials.deviceId)!;
+ assert.notEqual(after.last_seen_at,before.last_seen_at);
+ assert.deepEqual({...after,last_seen_at:before.last_seen_at},{...before});
+ const view=await f.store.device('owner-a','member-a');assert.equal(view.online,true);assert.equal(view.authenticated,false);
+});
+test('device liveness refuses revoked pairings and disabled or nonbusiness members',async t=>{
+ for(const change of ["UPDATE workbench_prospect_devices SET enabled=0","UPDATE workbench_member_accounts SET enabled=0 WHERE account_id='member-a'","UPDATE workbench_member_accounts SET role='admin' WHERE account_id='member-a'"]){
+  const f=fixture();t.after(()=>f.sqlite.close());const credentials=await f.store.connect('owner-a','member-a','本机');
+  f.sqlite.exec(change);await assert.rejects(()=>f.store.touchDevice(credentials.deviceId),/停用/);
+  assert.equal(f.sqlite.prepare('SELECT last_seen_at FROM workbench_prospect_devices WHERE id=?').get(credentials.deviceId)!.last_seen_at,null);
+ }
+});
 async function prepared(f:ReturnType<typeof fixture>,accountId='MS4wSender001'){
  const device=await f.store.connect('owner-a','member-a','本机');await f.store.seen(device.deviceId,{authenticated:true,accountId,accountName:'发送账号'});
  const campaign=await f.store.createCampaign('owner-a','member-a',campaignInput);

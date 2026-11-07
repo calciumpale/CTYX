@@ -6,8 +6,9 @@ import { pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
 import { createInterface } from 'node:readline/promises';
 import { setTimeout as delay } from 'node:timers/promises';
-import { loadConfig, saveConfig, Journal, runOnce, safeError, BridgeError } from './bridge-core.mjs';
+import { loadConfig, saveConfig, Journal, runOnce, deviceStatusHeartbeat, safeError, BridgeError } from './bridge-core.mjs';
 import { openBrowser } from './browser-adapter.mjs';
+import { createConnectionRecovery } from './connection-recovery.mjs';
 
 const DEFAULT_CONFIG = join(homedir(), '.config', 'marketing-workbench', 'douyin-bridge.json');
 export function parseArgs(args) {
@@ -28,6 +29,54 @@ async function stdinText() {
   let text = '';
   for await (const chunk of process.stdin) { text += chunk; if (Buffer.byteLength(text) > 65536) throw new BridgeError('配置超过 64 KB。'); }
   return text;
+}
+
+/** The CLI pauses on account boundaries just like the desktop. Browser lifetime
+ * stays with main(), so a paused challenge remains visible until explicit exit. */
+export async function runCliLoop(config, { adapter, journal, signal, once=false, now=Date.now, run=runOnce,
+  heartbeat=deviceStatusHeartbeat, sleep=(ms, options)=>delay(ms, undefined, options), schedule=setInterval, cancel=clearInterval,
+  logger=message=>console.log(`${new Date().toISOString()} ${message}`), errorLogger=message=>console.error(message),
+}={}) {
+  const local=new AbortController(), active=signal?AbortSignal.any([signal,local.signal]):local.signal;
+  const recovery=createConnectionRecovery({now});
+  let timer,inFlight,revoked=false,networkFailures=0,reportedRecoveryLimit=false;
+  const tick=async()=>{
+    if(inFlight||active.aborted)return;
+    inFlight=heartbeat(config,{signal:active}).catch(error=>{
+      if(active.aborted)return;
+      if(error.code==='API_REJECTED'&&[404,405].includes(error.status))cancel(timer);
+      else if(error.code==='API_REJECTED'&&[401,403].includes(error.status)){revoked=true;local.abort();}
+    });
+    try{await inFlight;}finally{inFlight=undefined;}
+  };
+  if(!once){timer=schedule(tick,15000);timer?.unref?.();}
+  const paused=reason=>({manualRequired:true,reason,exitCode:1});
+  try{
+    while(!active.aborted){
+      let waitMs=5000;
+      try{
+        const result=await run(config,{adapter,journal,signal:active,recoverAccount:recovery.takeRecovery(),logger});
+        if(active.aborted)break;
+        if(result?.humanActionRequired)return paused('HUMAN_ACTION_REQUIRED');
+        if(result?.authenticated===false&&result.verificationPending!==true)return paused('UNAUTHENTICATED');
+        networkFailures=0;recovery.observe(result);
+        if(recovery.status().manualRequired&&!reportedRecoveryLimit){logger('自动核验暂未完成。请检查专用浏览器；需要重新核验时，先停止 run 再启动，保留原配对和本机记录。');reportedRecoveryLimit=true;}
+        if(result?.authenticated===true)reportedRecoveryLimit=false;
+        if(result?.worked)logger(`本次任务已记录。${result.pendingReport?'等待补交结果。':'结果已处理。'}`);
+        else if(once)logger(result?.authenticated?'设备已连接，当前没有待执行任务。':'尚未取得任务，请检查浏览器登录和工作台设备状态。');
+      }catch(error){
+        if(active.aborted)break;
+        errorLogger(safeError(error));
+        if(['HUMAN_ACTION_REQUIRED','UNAUTHENTICATED','ACCOUNT_CHANGED'].includes(error.code))return paused(error.code);
+        const retryable=error.code==='NETWORK'||error.code==='API_REJECTED'&&(error.status===408||error.status===429||error.status>=500);
+        if(once||!retryable)return{manualRequired:false,reason:error.code,exitCode:1};
+        waitMs=Math.min(30000,5000*2**Math.min(networkFailures++,4));
+      }
+      if(once)return{manualRequired:false,reason:'once',exitCode:0};
+      await sleep(waitMs,{signal:active}).catch(()=>{});
+    }
+    return{manualRequired:false,reason:revoked?'access_revoked':'stopped',exitCode:revoked?1:0};
+  }finally{cancel(timer);local.abort();await inFlight;}
 }
 
 export async function main(args = process.argv.slice(2)) {
@@ -75,20 +124,14 @@ export async function main(args = process.argv.slice(2)) {
     // `run` is an explicit user action. Initialize its owned pages once before
     // the passive task loop; later health checks never create or navigate tabs.
     await browser.adapter.accountStatus({ signal: controller.signal, expectedAccountId: journal.data.accountId });
-    do {
-      try {
-        const result = await runOnce(config, { adapter: browser.adapter, journal, signal: controller.signal, logger: message => console.log(`${new Date().toISOString()} ${message}`) });
-        if (result.worked) console.log(`${new Date().toISOString()} 本次任务已记录。${result.pendingReport ? '等待补交结果。' : '结果已处理。'}`);
-        else if (options.once) console.log(result.authenticated ? '设备已连接，当前没有待执行任务。' : '尚未取得任务，请检查浏览器登录和工作台设备状态。');
-      } catch (error) {
-        if (controller.signal.aborted) break;
-        console.error(safeError(error));
-        if (options.once) { process.exitCode = 1; break; }
-      }
-      if (options.once) break;
-      await delay(5000, undefined, { signal: controller.signal }).catch(() => {});
-    } while (!controller.signal.aborted);
+    const outcome = await runCliLoop(config, { adapter: browser.adapter, journal, signal: controller.signal, once: options.once });
+    if (outcome.exitCode) process.exitCode = outcome.exitCode;
+    if (outcome.manualRequired && !options.once && !controller.signal.aborted) {
+      console.error('同步已暂停，专用浏览器保留供您处理。完成登录、安全验证或切回原账号后，请按 Ctrl+C 停止，再重新启动 run 明确核验；不会自动恢复发送。');
+      await new Promise(done => controller.signal.addEventListener('abort', done, { once: true }));
+    }
   } finally {
+    controller.abort();
     await browser?.close().catch(() => {}); await journal.close();
     process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop);
   }

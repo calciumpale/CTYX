@@ -71,7 +71,7 @@ export function FollowupRecordingField({ file, onChange, disabled = false, child
       <button type="button" className="button secondary" onClick={() => input.current?.click()} disabled={disabled} aria-controls={`${id}-input`}><Upload size={15} />{file ? '替换录音' : '上传录音'}</button>
       {children}
     </div>
-    <p className="followup-recording-help" id={`${id}-help`}>MP3 / WAV / M4A / AAC / FLAC / OGG / WebM · 单个不超过 20 MB</p>
+    <p className="followup-recording-help" id={`${id}-help`}>音频文件 · 最大 20 MB</p>
     {error && <p className="followup-recording-error" role="alert">{error}</p>}
     {file && <section className="followup-recording-card" aria-label="待上传的跟进录音">
       <div className="followup-recording-file"><AudioLines size={19} /><div><strong title={file.name}>{file.name}</strong><span>{fileSize(file.size)} · 待保存</span></div><button type="button" className="icon-button" disabled={disabled} onClick={() => { if (!disabled) { onChange(null); setError(''); } }} aria-label="移除已选择的录音"><X size={16} /></button></div>

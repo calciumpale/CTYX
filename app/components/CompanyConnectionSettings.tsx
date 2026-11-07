@@ -8,13 +8,13 @@ import './company-connection.css';
 const providerInfo = {
   qcc: {
     name: '企查查', appKey: 'AppKey', secretKey: 'SecretKey',
-    description: '启用鲸海数据时先查询鲸海数据，再使用企查查；两者均未配置或服务不可用时，使用公开网络检索补全。网络资料会保留来源，并标注待核实信息。',
+    description: '',
     hint: '企业工商信息接口；需在企查查开放平台开通对应权限。',
     documentation: 'https://openapi.qcc.com/dataApi/410',
   },
   jinghai: {
     name: '鲸海数据', appKey: 'AppID', secretKey: 'API Key',
-    description: '启用后先查询鲸海数据，再按已启用配置使用企查查，最后回退到公开网络检索。企业资料会保留来源和获取时间。',
+    description: '查询顺序：鲸海数据 → 企查查 → 公开网络。',
     hint: '企业详情接口；需在鲸海数据开通对应权限。',
     documentation: 'https://www.kqdaas.com/docs/getting-started',
   },
@@ -56,14 +56,14 @@ export function CompanyConnectionSettings({provider='qcc'}:{provider?:CompanyCon
   };
   const submit=(event:FormEvent)=>{event.preventDefault();void perform('save');};
   return <section className="company-connection" id={provider==='qcc'?'company-api-configuration':'jinghai-api-configuration'} aria-labelledby={`${id}-title`} aria-busy={pending!==null}>
-    <div className="company-connection-heading"><Building2 size={23}/><div><h2 id={`${id}-title`}>企业数据 · {info.name}</h2><p>为客户洞察补充企业工商资料</p></div><span>{pending==='load'?'读取中':connection?.configured?(connection.enabled?'已配置':'已停用'):'未配置'}</span></div>
+    <div className="company-connection-heading"><Building2 size={23}/><div><h2 id={`${id}-title`}>企业数据 · {info.name}</h2></div><span>{pending==='load'?'读取中':connection?.configured?(connection.enabled?'已配置':'已停用'):'未配置'}</span></div>
     {pending==='load'?<p className="company-connection-feedback"><Loader2 size={15} className="spin"/>正在读取配置…</p>:!connection?<div role="alert" className="company-connection-feedback"><CircleAlert size={16}/><span>{error}</span><button className="button secondary" onClick={()=>void load()}><RefreshCw size={14}/>重新加载</button></div>:<>
-      <p className="company-connection-description">{info.description}</p>
+      {info.description && <p className="company-connection-description">{info.description}</p>}
       <form onSubmit={submit}><fieldset disabled={pending!==null||!storageReady}>
-        <label className="company-connection-endpoint">官方接口<input value={provider==='jinghai'?'https://www.kqdaas.com/DataService/api/v3/company/detail':connection.endpoint} readOnly aria-label={`${info.name}官方接口`}/><small>{info.hint}</small></label>
+        <details className="company-connection-details"><summary>接口信息</summary><label className="company-connection-endpoint">官方接口<input value={provider==='jinghai'?'https://www.kqdaas.com/DataService/api/v3/company/detail':connection.endpoint} readOnly aria-label={`${info.name}官方接口`}/><small>{info.hint}</small></label></details>
         <div className="company-connection-fields"><label htmlFor={`${id}-app`}>{info.appKey}<input ref={attachAppKey} id={`${id}-app`} type="password" autoComplete="new-password" maxLength={1024} placeholder={connection.hasCredentials?'已保存，留空保留':`输入 ${info.appKey}`} required={!connection.hasCredentials}/></label><label htmlFor={`${id}-secret`}>{info.secretKey}<input ref={attachSecretKey} id={`${id}-secret`} type="password" autoComplete="new-password" maxLength={1024} placeholder={connection.hasCredentials?'已保存，留空保留':`输入 ${info.secretKey}`} required={!connection.hasCredentials}/></label></div>
-        <label className="company-connection-enable"><input type="checkbox" checked={enabled} onChange={event=>setEnabled(event.target.checked)}/><span>启用{info.name}补全企业画像</span></label>
-        <div className="company-connection-actions"><span><ShieldCheck size={14}/>凭证加密保存，不会回显</span><button type="submit" className="button primary">{pending==='save'?<Loader2 size={15} className="spin"/>:<Check size={15}/>}保存{info.name}配置</button></div>
+        <label className="company-connection-enable"><input type="checkbox" checked={enabled} onChange={event=>setEnabled(event.target.checked)}/><span>启用{info.name}</span></label>
+        <div className="company-connection-actions"><span><ShieldCheck size={14}/>凭证加密保存</span><button type="submit" className="button primary">{pending==='save'?<Loader2 size={15} className="spin"/>:<Check size={15}/>}保存</button></div>
       </fieldset></form>
       {!storageReady&&<p className="company-connection-feedback" role="alert">加密存储尚未启用，请联系管理员后再保存。</p>}
       {error&&<p className="company-connection-feedback" role="alert"><CircleAlert size={16}/>{error}<button className="text-button" disabled={pending!==null} onClick={()=>void load()}>重新加载配置</button></p>}

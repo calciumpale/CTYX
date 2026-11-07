@@ -1,19 +1,198 @@
-# CTAI 工作台视觉与交互
+---
+name: CTAI 营销工作台
+description: Linear 紧凑中性方向的销售与管理工作台
+colors:
+  primary: "#252528"
+  primary-hover: "#3b3b42"
+  surface: "#fff"
+  sidebar: "#f7f7f8"
+  text: "#202024"
+  text-secondary: "#62626b"
+  text-muted: "#71717b"
+  border: "#e6e6ea"
+  border-strong: "#ccccd3"
+  hover: "#f3f3f5"
+  selected: "#eaeaec"
+  danger: "#bf3545"
+  success: "#287c52"
+  warning: "#9a650c"
+  dark-primary: "#e8e8ed"
+  dark-primary-hover: "#d2d2da"
+  dark-surface: "#1b1b1f"
+  dark-sidebar: "#151518"
+  dark-text: "#eeeef2"
+  dark-text-secondary: "#b1b1bb"
+  dark-text-muted: "#a0a0ac"
+  dark-border: "#33333b"
+  dark-border-strong: "#4c4c57"
+  dark-hover: "#2a2a31"
+  dark-selected: "#33333b"
+  dark-danger: "#f07888"
+  dark-success: "#72bd94"
+  dark-warning: "#d8b264"
+typography:
+  headline:
+    fontFamily: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif
+    fontSize: 24px
+    fontWeight: 550
+    lineHeight: 1.4
+    letterSpacing: "-0.7px"
+  title:
+    fontFamily: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif
+    fontSize: 14px
+    fontWeight: 550
+    lineHeight: 1.7
+  body:
+    fontFamily: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif
+    fontSize: 14px
+    fontWeight: 400
+    lineHeight: 1.7
+  label:
+    fontFamily: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif
+    fontSize: 13px
+    fontWeight: 500
+    lineHeight: 1.3
+rounded:
+  sm: 4px
+  md: 6px
+  lg: 7px
+  panel: 8px
+  xl: 10px
+  composer: 12px
+spacing:
+  xs: 4px
+  sm: 8px
+  md: 12px
+  lg: 16px
+  xl: 24px
+  page: 32px
+components:
+  button-primary:
+    backgroundColor: "{colors.primary}"
+    textColor: "{colors.surface}"
+    typography: "{typography.label}"
+    rounded: "{rounded.lg}"
+    padding: 8px 13px
+    height: 36px
+  button-primary-hover:
+    backgroundColor: "{colors.primary-hover}"
+  button-secondary:
+    backgroundColor: "{colors.surface}"
+    textColor: "{colors.text}"
+    rounded: "{rounded.lg}"
+    padding: 8px 13px
+    height: 36px
+  button-ghost:
+    backgroundColor: transparent
+    textColor: "{colors.text-secondary}"
+    rounded: "{rounded.lg}"
+    padding: 8px 13px
+    height: 36px
+  button-danger:
+    backgroundColor: "{colors.danger}"
+    textColor: "{colors.surface}"
+    rounded: "{rounded.lg}"
+    padding: 8px 13px
+    height: 36px
+  input:
+    backgroundColor: "{colors.surface}"
+    textColor: "{colors.text}"
+    rounded: "{rounded.lg}"
+    padding: 9px 11px
+  navigation:
+    backgroundColor: transparent
+    textColor: "{colors.text-secondary}"
+    rounded: "{rounded.lg}"
+    padding: 9px 12px
+    height: 36px
+  navigation-selected:
+    backgroundColor: "{colors.selected}"
+    textColor: "{colors.text}"
+  badge:
+    backgroundColor: "{colors.hover}"
+    textColor: "{colors.text-secondary}"
+    rounded: 5px
+    padding: 3px 7px
+  project-card:
+    backgroundColor: "{colors.surface}"
+    textColor: "{colors.text}"
+    rounded: "{rounded.panel}"
+    padding: 12px
+  disclosure:
+    textColor: "{colors.text}"
+    padding: 8px 0
+    height: 40px
+  confirmation-dialog:
+    backgroundColor: "{colors.surface}"
+    textColor: "{colors.text}"
+    rounded: 16px
+    padding: 28px
+    width: 480px
+---
 
-腾讯会议专用页面使用375px窄侧边栏，依次呈现连接状态、目标项目、会议选择、导入与来源画像。去掉重复的全局导航，保留完整工作台链接与退出；普通工作台和项目上下文仍有会议导入入口。录音、纪要、转写及画像按真实读取状态分别呈现，无内容或外部套餐限制不伪造成功。
+# Design System: CTAI 营销工作台
 
-继承用户指定 open-claude-ui。整体为安静的暖白纸面、细分隔线、低饱和陶土主色；图标来自 lucide-react。左侧为窄导航，主区域具有充分留白。面向20至50岁用户，围绕每天要做的事情组织，减少技术名词。销售首页围绕录客户、记跟进、问助手；管理者首页围绕待审批、待审核和需要介入的项目。
+## Overview
 
-按账号进入三类工作台。销售一级导航为今日工作、我的项目、话术资料、培训带练；管理者为团队总览、团队项目、待我处理、话术知识、团队训练；管理员为人员权限、业务规则、知识库、服务连接、搭建中心、系统运行，品牌按钮返回管理首页。合同初审与审批发起归在项目上下文，日报从管理者总览进入。账号须退出后重新登录，不提供任意角色选择器。五专家作为任务入口和调用轨迹呈现，不制造七个互不相关的聊天窗口。
+**Creative North Star: "紧凑中性工作台"**
 
-桌面项目默认为阶段看板，手机默认为列表，并保留主动切换。手机销售和管理者采用四或五项底部常用导航，主操作触摸区域至少44px；后台使用展开式导航。全局搜索、主题和退出入口清楚可达。用户全局偏好禁止装饰性的左侧彩色强调竖条；用完整边框、背景、图标、字重和留白区分层级。
+用户选定 Linear 紧凑中性方向。白色与浅灰组织工作区，深灰承担主操作，系统字体、短标题和密集列表让项目与下一步操作成为视觉中心。Linear 是密度与克制程度的参考，CTAI 保留自身业务结构。
 
-输入框使用20px圆角和 canonical CDS composer 阴影；按钮采用克制的可感知 hover/focus 状态。交互支持 CJK composition、Esc 退出弹层、清晰键盘焦点。浅深主题使用同一份 CDS token 定义；CSS 动画使用 canonical easing 并尊重 prefers-reduced-motion。
+界面按销售、管理者、管理员的任务组织；默认展开当前工作，历史、配置和辅助解释按需披露。浅深主题共享语义角色，状态颜色只表达业务含义。
 
-操作均需有真实结果：搜索筛选、商机备注与阶段更新、带练对话与复盘、知识导入、Skill 审核、工作流保存/测试/发布、CSV 导出、运行详情。缺少外部服务时说明需联系管理员配置，并保留手动录入、跟进、保存草稿等可执行动作；不伪造模型连接、客户业绩或工具回执。
+**Key Characteristics:**
+- 中性表面与细分隔线
+- 紧凑工具栏、列表和按需展开的细节
+- 保留中文可读性、键盘焦点与移动触摸空间
 
-合同初审采用桌面并排的原文与风险意见、手机上下阅读；风险通过原文文字背景和等级标签表示，提供精确定位、修改意见、建议条款与处理状态。保留充分行距和可读正文字号，不使用左侧装饰色条。
+## Colors
 
-审批中心沿用暖中性色与 CDS 表单、列表和按钮。列表与详情清晰切换，分开待我审批和我发起的；多级顺序使用有实际流程意义的节点序号。提交材料、审批进度和历史意见按阅读顺序呈现，所有决定操作显示真实指派邮箱和明确状态，驳回/退回要求意见。
+主色为深灰，白色内容区与浅灰侧栏构成中性底色；明暗两套值见 frontmatter。实现来源是 `app/cds-theme.css`，保留的 `--cds-*` 名称是现有组件的兼容接口。
 
-主要业务表单统一单行控件44px高度、14px正文、标签与控件8px间隔、桌面24px字段间距；手机输入使用16px文字并按字段关系重排。下拉选择保留原生语义与键盘操作，局部移除系统外观以保证跨平台高度一致。离开确认弹窗宽480px，采用独立的标题、说明与动作留白，手机按钮竖向排列，初始焦点落在继续编辑操作；完整聊天与搜索弹层继续使用原有结构。
+- **Primary：** `primary` 用于主操作；`primary-hover` 用于悬停。
+- **Neutral：** `surface` / `sidebar` 分开内容与导航；`text`、`text-secondary`、`text-muted` 表达信息层级；`border` / `border-strong`、`hover` / `selected` 表达边界与交互。
+- **Status：** `success`、`warning`、`danger` 表达结果与风险。项目截止日期、结果及用户自定义提醒保留对应业务色与文字标签。
+
+**The Semantic Color Rule.** 颜色用于成功、警告、危险和用户设置的项目提醒；普通导航、按钮与选中状态使用中性色。
+
+## Typography
+
+界面共用系统无衬线字体栈，包含中文回退；不加载展示字体。正文以 frontmatter 的 body 为阅读基准，长文按内容使用更宽松行距。标题常见为 headline，角色首页使用较紧凑的 22px 标题；章节与条目以 title、按钮与工具栏以 label 为基准。元数据常见 11–12px，不用其承载主要正文。手机表单输入提高到 16px。
+
+## Layout
+
+桌面固定侧栏宽 208px，内容区随可用宽度伸缩；主要业务页最大宽 1280px，常用水平内边距 32px。页面内按列表、工具栏、分栏和详情组织，间隔使用 frontmatter 记录的实测节奏，局部表单按字段关系排列。
+
+850px 以下侧栏改为抽屉；销售与管理者在小屏保留常用底部导航，完整入口仍在导航抽屉。各业务模块根据内容在约 600–760px 重排；常用主操作扩大到至少 44px。项目桌面默认为阶段看板，手机默认为列表并保留切换；看板横向滚动，不挤窄卡片。腾讯会议专用入口保持 375px 侧栏场景，内容按窄屏排列。
+
+## Elevation & Depth
+
+**The Flat Work Surface Rule.** 常规内容保持平面，用留白、分隔线和背景区分层次；遮罩与弹层才使用明显阴影。
+
+阴影与焦点值从主题提取到 `.impeccable/design.json`；composer 用内描边表达默认、悬停与输入焦点。交互过渡常用 180ms，composer 为 200ms，使用现有 easing。所有动画尊重 `prefers-reduced-motion`。
+
+## Shapes
+
+使用轻微圆角与细完整边框。小控件、按钮、面板与 composer 的半径见 frontmatter；普通卡片与项目卡片按各自组件定义使用。确认弹窗保留较宽松的圆角和内容留白。图标使用 lucide-react，通常单色；状态和业务图形按其含义配色。
+
+## Components
+
+- **Buttons：** 主要、次要、透明与危险变体共享紧凑的形状；常规按钮最小高度 36px，首页工具操作可为 34px。次要按钮使用细边框；悬停改变背景，键盘操作显示清楚的 focus-visible。
+- **Inputs：** 输入框、下拉与文本域以中性表面和完整边框为底。设置与知识库常用 36px 控件；项目业务表单保留 44px 单行控件。焦点使用主题 focus shadow，错误配合说明文字呈现。
+- **Navigation：** 侧栏行以背景、字重和文字颜色表达当前页。名称、角色可见性、顺序与直接地址统一由 `app/lib/workspace-navigation.ts` 管理；后端权限仍独立校验。
+- **Lists and cards：** 历史与文档采用分隔线列表，项目看板采用轻边框卡片；同类内容对齐，数字使用等宽数字。辅助设置、转写、检索片段与历史按需展开。
+- **Badges：** 默认中性小标签；成功、警告和风险保留文字与语义色，状态不能只靠颜色识别。
+- **Composer：** 使用 composer 半径与内描边，保留中文输入法保护及手动滚动意图。
+- **Confirmation：** 共用未保存更改确认模式；标题、说明、动作分区，默认焦点在继续编辑。窄屏动作纵向排列，Esc 返回编辑；具体业务可保留就地离开提示。
+
+## Do's and Don'ts
+
+### Do:
+- Do 使用实际语义 token，浅深主题同时检查文字、边框和状态。
+- Do 优先采用列表、工具栏和可展开详情，保持主要动作就近可见。
+- Do 保留中文输入法保护、键盘焦点、真实状态和移动端触摸空间。
+
+### Don't:
+- Don't 在卡片、模块或提示左侧添加装饰性色条；完整边框、数据图形和功能分隔线可保留。
+- Don't 把辅助信息堆成多层卡片，或用放大标题和大块留白挤压业务内容。
+- Don't 用中性色改写业务状态，或把缺少配置、读取失败和无数据呈现为成功。

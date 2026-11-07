@@ -31,9 +31,7 @@ export function ProjectBoard({ projects, stageFilter, now, onOpen, onFollowup, o
 }) {
   const { rules } = useBusinessSettings();
   const stages = STAGES.filter(stage => stageFilter === 'all' || stage === stageFilter);
-  return <>
-    <div className="project-board-caption"><p>按阶段查看项目，可左右滚动。</p><span>截止前{rules.urgentDays}天内标红，{rules.warningDays}天内标橙；自定义颜色优先。</span></div>
-    <section className="project-board" aria-label="按阶段排列的项目看板，可左右滚动" tabIndex={0}>
+  return <section className="project-board" aria-label="按阶段排列的项目看板，可左右滚动" tabIndex={0}>
       {stages.map(stage => {
         const items = projects.filter(project => project.stage === stage);
         return <section className="project-board-column" key={stage} aria-label={`${stage}阶段，${items.length}个项目`}>
@@ -50,6 +48,5 @@ export function ProjectBoard({ projects, stageFilter, now, onOpen, onFollowup, o
           })}</ul> : <div className="project-board-column-empty"><p>暂无项目</p><button disabled={disabled} onClick={() => onCreate(stage)}><Plus size={14} />添加项目</button></div>}
         </section>;
       })}
-    </section>
-  </>;
+    </section>;
 }

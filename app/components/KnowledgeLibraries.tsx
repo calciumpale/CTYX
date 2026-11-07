@@ -226,22 +226,21 @@ export function KnowledgeLibraries({ notify }: { notify: (message: string) => vo
   }
 
   return <div className="knowledge-libraries">
-    <header className="knowledge-libraries-heading"><div><h1>资料库</h1><p>{snapshot && !canManage ? '查看团队资料和切片，用真实问题测试检索。资料由管理员或销售管理者维护。' : '按业务建立资料库，导入文档后查看切片，用真实问题核对检索命中。'}</p></div>
+    <header className="knowledge-libraries-heading"><div><h1>资料库</h1>{snapshot && !canManage && <span className="knowledge-readonly">只读 · 管理员和销售管理者可维护</span>}</div>
       <div className="knowledge-actions"><button className="button ghost" disabled={Boolean(busy)} onClick={refresh}><RefreshCw size={15} />刷新</button>{canManage && <button className="button primary" disabled={Boolean(busy)} onClick={() => openDialog({ kind: 'create' })}><Plus size={16} />新建资料库</button>}</div>
     </header>
     {error && <p className="knowledge-feedback is-error" role="alert"><CircleAlert size={17} />{error}</p>}
     {!snapshot ? (busy ? <p className="knowledge-feedback" role="status"><Loader2 size={17} className="spin" />正在读取资料库…</p> : <div className="knowledge-empty"><BookOpen size={24} /><h2>暂未能读取资料库</h2><button className="button secondary" onClick={refresh}>重新加载</button></div>) :
       <div className="knowledge-libraries-grid">
         <nav className="knowledge-library-list" aria-label="资料库列表">
-          <h2>全部资料库</h2>
-          {snapshot.libraries.length ? snapshot.libraries.map(library => <button className="knowledge-library-option" key={library.id} type="button" disabled={Boolean(busy)} aria-pressed={library.id === libraryId} onClick={() => selectLibrary(library.id)}><Database size={16} /><span>{library.name}</span><small>{library.documentCount} 份</small></button>) : <p>资料库建立后会显示在这里。</p>}
+          {snapshot.libraries.length ? snapshot.libraries.map(library => <button className="knowledge-library-option" key={library.id} type="button" disabled={Boolean(busy)} aria-pressed={library.id === libraryId} onClick={() => selectLibrary(library.id)}><Database size={16} /><span>{library.name}</span><small>{library.documentCount} 份</small></button>) : <p>暂无资料库</p>}
         </nav>
         <section className="knowledge-library-main" aria-label={current?.name || '资料库操作'}>
-          <div className="knowledge-library-header"><div><h2>{current?.name || '资料库与检索'}</h2><p>{current ? current.documentCount + ' 份资料' : '按名称管理资料，或测试全部资料库的命中。'}</p></div>
+          <div className="knowledge-library-header"><div><h2>{current?.name || '全部资料'}</h2>{current && <span className="knowledge-library-count">{current.documentCount} 份</span>}</div>
             {canManage && current && <div className="knowledge-actions"><button className="button ghost" disabled={Boolean(busy)} onClick={() => openDialog({ kind: 'rename', library: current })}><Pencil size={15} />改名</button><button className="button secondary" disabled={Boolean(busy)} onClick={() => openDialog({ kind: 'upload' })}><Upload size={16} />导入资料</button></div>}
           </div>
           <div className="knowledge-local-tabs" aria-label="资料库操作"><button type="button" aria-pressed={view === 'documents'} onClick={() => { setView('documents'); setError(''); }}><FileText size={16} />资料</button><button type="button" aria-pressed={view === 'search'} onClick={() => { setView('search'); setError(''); }}><Search size={16} />检索测试</button></div>
-          {!hasEmbedding && <p className="knowledge-feedback"><CircleAlert size={16} />向量服务未配置，可使用全文检索（BM25）。{canManage ? '配置后可在资料列表继续建立向量索引。' : ''}</p>}
+          {!hasEmbedding && <p className="knowledge-feedback"><CircleAlert size={16} />向量服务未配置，当前可用全文检索（BM25）。</p>}
           {view === 'documents' ? documents.length ? <ul className="knowledge-document-list" aria-label="资料列表">{documents.map(document => {
             const indexing = busy === document.id;
             const status = indexing ? '正在建立向量索引' : document.status === 'ready' ? '向量索引已完成' : document.status === 'error' ? '索引失败' : '待向量索引';
@@ -249,7 +248,7 @@ export function KnowledgeLibraries({ notify }: { notify: (message: string) => vo
               <p className={document.status === 'error' ? 'is-error' : ''} aria-live="polite">{status}{document.indexedCount > 0 ? ' · 已向量化 ' + document.indexedCount + ' 段' : ''}{document.error && !indexing ? ' · ' + document.error : ''}</p></div></div>
               <div className="knowledge-actions knowledge-row-actions"><button className="button ghost" disabled={Boolean(busy)} onClick={() => preview(document)}><Layers size={15} />预览切片</button>{canManage && hasEmbedding && document.status !== 'ready' && <button className="button ghost" disabled={Boolean(busy)} onClick={() => retryIndex(document)}>{indexing ? <Loader2 size={15} className="spin" /> : <RefreshCw size={15} />}{document.status === 'error' ? '重试索引' : '继续索引'}</button>}{canManage && <button className="icon-button" disabled={Boolean(busy)} aria-label={'删除 ' + document.title} onClick={() => openDialog({ kind: 'remove', document })}><Trash2 size={17} /></button>}</div>
             </li>;
-          })}</ul> : <div className="knowledge-empty"><FileText size={26} /><h3>{current ? '这个库还没有资料' : '还没有资料库'}</h3><p>{canManage ? current ? '导入第一份文档，再查看如何分块。' : '创建一个库后，就可以导入产品说明、销售流程或业务政策。' : '资料由管理员或销售管理者维护。'}</p>{canManage && <button className="button secondary" onClick={() => openDialog(current ? { kind: 'upload' } : { kind: 'create' })}>{current ? <Upload size={16} /> : <Plus size={16} />}{current ? '导入第一份资料' : '创建第一个资料库'}</button>}</div>
+          })}</ul> : <div className="knowledge-empty"><FileText size={26} /><h3>{current ? '这个库还没有资料' : '还没有资料库'}</h3>{!canManage && <p>请联系管理员或销售管理者导入。</p>}</div>
           : <div className="knowledge-search">
             <form className="knowledge-form" onSubmit={searchDocuments}>
               <label>检索问题<input placeholder="例如：客户续租时需要提供哪些资料？" value={query} maxLength={1500} disabled={Boolean(busy)} onChange={event => setQuery(event.target.value)} required /></label>
@@ -259,7 +258,7 @@ export function KnowledgeLibraries({ notify }: { notify: (message: string) => vo
             </form>
             {search && <div className="knowledge-search-output" aria-live="polite"><div className="knowledge-search-summary"><h3>命中 {search.result.hits.length} 段</h3><p>{modeLabels[search.result.mode]} · {search.query}</p></div>
               {search.result.notice && <p className="knowledge-feedback"><CircleAlert size={16} />{search.result.notice}</p>}
-              {search.result.hits.length ? <ol className="knowledge-hit-list">{search.result.hits.map(hit => <li key={hit.id}><h4>{hit.title}</h4><p>{hit.libraryName} · {hit.fileName}{hit.heading ? ' · ' + hit.heading : ''} · 切片 {hit.ordinal}</p><div className="knowledge-hit-text"><strong>命中片段</strong><p>{hit.matchedText}</p></div>{hit.parent && <details><summary><ChevronRight size={15} />查看父块上下文</summary><p>{hit.context}</p></details>}<footer>{hit.bm25 !== null && <span>BM25 {hit.bm25.toFixed(3)}</span>}{hit.vector !== null && <span>向量相似度 {hit.vector.toFixed(3)}</span>}</footer></li>)}</ol> : <p className="knowledge-empty-search">没有匹配片段。可以换一个关键词、扩大范围，或核对资料和索引状态。</p>}
+              {search.result.hits.length ? <ol className="knowledge-hit-list">{search.result.hits.map(hit => <li key={hit.id}><h4>{hit.title}</h4><p>{hit.libraryName} · {hit.fileName}{hit.heading ? ' · ' + hit.heading : ''} · 切片 {hit.ordinal}</p><div className="knowledge-hit-text"><strong>命中片段</strong><p>{hit.matchedText}</p></div>{hit.parent && <details><summary><ChevronRight size={15} />查看父块上下文</summary><p>{hit.context}</p></details>}<footer>{hit.bm25 !== null && <span>BM25 {hit.bm25.toFixed(3)}</span>}{hit.vector !== null && <span>向量相似度 {hit.vector.toFixed(3)}</span>}</footer></li>)}</ol> : <p className="knowledge-empty-search">未命中。请调整关键词、检索范围或检查索引状态。</p>}
             </div>}
           </div>}
         </section>
@@ -271,9 +270,9 @@ export function KnowledgeLibraries({ notify }: { notify: (message: string) => vo
         <div className="knowledge-actions knowledge-dialog-actions"><button type="button" className="button secondary" disabled={Boolean(busy)} onClick={closeDialog}>取消</button><button className="button primary" disabled={Boolean(busy) || !name.trim()}>{busy === 'name' ? '正在保存…' : dialog.kind === 'create' ? '创建资料库' : '保存名称'}</button></div>
       </form>}
       {dialog.kind === 'upload' && <form className="knowledge-form" onSubmit={saveDocument}>
-        <p className="knowledge-dialog-description">导入到「{current?.name}」。资料库保存解析后的正文和文件名。</p>
+        <p className="knowledge-dialog-description">{current?.name} · 保存解析正文和文件名</p>
         <div className="knowledge-local-tabs" aria-label="资料来源"><button type="button" aria-pressed={importMode === 'file'} disabled={Boolean(busy)} onClick={() => { setImportMode('file'); setDraft(previous => ({ ...previous, text: '', fileName: '', warnings: [] })); setDialogError(''); }}><Upload size={15} />上传文件</button><button type="button" aria-pressed={importMode === 'text'} disabled={Boolean(busy)} onClick={() => { setImportMode('text'); setDraft(previous => ({ ...previous, text: '', fileName: '', warnings: [] })); setDialogError(''); }}><FileText size={15} />粘贴文本</button></div>
-        {importMode === 'file' ? <label>选择文档<input type="file" accept={KNOWLEDGE_UPLOAD_ACCEPT} disabled={Boolean(busy)} onChange={event => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ''; readFile(file); }} /><small>支持 PDF、DOCX、TXT、Markdown 和 CSV，单个文件最大 10 MB。</small>{busy === 'parse' ? <small role="status">正在解析文件…</small> : draft.fileName && <small role="status">{draft.fileName} · 已提取 {draft.text.length.toLocaleString()} 字符</small>}</label> :
+        {importMode === 'file' ? <label>选择文档<input type="file" accept={KNOWLEDGE_UPLOAD_ACCEPT} disabled={Boolean(busy)} onChange={event => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ''; readFile(file); }} /><small>PDF / DOCX / TXT / Markdown / CSV · 最大 10 MB</small>{busy === 'parse' ? <small role="status">正在解析文件…</small> : draft.fileName && <small role="status">{draft.fileName} · 已提取 {draft.text.length.toLocaleString()} 字符</small>}</label> :
           <label>正文<textarea rows={6} maxLength={KNOWLEDGE_TEXT_LIMIT} value={draft.text} onChange={event => setDraft(previous => ({ ...previous, text: event.target.value }))} disabled={Boolean(busy)} required placeholder="粘贴政策、话术或说明正文" /><small>{draft.text.length.toLocaleString()} / {KNOWLEDGE_TEXT_LIMIT.toLocaleString()} 字符</small></label>}
         {draft.warnings.map(warning => <p key={warning} className="knowledge-feedback"><CircleAlert size={16} />{warning}</p>)}
         <label>资料标题<input value={draft.title} maxLength={titleLimit} onChange={event => setDraft(previous => ({ ...previous, title: event.target.value }))} disabled={Boolean(busy)} required /></label>

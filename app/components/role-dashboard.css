@@ -1,0 +1,45 @@
+.role-dashboard { max-width: 1240px; padding: 24px 32px 36px; }
+.role-dashboard .role-dashboard-heading { align-items: center; gap: 16px; margin-bottom: 28px; }
+.role-dashboard-title { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; min-width: 0; }
+.role-dashboard .role-dashboard-heading h1 { margin: 0; font-size: 22px; line-height: 1.4; letter-spacing: -.02em; }
+.role-dashboard-title time { display: inline-flex; align-items: center; gap: 6px; color: var(--cds-text-secondary); font-size: 12px; white-space: nowrap; }
+.role-dashboard .role-primary-actions { margin: 0; gap: 8px; flex-shrink: 0; }
+.role-dashboard .button { min-height: 34px; min-width: 0; padding: 7px 11px; font-size: 13px; }
+.role-dashboard .role-section-heading { margin-bottom: 8px; }
+.role-dashboard .role-section-heading h2 { font-size: 14px; }
+.role-dashboard .role-section-heading > button { min-height: 32px; font-size: 12px; padding-block: 5px; }
+.role-dashboard .role-sales-columns { gap: 28px; margin-bottom: 24px; grid-template-columns: minmax(0, 1.7fr) minmax(230px, 1fr); }
+.role-dashboard .role-project-row { padding: 14px 4px; gap: 12px; }
+.role-dashboard .role-project-row-main strong { font-size: 14px; }
+.role-dashboard .role-project-row-main p { margin-top: 5px; line-height: 1.65; }
+.role-dashboard .role-project-row-main > span:not(.role-project-row-title) { margin-top: 3px; }
+.role-dashboard .role-manager-tasks { margin-bottom: 28px; }
+.role-dashboard .role-task-list { border: 0; border-top: 1px solid var(--cds-border); border-bottom: 1px solid var(--cds-border); border-radius: 0; background: transparent; }
+.role-dashboard .role-task-list > button { padding: 13px 4px; gap: 12px; }
+.role-dashboard .role-task-list strong { font-size: 14px; font-weight: 500; }
+.role-dashboard .role-task-list > button > svg { width: 17px; height: 17px; }
+.role-dashboard .role-task-count { font-size: 12px; }
+.role-dashboard .role-intervention-section { margin-bottom: 24px; }
+.role-dashboard .role-team-apps-entry { min-height: 48px; margin-top: 20px; padding: 12px 4px; gap: 10px; }
+.role-dashboard .role-team-apps-entry strong { font-size: 13px; }
+.role-dashboard .role-team-apps-entry > svg { width: 17px; height: 17px; }
+.role-dashboard .role-first-customer, .role-dashboard .role-no-deadlines, .role-dashboard .role-quiet-empty { padding-block: 28px; }
+.role-dashboard .role-first-customer h3 { font-size: 14px; margin-block: 10px; }
+.role-dashboard .role-quiet-empty strong { font-size: 13px; font-weight: 500; }
+.role-dashboard button:focus-visible { outline: 2px solid var(--cds-clay); outline-offset: 3px; }
+@media (max-width: 900px) {
+  .role-dashboard { padding: 22px 24px 32px; }
+  .role-dashboard .role-dashboard-heading { flex-wrap: wrap; }
+  .role-dashboard .role-sales-columns { gap: 24px; grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 700px) {
+  .role-dashboard { padding: 20px 16px 28px; }
+  .role-dashboard .role-dashboard-heading { margin-bottom: 20px; }
+  .role-dashboard .role-primary-actions { width: 100%; }
+  .role-dashboard .role-primary-actions .button { min-height: 44px; flex: 1; padding-inline: 9px; }
+  .role-dashboard .role-task-list > button { flex-wrap: nowrap; min-height: 52px; padding: 12px 2px; gap: 10px; }
+  .role-dashboard .role-task-list > button > span:first-of-type { flex: 1; }
+  .role-dashboard .role-task-count { margin: 0; font-size: 11px; }
+  .role-dashboard .role-section-heading > button { min-height: 44px; }
+  .role-dashboard .role-project-row-main p { font-size: 13px; }
+}

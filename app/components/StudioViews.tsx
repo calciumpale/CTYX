@@ -323,7 +323,7 @@ export function SettingsView({ state,onConnectionChanged }: ViewProps & {onConne
     </PageHeading>
     <ApiConnectionSettings onSaved={onConnectionChanged}/>
     <SpeechRecognitionSettings/>
-    <CompanyConnectionSettings/><EmbeddingSettings/>
+    <CompanyConnectionSettings provider="jinghai"/><CompanyConnectionSettings/><EmbeddingSettings/>
     <section className="studio-settings-card">
       <div className="studio-settings-card-title"><span className="studio-icon-clay"><Database size={23}/></span><div><h2>数据与执行</h2><p>当前团队共用的服务与配置</p></div><ModeTag mode={state.model.connected?'live':'demo'} configured/></div>
       <div className="studio-setting-line"><span>当前模型</span><strong>{state.model.connected?modelDisplayName(state.model.name):'未配置大模型 API'}</strong></div>

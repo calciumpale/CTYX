@@ -3,6 +3,6 @@
   "private": true,
   "type": "module",
   "engines": { "node": ">=22.13.0" },
-  "scripts": { "test": "PROSPECT_BROWSER_TEST=1 node --test ../../tests/prospecting-bridge.test.mjs" },
+  "scripts": { "test": "PROSPECT_BROWSER_TEST=1 node --test ../../tests/prospecting-bridge.test.mjs ../../tests/prospecting-sender-identity.test.mjs ../../tests/prospecting-retry-transcript.test.mjs ../../tests/prospecting-send-retry.test.mjs ../../tests/prospecting-conversation-bridge.test.mjs ../../tests/prospecting-conversation-transcript.test.mjs" },
   "dependencies": { "playwright": "1.61.0" }
 }

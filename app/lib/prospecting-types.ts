@@ -1,5 +1,5 @@
 export type ProspectReviewMode = 'manual' | 'automatic';
-export type ProspectJobKind = 'discover' | 'collect' | 'send';
+export type ProspectJobKind = 'discover' | 'collect' | 'send' | 'readConversation' | 'reply';
 export type ProspectJobStatus = 'queued' | 'running' | 'done' | 'failed' | 'unknown' | 'cancelled';
 export type ProspectLeadStatus = 'pending' | 'rejected' | 'queued' | 'sending' | 'submitted' | 'failed' | 'unknown' | 'unreachable';
 export interface ProspectVideo { id: string; title: string; url: string }
@@ -26,7 +26,7 @@ export interface ProspectLead extends ProspectComment {
 }
 export interface ProspectJobView {
   id: string; campaignId: string; kind: ProspectJobKind; status: ProspectJobStatus;
-  createdAt: string; updatedAt: string; leadId?: string; error?: string; summary?: string;
+  createdAt: string; updatedAt: string; leadId?: string; error?: string; summary?: string; warnings?: string[];
 }
 export interface ProspectDeviceView {
   id?: string; label?: string; online: boolean; authenticated: boolean;
@@ -42,6 +42,10 @@ export interface ProspectBridgeJob {
     keywords?: string[]; requirements?: string; videos?: ProspectVideo[];
     maxCommentsPerVideo?: number; recipientId?: string; profileUrl?: string;
     message?: string; senderAccountId?: string;
+    retry?: { previousJobId: string; checkSince?: string };
+    conversationId?: string; limit?: number; replyId?: string;
+    expectedSnapshotId?: string; actor?: 'agent' | 'human';
+    manualSync?: boolean; observeOnly?: boolean;
   };
 }
 export type ProspectBridgeResult =

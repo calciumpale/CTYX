@@ -52,10 +52,26 @@ export function parseMediaCrawlerExport(content:unknown):ProspectComment[]{
   let rows:unknown;try{rows=content.trim().startsWith('[')?JSON.parse(content):content.trim().split('\n').filter(x=>x.trim()).map(x=>JSON.parse(x));}catch{throw new DomainError('无法解析评论文件，请使用MediaCrawler评论JSON或JSONL导出');}
   const normalized=normalizeComments(rows,'mediacrawler');if(!normalized.length)throw new DomainError('文件中没有评论');return normalized;
 }
-export function scoreComment(comment:ProspectComment,campaign:Pick<CampaignInput,'greetingTemplate'>):AnalyzedComment{
-  const purchase=/(多少钱|价格|报价|购买|怎么买|试用|怎么用|怎么联系|求推荐|求方案|有没有|需要|想要)/.test(comment.text);
-  const negative=/(不用|不要|广告|骗子|别联系|不需要|没兴趣)/.test(comment.text);
-  return {...comment,intentScore:negative?5:purchase?65:20,reason:negative?'含拒绝或负面表达，建议不触达':purchase?'规则识别到需求或询问信号，需人工确认':'未识别到明确需求，需结合上下文判断',greeting:campaign.greetingTemplate.replaceAll('{nickname}',comment.nickname).replaceAll('{comment}',comment.text.slice(0,80)).slice(0,300),analysisSource:'rules'};
+type IntentContext=Partial<Pick<CampaignInput,'requirements'|'keywords'>>;
+export function scoreCommentIntent(commentText:string,context:IntentContext={}):Pick<ProspectLead,'intentScore'|'reason'>{
+  const content=text(commentText);
+  // A waived fee is a purchase condition, not a refusal to be contacted.
+  const refusalText=content.replace(/(?:不用|不需要|不要|免|没有|不收)(?:交|付|支付|缴纳)?(?:转让费|中介费|手续费|押金|租金)/g,'费用条件');
+  if(/(?:别|不要|不用|请勿)(?:再)?(?:联系|私信|打扰)|不需要|没兴趣|不感兴趣|不考虑|不想(?:租|买|要)|不(?:租|买)了|骗子|纯广告|(?:^|[，。！？；\s])(?:不用|不要)(?:了)?(?:$|[，。！？；\s])/.test(refusalText))return {intentScore:5,reason:'规则识别到拒绝或负面表达，建议不触达'};
+  const contextText=[context.requirements??'',...(context.keywords??[])].join(' ');
+  if(/背景音乐|bgm|配乐|这首歌|什么歌|歌名/i.test(content)&&!/音乐|歌曲|音频|配乐|作曲/.test(contextText))return {intentScore:10,reason:'评论主要询问背景音乐，未体现目标产品需求'};
+  const rentalInterest=/求租|想.{0,8}租|找.{0,8}(?:商铺|门面|店铺|店面)|看铺|看房|看店/.test(content);
+  const sellerInvitation=/有(?:意|需要).{0,10}(?:联系|私信)|欢迎(?:咨询|联系|私信)|(?:想租|要租|需要).{0,6}(?:联系我|私信我)|厂家直销|承接业务/.test(content);
+  const propertyOffer=/(?:商铺|门面|店铺|店面|旺铺).{0,10}(?:出租|转让|招租)/.test(content)&&!rentalInterest&&!/吗|么|？|\?|多少|怎么|请问/.test(content);
+  if(sellerInvitation||propertyOffer)return {intentScore:10,reason:'规则识别到商家供给或推广信息，未体现买方需求'};
+  if(rentalInterest)return {intentScore:88,reason:'规则识别到明确求租或看铺意向，需人工核实需求'};
+  if(/多少钱|价格|报价|询价|怎么买|购买|试用|怎么联系|联系方式|租金.{0,8}(?:多少|几|怎么)/.test(content))return {intentScore:80,reason:'规则识别到询价、购买或试用信号，需人工核实需求'};
+  if(/商铺|店铺|店面|门面|旺铺|租房|房产/.test(contextText)&&/地址|在哪里|在哪|位置|还在吗|还有吗|能做餐饮|可以做餐饮/.test(content))return {intentScore:72,reason:'结合任务识别到铺位位置或可用性询问，需人工确认'};
+  if(/怎么用|求推荐|求方案|有没有|需要|想要/.test(content))return {intentScore:60,reason:'规则识别到一般需求或询问信号，尚不足以确认高意向'};
+  return {intentScore:20,reason:'未识别到明确需求，需结合上下文判断'};
+}
+export function scoreComment(comment:ProspectComment,campaign:Pick<CampaignInput,'greetingTemplate'>&IntentContext):AnalyzedComment{
+  return {...comment,...scoreCommentIntent(comment.text,campaign),greeting:campaign.greetingTemplate.replaceAll('{nickname}',comment.nickname).replaceAll('{comment}',comment.text.slice(0,80)).slice(0,300),analysisSource:'rules'};
 }
 export function applyModelAnalysis(comments:ProspectComment[],value:unknown,campaign:Pick<CampaignInput,'greetingTemplate'>):AnalyzedComment[]{
   const rows=Array.isArray(value)?value:[];

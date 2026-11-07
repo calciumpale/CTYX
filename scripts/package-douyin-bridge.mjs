@@ -10,7 +10,7 @@ const root=dirname(dirname(fileURLToPath(import.meta.url)));
 const source=join(root,'tools','douyin-bridge');
 const destination=join(root,'public','downloads','douyin-bridge.zip');
 // Explicit source files only: never recurse into credentials, profiles, logs or dependencies.
-const sourceFiles=['bridge.mjs','bridge-core.mjs','browser-adapter.mjs','package.json','package-lock.json','README.md'];
+const sourceFiles=['bridge.mjs','bridge-core.mjs','browser-adapter.mjs','retry-transcript.mjs','conversation-transcript.mjs','package.json','package-lock.json','README.md'];
 const installation=`# 下载版抖音助手安装说明
 
 本下载包可以独立使用，无需下载营销工作台源码。请先解压 ZIP，再在解压后的 douyin-bridge 文件夹中打开终端。以下命令都在这个文件夹中运行。
@@ -59,7 +59,7 @@ run 启动后保持终端和浏览器打开，回到工作台即可发现账号�
 ## 使用中的状态
 
 - 网页显示离线：确认 run 仍在运行，并查看终端提示。
-- 私信显示“待核对”：先查看原抖音会话，助手不会自动重新发送，不要删除本地日志来尝试重发。
+- 私信失败时，在原评论点“重试发送”。显示“待核对”时，点“核对并重试”，助手会先核对原会话，再决定是否需要发送。
 - 更新助手：先停止旧进程，再解压新版本并重新执行 npm ci；保留原配置和状态目录。
 
 README.md 保留了源码版的完整能力、协议和限制说明。其中 tools/douyin-bridge 前缀和测试命令适用于完整源码仓库；独立下载版按本文件安装，使用 doctor 检查连接，无需运行仓库测试。

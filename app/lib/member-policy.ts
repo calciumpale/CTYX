@@ -25,12 +25,16 @@ export function assertMemberApi(role:MemberRole,pathname:string,method:string):v
   if(/^\/api\/meeting-imports\/media\/[a-zA-Z0-9_.:-]+$/.test(path)){if(role!=='admin'&&['GET','HEAD'].includes(verb))return;return denied();}
   if(path==='/api/approvals'){if(['GET','POST'].includes(verb))return;return denied();}
   if(path==='/api/business-settings'){if(verb==='GET'||role==='admin'&&verb==='POST')return;return denied();}
+  if(path==='/api/knowledge-library'){if(verb==='GET'||verb==='POST')return;return denied();}
   if(['/api/connections','/api/embedding-connection','/api/company-connection'].includes(path)){if(role==='admin'&&['GET','POST'].includes(verb))return;return denied();}
   if(path==='/api/workspace-members'){if(role==='admin'&&['GET','POST','PATCH'].includes(verb))return;return denied();}
   if(path==='/api/speech-settings'){if(verb==='GET'||verb==='POST'&&role!=='sales')return;return denied();}
   if(path==='/api/sales-reports'){if(role==='manager'&&['GET','POST'].includes(verb))return;return denied();}
   if(['/api/deal-recordings','/api/recording-transcriptions','/api/training-voice'].includes(path)){if(role!=='admin'&&['GET','HEAD','POST','DELETE'].includes(verb))return;return denied();}
   return denied();
+}
+export function assertKnowledgeLibraryAction(role:MemberRole,action:string):void {
+  if(action!=='search'&&role==='sales')denied();
 }
 export function assertMemberRoute(request:Request,role:MemberRole):void {
   const url=new URL(request.url);assertMemberApi(role,url.pathname,request.method);

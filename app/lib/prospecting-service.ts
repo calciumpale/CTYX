@@ -8,8 +8,9 @@ import {analyzeProspects,discoverKeywords} from './prospecting-analysis.ts';
 import {requestModelText} from './model-client.ts';
 import type {EffectiveModel} from './connection-config.ts';
 import type {ProspectSnapshot} from './prospecting-types.ts';
+import type {ProspectChatAgentInput,ProspectChatDecision} from './prospecting-chat-types.ts';
 
-interface Dependencies {db:D1Database;readModel:(ownerId:string,origin:string)=>Promise<EffectiveModel|null>}
+interface Dependencies {db:D1Database;readModel:(ownerId:string,origin:string)=>Promise<EffectiveModel|null>;decideChat?:(ownerId:string,origin:string,input:ProspectChatAgentInput)=>Promise<ProspectChatDecision>}
 const json=(value:unknown)=>Response.json(value,{headers:memberResponseHeaders});
 const failure=(error:unknown)=>Response.json({error:error instanceof DomainError?error.message:'获客服务暂时不可用，已保存的任务不会丢失，请稍后刷新'},{status:error instanceof DomainError?error.status:503,headers:memberResponseHeaders});
 export function createProspectingService(deps:Dependencies){
@@ -23,8 +24,8 @@ export function createProspectingService(deps:Dependencies){
  }
  /** Each poll processes a small durable batch, so work continues with the page closed. */
  async function analyzeBatch(ownerId:string,memberId:string,origin:string,campaignId?:string):Promise<number>{
-  const model=await getModel(ownerId,origin);if(!model)return 0;
   const pending=await store.pendingAnalysis(ownerId,memberId,campaignId,10);if(!pending.length)return 0;
+  const model=await getModel(ownerId,origin);if(!model)return 0;
   // One model call per poll stays below the bridge's 45-second request budget.
   const campaignIds=[pending[0].campaignId];
   for(const id of campaignIds){const campaign=await store.campaign(ownerId,memberId,id);const selected=pending.filter(x=>x.campaignId===id);const result=await analyzeProspects(campaign,selected,generator(model));
@@ -35,9 +36,19 @@ export function createProspectingService(deps:Dependencies){
   try{
    const role=requireMemberRole(request);assertMemberApi(role,'/api/prospecting',request.method);
    const ownerId=outerOwnerId(request),memberId=request.headers.get('x-ctai-member-account-id')!,origin=new URL(request.url).origin;
-   if(request.method==='GET')return json(await snapshot(ownerId,memberId,origin,new URL(request.url).searchParams.get('campaignId')||undefined));
+   if(request.method==='GET'){const query=new URL(request.url).searchParams;if(query.get('mode')==='chat')return json(await store.chat.snapshot(ownerId,memberId,role,query.get('campaignId')||undefined,query.get('conversationId')||undefined));return json(await snapshot(ownerId,memberId,origin,query.get('campaignId')||undefined));}
    assertMemberOrigin(request);const input=await readMeetingBody(request,1600000);const action=input.action;
    let campaignId=typeof input.campaignId==='string'?prospectId(input.campaignId):undefined;let message='操作已保存';let deviceCredentials:Awaited<ReturnType<typeof store.connect>>|undefined;
+   if(['chatSettings','chatTakeover','chatResume','chatReply','chatSync'].includes(String(action))){
+    if(action==='chatSettings'){if(!campaignId||typeof input.enabled!=='boolean')throw new DomainError('请选择获客任务并设置会话开关');await store.chat.settings(ownerId,memberId,campaignId,input.enabled);message=input.enabled?'会话同步和获客助手已开启':'已停止自动同步和回复，未执行的回复已取消';}
+    else if(action==='chatSync'){if(!campaignId)throw new DomainError('请选择要同步的会话');const queued=await store.chat.sync(ownerId,memberId,campaignId,prospectId(input.conversationId));message=queued?'已请求助手同步抖音私信':'同步已在队列中或刚完成';}
+    else{if(!Number.isInteger(input.version)||Number(input.version)<1)throw new DomainError('会话版本无效');const id=prospectId(input.conversationId);
+     if(action==='chatTakeover'){await store.chat.takeover(ownerId,memberId,id,Number(input.version));message='已接管会话，助手不会继续自动回复';}
+     else if(action==='chatResume'){await store.chat.resume(ownerId,memberId,id,Number(input.version));message='已恢复助手，下一条客户消息会继续处理';}
+     else{await store.chat.reply(ownerId,memberId,id,Number(input.version),typeof input.message==='string'?input.message:'');message='人工回复已排队，助手会核对当前会话后提交';}
+    }
+    return json({message,chat:await store.chat.snapshot(ownerId,memberId,role,campaignId,typeof input.conversationId==='string'?input.conversationId:undefined)});
+   }
    if(action==='connect'){deviceCredentials=await store.connect(ownerId,memberId,text(input.label,80));message='配对配置已生成，请下载后交给本机同步助手';}
    else if(action==='disconnect'){await store.disconnect(ownerId,memberId);message='设备已断开，待执行任务已取消；执行中的发送请核对抖音会话';}
    else if(action==='create'){
@@ -53,6 +64,9 @@ export function createProspectingService(deps:Dependencies){
     }else if(action==='review'){
      if(!Number.isInteger(input.version)||Number(input.version)<1||!['approve','reject'].includes(String(input.decision)))throw new DomainError('审核参数不正确');
      await store.review(ownerId,memberId,campaignId,prospectId(input.leadId),Number(input.version),input.decision as 'approve'|'reject',typeof input.greeting==='string'?input.greeting:'',readMemberDisplayName(request));message=input.decision==='approve'?'已审核并排队；提交结果将在执行记录中显示':'已拒绝这条线索';
+    }else if(action==='retrySend'){
+     if(!Number.isInteger(input.version)||Number(input.version)<1)throw new DomainError('重试参数不正确');
+     await store.retrySend(ownerId,memberId,campaignId,prospectId(input.leadId),Number(input.version),readMemberDisplayName(request));message='已按原审核文案排队重试；助手会先核对既有发送记录';
     }else if(action==='pause'||action==='resume'){await store.setPaused(ownerId,memberId,campaignId,action==='pause');message=action==='pause'?'任务已暂停，排队项已取消；执行中的发送不会撤回':'任务已恢复；已取消的招呼需重新审核';}
     else if(action==='import'){const c=await store.campaign(ownerId,memberId,campaignId);const comments=parseMediaCrawlerExport(input.content);await store.insertComments(ownerId,memberId,campaignId,comments.map(x=>scoreComment(x,c)));message='评论已导入用于分析；匿名导入身份不会进入私信队列';}
     else if(action==='analyze'){
@@ -71,14 +85,25 @@ export function createProspectingService(deps:Dependencies){
    const input=await readMeetingBody(request,action==='complete'?1600000:16000);
    const deviceId=prospectId(input.deviceId);const device=await store.authenticate(deviceId,request.headers.get('authorization')?.replace(/^Bearer /,'')??'');
    if(action==='poll'){
-    await store.seen(deviceId,{authenticated:input.authenticated===true,accountId:typeof input.accountId==='string'?input.accountId:undefined,accountName:text(input.accountName,100),message:text(input.message,500)});
+    await store.seen(deviceId,{authenticated:input.authenticated===true,accountId:typeof input.accountId==='string'?input.accountId:undefined,accountName:text(input.accountName,100),message:text(input.message,500),verifiedReadOnlyAccountId:typeof input.verifiedReadOnlyAccountId==='string'?input.verifiedReadOnlyAccountId:undefined});
     const current=await store.device(device.owner_id,device.member_id);
     if(!current.authenticated)return json({job:null});
-    await analyzeBatch(device.owner_id,device.member_id,new URL(request.url).origin);
+    const supportsConversations=input.conversationVersion===1;
+    const verifiedAccountId=typeof input.verifiedReadOnlyAccountId==='string'&&/^dy-readonly-[a-f0-9]{24}$/.test(input.verifiedReadOnlyAccountId)&&current.accountId===input.accountId&&!current.accountId?.startsWith('dy-readonly-')?current.accountId:undefined;
+    const acknowledgement=verifiedAccountId?{verifiedAccountId}:{};
+    const claim=()=>store.claim(deviceId,input.sendRetryVersion===1,supportsConversations);
+    if(supportsConversations&&await store.chat.hasQueuedManualSync(deviceId)){
+     if(request.signal.aborted)throw new DomainError('请求已取消，未领取新任务',409);
+     const queued=await claim();
+     if(queued)return json({job:queued,...acknowledgement});
+    }
+    const chatProcessed=supportsConversations?await store.chat.processOne(device.owner_id,device.member_id,new URL(request.url).origin,deps.decideChat):false;
+    if(!chatProcessed)await analyzeBatch(device.owner_id,device.member_id,new URL(request.url).origin);
     if(request.signal.aborted)throw new DomainError('请求已取消，未领取新任务',409);
     await store.enqueueAutomatic(device.owner_id,device.member_id);
+    if(supportsConversations)await store.chat.schedule(deviceId);
     if(request.signal.aborted)throw new DomainError('请求已取消，未领取新任务',409);
-    return json({job:await store.claim(deviceId)});
+    return json({job:await claim(),...acknowledgement});
    }
    const jobId=prospectId(input.jobId),lease=typeof input.leaseToken==='string'?input.leaseToken:'';
    if(action==='heartbeat'){await store.renew(deviceId,jobId,lease);return json({ok:true});}

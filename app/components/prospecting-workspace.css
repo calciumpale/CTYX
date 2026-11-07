@@ -20,6 +20,7 @@
 .prospect-heading { margin-bottom: 24px; }
 .prospect-heading p { color: var(--cds-text-secondary); margin-top: 10px; max-width: 65ch; }
 .prospect-heading > .button { flex: none; }
+.prospect-heading-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; flex: none; }
 .prospect-path { padding: 0 0 26px; margin: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 16px 28px; color: var(--cds-text-secondary); font-size: 13px; }
 .prospect-path li { display: flex; align-items: center; gap: 8px; }
 .prospect-path li > span { display: inline-flex; align-items: center; justify-content: center; width: 23px; height: 23px; border: 1px solid var(--cds-border); border-radius: 50%; font-size: 12px; font-variant-numeric: tabular-nums; }
@@ -83,7 +84,7 @@
 .prospect-campaign-summary h2 { overflow-wrap: anywhere; }
 .prospect-campaign-summary p { margin-top: 9px; max-width: 70ch; white-space: pre-wrap; overflow-wrap: anywhere; }
 .prospect-policy { display: flex; gap: 8px 18px; flex-wrap: wrap; margin-top: 14px; font-size: 12px; color: var(--cds-text-secondary); }
-.prospect-tabs { display: flex; gap: 23px; border-bottom: 1px solid var(--cds-border); margin: 7px 0 30px; }
+.prospect-tabs { display: flex; gap: 23px; overflow-x: auto; scrollbar-width: thin; scrollbar-color: var(--cds-border-strong) transparent; border-bottom: 1px solid var(--cds-border); margin: 7px 0 30px; }
 .prospect-tabs > button { display: inline-flex; align-items: center; gap: 7px; min-height: 48px; padding: 9px 0 13px; color: var(--cds-text-secondary); background: transparent; border: 0; border-bottom: 2px solid transparent; font-size: 14px; white-space: nowrap; }
 .prospect-tabs > button[aria-pressed=true] { color: var(--cds-text-primary); border-bottom-color: var(--cds-text-primary); font-weight: 550; }
 .prospect-tabs > button:hover { color: var(--cds-text-primary); }
@@ -108,6 +109,13 @@
 .prospect-candidate-detail > a { font-size: 12px; }
 .prospect-candidate-detail ul { padding-left: 17px; margin: 12px 0 0; }
 .prospect-candidate-detail li + li { margin-top: 5px; }
+.prospect-intent-summary { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px 24px; margin-bottom: 20px; padding: 16px 18px; background: var(--cds-surface-0); border-radius: 10px; font-variant-numeric: tabular-nums; }
+.prospect-intent-summary > div { flex: 1 1 280px; }
+.prospect-intent-summary strong { font-weight: 550; }
+.prospect-intent-summary span { display: inline-block; margin-left: 12px; font-size: 12px; color: var(--cds-text-secondary); }
+.prospect-intent-summary p { margin-top: 6px; font-size: 12px; color: var(--cds-text-secondary); text-wrap: pretty; }
+.prospect-intent-summary > .button { flex: none; }
+.prospect-intent-badge { padding: 3px 8px; border: 1px solid var(--cds-border-strong); border-radius: 999px; background: var(--cds-fill-ghost-selected); color: var(--cds-text-primary); font-size: 11px; font-weight: 550; line-height: 1.5; white-space: nowrap; }
 .prospect-review-toolbar { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; margin: 0 0 16px; }
 .prospect-review-toolbar > label { display: flex; align-items: center; gap: 9px; font-size: 13px; min-height: 44px; }
 .prospect-review-toolbar select { width: auto; min-width: 150px; }

@@ -10,8 +10,18 @@ const object = value => value !== null && typeof value === 'object' && !Array.is
 const loopback = host => ['localhost', '127.0.0.1', '[::1]'].includes(host);
 const hash = value => createHash('sha256').update(value).digest('hex');
 const id = value => typeof value === 'string' && /^[a-zA-Z0-9_.:-]{1,256}$/.test(value);
+const outbound = kind => kind === 'send' || kind === 'reply';
+const sendFingerprint = job => {
+  const input = { ...job.input }; delete input.retry;
+  return hash(JSON.stringify({ kind: job.kind, campaignId: job.campaignId, input }));
+};
 export const checkAbort = signal => { if (signal?.aborted) throw new BridgeError('任务已停止，请检查设备连接或任务状态。', 'ABORTED'); };
 export const safeError = error => error instanceof BridgeError ? error.message : '本地页面操作未完成，请检查浏览器、登录和页面结构。';
+export function verifiedAccountUpgrade(previousAccountId, account) {
+  return typeof previousAccountId === 'string' && /^dy-readonly-[a-f0-9]{24}$/.test(previousAccountId) &&
+    account?.authenticated === true && account.verifiedReadOnlyAccountId === previousAccountId &&
+    typeof account.accountId === 'string' && /^[a-zA-Z0-9_.-]{5,140}$/.test(account.accountId) && !account.accountId.startsWith('dy-readonly-');
+}
 
 export function profileIdentity(value) {
   let url; try { url = new URL(value); } catch { fail('缺少有效的抖音用户主页。', 'INVALID_PROFILE'); }
@@ -97,15 +107,39 @@ export function boundCollectionResult(value) {
   return { comments, ...(warnings.length ? { warnings } : {}) };
 }
 
+export function boundConversationResult(value, input) {
+  if (!object(value) || value.senderAccountId !== input.senderAccountId || value.recipientId !== input.recipientId ||
+      !id(value.snapshotId) || typeof value.observedAt !== 'string' || !Number.isFinite(Date.parse(value.observedAt)) || !Array.isArray(value.messages) || typeof value.reliable !== 'boolean' || value.covered !== undefined && typeof value.covered !== 'boolean') fail('会话读取结果缺少有效的账号、收件人或快照证据。', 'INVALID_CONVERSATION_RESULT');
+  let reliable = value.reliable && value.messages.length <= input.limit;
+  const seen = new Set();
+  const messages = value.messages.slice(0, input.limit).map(message => {
+    if (!object(message) || !id(message.id) || seen.has(message.id) || !['inbound', 'outbound'].includes(message.direction) || typeof message.text !== 'string' || !message.text.trim()) fail('会话消息缺少唯一标识、明确方向或正文。', 'INVALID_CONVERSATION_RESULT');
+    seen.add(message.id);
+    const text = clipText(message.text, 2000); if (text !== message.text) reliable = false;
+    return { id: message.id, direction: message.direction, text, ...(typeof message.postedAt === 'string' && message.postedAt.length <= 100 ? { postedAt: message.postedAt } : {}) };
+  });
+  return { senderAccountId: input.senderAccountId, recipientId: input.recipientId, observedAt: value.observedAt, snapshotId: value.snapshotId, messages, reliable,
+    ...(typeof value.covered === 'boolean' ? { covered: value.covered } : {}) };
+}
+
 export function validateJob(value) {
   if (!object(value) || !id(value.id) || !id(value.campaignId) || typeof value.leaseToken !== 'string' || !value.leaseToken || value.leaseToken.length > 8192 || !object(value.input)) fail('工作台任务格式无效。', 'INVALID_JOB');
   const input = { ...value.input };
-  if (value.kind === 'send') {
+  if (outbound(value.kind) || value.kind === 'readConversation') {
     const target = profileIdentity(input.profileUrl);
     if (input.recipientId && input.recipientId !== target.id) fail('目标身份与主页不一致。', 'INVALID_RECIPIENT');
     if (!id(input.senderAccountId)) fail('发送任务未绑定发送账号。', 'INVALID_SENDER');
-    if (typeof input.message !== 'string' || !input.message.trim() || input.message.length > 1000 || /[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(input.message)) fail('招呼内容必须为 1–1000 字。', 'INVALID_MESSAGE');
+    if (outbound(value.kind) && (typeof input.message !== 'string' || !input.message.trim() || input.message.length > 1000 || /[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(input.message))) fail('私信内容必须为 1–1000 字。', 'INVALID_MESSAGE');
     input.recipientId = target.id; input.profileUrl = target.url;
+    if (value.kind !== 'send' && (!id(input.conversationId) || input.retry !== undefined)) fail('会话任务缺少有效会话或包含不适用的首轮重试参数。', 'INVALID_CONVERSATION');
+    if (value.kind === 'readConversation') input.limit = Math.max(1, Math.min(100, Math.trunc(Number(input.limit) || 50)));
+    if (value.kind === 'reply' && (!id(input.replyId) || !id(input.expectedSnapshotId) || !['agent', 'human'].includes(input.actor))) fail('回复缺少已审核文案对应的编号、会话快照或操作人。', 'INVALID_REPLY');
+    if (input.retry !== undefined) {
+      const retry = input.retry;
+      if (!object(retry) || !id(retry.previousJobId) || retry.previousJobId === value.id ||
+          retry.checkSince !== undefined && (typeof retry.checkSince !== 'string' || !/^\d{4}-\d{2}-\d{2}T/.test(retry.checkSince) || !Number.isFinite(Date.parse(retry.checkSince)))) fail('重试缺少有效的原任务或核对时间。', 'INVALID_RETRY');
+      input.retry = { previousJobId: retry.previousJobId, ...(retry.checkSince !== undefined ? { checkSince: retry.checkSince } : {}) };
+    }
   } else if (value.kind === 'collect') {
     if (!Array.isArray(input.videos) || !input.videos.length || input.videos.length > 30) fail('每次请选择 1–30 个具体视频。', 'INVALID_VIDEOS');
     input.videos = [...new Map(input.videos.map(video => { const parsed = videoIdentity(video?.url); if (video.id !== parsed.id) fail('视频 ID 与来源地址不一致。', 'INVALID_VIDEO'); return [parsed.id, { ...parsed, title: String(video.title || '').slice(0, 200) }]; })).values()];
@@ -164,7 +198,20 @@ export class Journal {
   }
   constructor(path, lockPath, lock) { this.path = path; this.lockPath = lockPath; this.lock = lock; this.data = { version: 1, entries: [] }; }
   get(jobId) { return this.data.entries.find(entry => entry.id === jobId); }
-  async save() { await privateWrite(this.path, this.data); }
+  async save() {
+    let terminalReads = 0;
+    const retained = [];
+    for (let index = this.data.entries.length - 1; index >= 0; index--) {
+      const entry = this.data.entries[index];
+      if (entry.kind === 'readConversation' && (entry.reported || entry.reportRejected)) {
+        if (terminalReads++ >= 200) continue;
+        if (Array.isArray(entry.result?.messages)) entry.result = { observedAt: entry.result.observedAt, snapshotId: entry.result.snapshotId, messageCount: entry.result.messages.length, reliable: entry.result.reliable, compacted: true };
+      }
+      retained.push(entry);
+    }
+    this.data.entries = retained.reverse();
+    await privateWrite(this.path, this.data);
+  }
   async close() { if (this.lock) { await this.lock.close(); this.lock = null; await unlink(this.lockPath).catch(() => {}); } }
   async bindAccount(accountId) { this.data.accountId = accountId; await this.save(); }
   async bindConfig(config) {
@@ -179,15 +226,85 @@ export class Journal {
       if (existing.fingerprint !== fingerprint) fail('任务内容发生变化，不能复用原发送记录。', 'JOB_CHANGED');
       existing.leaseToken = job.leaseToken; await this.save(); return existing;
     }
-    const entry = { id: job.id, kind: job.kind, campaignId: job.campaignId, leaseToken: job.leaseToken, fingerprint, startedAt: new Date().toISOString(), reported: false };
+    const entry = { id: job.id, kind: job.kind, campaignId: job.campaignId, leaseToken: job.leaseToken, fingerprint, startedAt: new Date().toISOString(), reported: false,
+      ...(outbound(job.kind) ? { sendFingerprint: sendFingerprint(job), sendRecipientKey: hash(`${job.input.senderAccountId}\n${job.input.recipientId}`), messageHash: hash(job.input.message), ...(job.input.retry ? { retry: { ...job.input.retry } } : {}), ...(job.kind === 'reply' ? { conversationId: job.input.conversationId, replyKey: hash(`${job.input.senderAccountId}\n${job.input.recipientId}\n${job.input.replyId}`) } : {}) } : {}) };
     this.data.entries.push(entry); await this.save(); return entry;
   }
-  async dispatch(job) {
+  assertSendAllowed(job) {
+    const recipientKey = hash(`${job.input.senderAccountId}\n${job.input.recipientId}`);
+    if (job.kind === 'reply') {
+      const replyKey = hash(`${job.input.senderAccountId}\n${job.input.recipientId}\n${job.input.replyId}`);
+      const resolved = new Set();
+      for (const completed of this.data.entries) {
+        if (completed.kind !== 'send' || completed.result?.outcome !== 'submitted' || !completed.retry || !completed.sendFingerprint || (completed.recipientKey || completed.sendRecipientKey) !== recipientKey) continue;
+        const ancestors = new Set(); let previousId = completed.retry.previousJobId, valid = true;
+        while (previousId) {
+          const previous = this.get(previousId);
+          if (!previous || previous.kind !== 'send' || previous.campaignId !== completed.campaignId || (previous.sendFingerprint || previous.fingerprint) !== completed.sendFingerprint || ancestors.has(previousId) || ancestors.size >= 100 || (previous.recipientKey || previous.sendRecipientKey) && (previous.recipientKey || previous.sendRecipientKey) !== recipientKey) { valid = false; break; }
+          ancestors.add(previousId); previousId = previous.retry?.previousJobId;
+        }
+        if (valid) for (const ancestor of ancestors) resolved.add(ancestor);
+      }
+      for (const previous of this.data.entries) {
+        if (previous.id === job.id || (previous.recipientKey || previous.sendRecipientKey) !== recipientKey) continue;
+        if (previous.replyKey === replyKey && (previous.dispatchedAt || previous.result?.outcome === 'submitted' || previous.result?.outcome === 'unknown')) fail('这条已审核回复已有提交记录，不能重复发送。', 'DUPLICATE_REPLY');
+        if (!resolved.has(previous.id) && !previous.reconciledBy && (previous.result?.outcome === 'unknown' || previous.dispatchedAt && previous.result?.outcome !== 'submitted')) fail('此会话还有结果待核对的私信，确认前不能继续回复。', 'CONVERSATION_UNCERTAIN');
+      }
+      return;
+    }
+    const allowed = new Set();
+    if (job.input.retry) {
+      const fingerprint = sendFingerprint(job), since = Date.parse(job.input.retry.checkSince);
+      let previousId = job.input.retry.previousJobId;
+      while (previousId) {
+        if (allowed.has(previousId) || previousId === job.id || allowed.size >= 100) fail('原发送记录的重试关系无法核实。', 'INVALID_RETRY');
+        const previous = this.get(previousId);
+        if (!previous || previous.kind !== 'send' || previous.campaignId !== job.campaignId || (previous.sendFingerprint || previous.fingerprint) !== fingerprint || (previous.recipientKey || previous.sendRecipientKey) && (previous.recipientKey || previous.sendRecipientKey) !== recipientKey) fail('无法核实原发送任务，请在原 Mac 助手中重试同一条已审核文案。', 'INVALID_RETRY');
+        const outcome = previous.result?.outcome || (previous.error && !previous.dispatchedAt ? 'failed' : undefined);
+        if (!['failed', 'unknown'].includes(outcome)) fail('原发送任务已提交或仍在执行，不能重发。', 'DUPLICATE_RECIPIENT');
+        if (outcome === 'unknown' || previous.dispatchedAt || previous.retry?.checkSince) {
+          const boundary = Date.parse(previous.retry?.checkSince || previous.dispatchedAt || previous.startedAt);
+          if (!Number.isFinite(since) || !Number.isFinite(boundary) || since > boundary) fail('原发送结果待核对，重试必须保留完整的会话核对时间。', 'INVALID_RETRY');
+        }
+        allowed.add(previousId); previousId = previous.retry?.previousJobId;
+      }
+    }
+    for (const previous of this.data.entries) {
+      if (previous.id === job.id || (previous.recipientKey || previous.sendRecipientKey) !== recipientKey) continue;
+      if (previous.result?.outcome === 'submitted' || (previous.dispatchedAt || previous.result?.outcome === 'unknown') && !allowed.has(previous.id)) fail('该账号已向目标提交过招呼或仍有其他待核对记录，不能重复发送。', 'DUPLICATE_RECIPIENT');
+    }
+  }
+  async dispatch(job, proof) {
     const entry = this.get(job.id); if (!entry || entry.dispatchedAt) fail('发送任务已有提交记录，不会重发。', 'ALREADY_DISPATCHED');
     const recipientKey = hash(`${job.input.senderAccountId}\n${job.input.recipientId}`);
-    if (this.data.entries.some(item => item.recipientKey === recipientKey && item.dispatchedAt)) fail('该账号已向目标提交过招呼或结果未知，不会重复发送。', 'DUPLICATE_RECIPIENT');
+    this.assertSendAllowed(job);
     if (this.data.lastSendAt && Date.now() - this.data.lastSendAt < 60000) fail('本机发送间隔不足 60 秒，请稍后重新审核排队。', 'SEND_COOLDOWN');
+    if (job.kind === 'reply' && proof?.conversation !== undefined) {
+      const baseline = proof.conversation;
+      if (!object(baseline) || baseline.snapshotId !== job.input.expectedSnapshotId || typeof baseline.covered !== 'boolean' || !Array.isArray(baseline.priorMessageKeys) || baseline.priorMessageKeys.length > 500 || baseline.priorMessageKeys.some(key => !id(key)) || new Set(baseline.priorMessageKeys).size !== baseline.priorMessageKeys.length || baseline.latestMessageKey !== baseline.priorMessageKeys.at(-1)) fail('回复提交前的会话证据不完整，未发送。', 'INVALID_CONVERSATION_PROOF');
+      entry.conversationBaseline = { snapshotId: baseline.snapshotId, covered: baseline.covered, priorMessageKeys: [...baseline.priorMessageKeys], ...(baseline.latestMessageKey ? { latestMessageKey: baseline.latestMessageKey } : {}) };
+    }
     entry.dispatchedAt = new Date().toISOString(); entry.recipientKey = recipientKey; this.data.lastSendAt = Date.now(); await this.save();
+  }
+  async reconcileConversation(job, result, proof) {
+    if (!result.reliable) return;
+    const recipientKey = hash(`${job.input.senderAccountId}\n${job.input.recipientId}`);
+    const proofValid = object(proof) && proof.covered === true && Array.isArray(proof.rowKeys) && proof.rowKeys.length <= 500 && proof.rowKeys.every(id) && new Set(proof.rowKeys).size === proof.rowKeys.length && object(proof.messageKeys);
+    let changed = false;
+    for (const entry of this.data.entries) {
+      if (entry.kind !== 'reply' || entry.result?.outcome !== 'unknown' || entry.reconciledBy || !entry.dispatchedAt || !entry.messageHash || entry.conversationId !== job.input.conversationId || (entry.recipientKey || entry.sendRecipientKey) !== recipientKey || Date.parse(result.observedAt) < Date.parse(entry.dispatchedAt)) continue;
+      const message = result.messages.find(message => {
+        if (message.direction !== 'outbound' || hash(message.text) !== entry.messageHash) return false;
+        const posted = Date.parse(message.postedAt);
+        if (Number.isFinite(posted) && posted >= Date.parse(entry.dispatchedAt) && posted <= Date.parse(result.observedAt)) return true;
+        const baseline = entry.conversationBaseline, key = proofValid ? proof.messageKeys[message.id] : undefined;
+        if (!baseline?.covered || !id(key) || baseline.priorMessageKeys.includes(key)) return false;
+        const index = proof.rowKeys.indexOf(key), anchor = baseline.latestMessageKey ? proof.rowKeys.indexOf(baseline.latestMessageKey) : -1;
+        return index >= 0 && (baseline.priorMessageKeys.length === 0 || anchor >= 0 && index > anchor);
+      });
+      if (message) { entry.reconciledBy = { jobId: job.id, snapshotId: result.snapshotId, observedAt: result.observedAt, messageId: message.id }; changed = true; }
+    }
+    if (changed) await this.save();
   }
   async finish(jobId, payload) { const entry = this.get(jobId); Object.assign(entry, payload, { finishedAt: new Date().toISOString(), reported: false }); await this.save(); }
   async reported(jobId) { this.get(jobId).reported = true; await this.save(); }
@@ -223,23 +340,38 @@ export async function runOnce(rawConfig, { adapter, journal, fetchImpl = fetch, 
   for (const entry of journal.data.entries.filter(item => !item.reported && !item.reportRejected && (item.result || item.error))) if (!await report(entry)) return { worked: false, pendingReport: true };
   checkAbort(signal);
   let account;
-  try { account = await adapter.accountStatus({ signal }); } catch (error) { account = { authenticated: false, message: safeError(error) }; }
-  const changed = account.authenticated && journal.data.accountId && journal.data.accountId !== account.accountId;
+  try { account = await adapter.accountStatus({ signal, expectedAccountId: journal.data.accountId, passive: true }); } catch (error) {
+    if (error?.code === 'HUMAN_ACTION_REQUIRED') return { worked: false, humanActionRequired: true };
+    account = { authenticated: false, message: safeError(error) };
+  }
+  // A temporary readonly fallback is not evidence that the signed-in user
+  // changed. Do not send its alias as a replacement account claim to the server.
+  if (journal.data.accountId && !journal.data.accountId.startsWith('dy-readonly-') &&
+      typeof account.accountId === 'string' && /^dy-readonly-[a-f0-9]{24}$/.test(account.accountId)) {
+    account = { authenticated: false, verificationPending: true, message: '正在重新核实已绑定的抖音账号，暂不领取任务。' };
+  }
+  const upgrading = verifiedAccountUpgrade(journal.data.accountId, account);
+  const changed = account.authenticated && journal.data.accountId && journal.data.accountId !== account.accountId && !upgrading;
   if (changed) account = { ...account, authenticated: false, message: '浏览器账号已变化，请运行 login 明确确认新账号。' };
   if (account.authenticated && !journal.data.accountId) await journal.bindAccount(account.accountId);
-  const polled = await request('poll', { deviceId: config.deviceId, authenticated: account.authenticated === true, accountId: account.accountId, accountName: account.accountName, message: account.message });
+  const verifiedReadOnlyAccountId = verifiedAccountUpgrade(account.verifiedReadOnlyAccountId, account) ? account.verifiedReadOnlyAccountId : undefined;
+  const accountClaim = account.authenticated === true || changed ? { accountId: account.accountId, accountName: account.accountName } : {};
+  const polled = await request('poll', { deviceId: config.deviceId, authenticated: account.authenticated === true, ...accountClaim, message: account.message, sendRetryVersion: 1, conversationVersion: 1, ...(verifiedReadOnlyAccountId ? { verifiedReadOnlyAccountId } : {}) });
   if (!object(polled) || !Object.hasOwn(polled, 'job')) fail('工作台未返回有效任务。', 'API_FORMAT');
-  if (!polled.job) return { worked: false, authenticated: account.authenticated };
+  if (verifiedReadOnlyAccountId && polled.verifiedAccountId !== account.accountId) fail('工作台未确认同账号身份升级，请保持原配对并重新确认账号。', 'ACCOUNT_CHANGED');
+  if (upgrading) await journal.bindAccount(account.accountId);
+  if (!polled.job) return { worked: false, authenticated: account.authenticated,
+    ...(!changed && account.authenticated === false && account.verificationPending === true ? { verificationPending: true } : {}) };
   const job = validateJob(polled.job); const prior = journal.get(job.id); const entry = await journal.start(job);
   if (prior) {
-    if (!entry.result && !entry.error) await journal.finish(job.id, job.kind === 'send' ? { result: { outcome: 'unknown', error: '已有执行记录，不能重复执行。' } } : { error: '任务已有执行记录。' });
-    if (!entry.reportRejected) await report(entry); return { worked: true, replayed: true };
+    if (!entry.result && !entry.error) await journal.finish(job.id, outbound(job.kind) ? { result: { outcome: 'unknown', error: '已有执行记录，不能重复执行。' } } : { error: '任务已有执行记录。' });
+    if (!entry.reportRejected && !(entry.kind === 'readConversation' && entry.reported)) await report(entry); return { worked: true, replayed: true };
   }
   const controller = new AbortController();
   const abort = () => controller.abort(); signal?.addEventListener('abort', abort, { once: true });
   if (signal?.aborted) controller.abort();
   const timer = setTimeout(() => controller.abort(), jobTimeoutMs);
-  let heartbeatInFlight;
+  let heartbeatInFlight, humanActionRequired = false;
   const beat = async () => {
     const result = await request('heartbeat', { deviceId: config.deviceId, jobId: job.id, leaseToken: job.leaseToken }, controller.signal);
     if (result?.ok !== true) fail('任务租约未确认，停止执行。', 'LEASE_LOST');
@@ -248,24 +380,39 @@ export async function runOnce(rawConfig, { adapter, journal, fetchImpl = fetch, 
   try {
     if (!account.authenticated) fail(account.message || '请先在专用浏览器中登录抖音。', 'UNAUTHENTICATED');
     let result;
-    if (job.kind === 'send') {
+    if (outbound(job.kind)) {
       if (account.accountId !== job.input.senderAccountId) fail('发送账号与审核时账号不同，请重新确认。', 'ACCOUNT_CHANGED');
-      result = await adapter.send(job.input, { signal: controller.signal, beforeDispatch: async () => {
-        checkAbort(controller.signal); await beat(); checkAbort(controller.signal); await journal.dispatch(job);
+      journal.assertSendAllowed(job);
+      let renewedForDispatch = false;
+      const renewBeforeDispatch = async () => {
+        checkAbort(controller.signal); await beat(); checkAbort(controller.signal); renewedForDispatch = true;
+      };
+      const action = job.kind === 'reply' ? adapter.reply.bind(adapter) : adapter.send.bind(adapter);
+      result = await action(job.input, { signal: controller.signal, renewBeforeDispatch, beforeDispatch: async proof => {
+        // Legacy adapters still receive a fresh lease before their commit. New
+        // adapters renew before final verification and commit just before click.
+        checkAbort(controller.signal); if (!renewedForDispatch || job.kind === 'reply') await renewBeforeDispatch();
+        checkAbort(controller.signal); await journal.dispatch(job, proof);
       } });
       if (!object(result) || !['submitted', 'failed', 'unknown'].includes(result.outcome)) result = { outcome: 'unknown', error: '发送响应无法确认，请核对原会话。' };
-      if (result.outcome === 'submitted' && !entry.dispatchedAt) result = { outcome: 'failed', error: '发送适配器缺少提交记录，结果未采纳。' };
+      if (result.outcome === 'submitted' && !entry.dispatchedAt && !(job.input.retry && result.alreadySubmitted === true && typeof result.evidence === 'string' && result.evidence.trim())) result = { outcome: 'failed', error: '发送适配器缺少提交记录，结果未采纳。' };
     } else {
-      result = job.kind === 'discover' ? await adapter.discover(job.input, { signal: controller.signal }) : await adapter.collect(job.input, { signal: controller.signal });
+      if (job.kind === 'readConversation') {
+        if (account.accountId !== job.input.senderAccountId) fail('读取会话的账号与任务账号不一致。', 'ACCOUNT_CHANGED');
+        const observed = await adapter.readConversation(job.input, { signal: controller.signal });
+        result = boundConversationResult(observed, job.input);
+        await journal.reconcileConversation(job, result, observed.proof);
+      } else result = job.kind === 'discover' ? await adapter.discover(job.input, { signal: controller.signal }) : await adapter.collect(job.input, { signal: controller.signal });
       checkAbort(controller.signal);
       if (job.kind === 'collect') result = boundCollectionResult(result);
     }
     await journal.finish(job.id, { result });
   } catch (error) {
-    await journal.finish(job.id, job.kind === 'send' ? { result: { outcome: entry.dispatchedAt ? 'unknown' : 'failed', error: entry.dispatchedAt ? '发送动作已开始，但结果无法确认。请核对原会话；不会重发。' : safeError(error) } } : { error: safeError(error) });
+    humanActionRequired = error?.code === 'HUMAN_ACTION_REQUIRED';
+    await journal.finish(job.id, outbound(job.kind) ? { result: { outcome: entry.dispatchedAt ? 'unknown' : 'failed', error: entry.dispatchedAt ? '发送动作已开始，但结果无法确认。请核对原会话；不会重发。' : safeError(error) } } : { error: safeError(error) });
   } finally {
     clearInterval(heartbeat); clearTimeout(timer); signal?.removeEventListener('abort', abort); if (heartbeatInFlight) await heartbeatInFlight;
   }
   const reported = await report(journal.get(job.id));
-  return { worked: true, pendingReport: !reported, authenticated: account.authenticated };
+  return { worked: true, pendingReport: !reported, authenticated: account.authenticated, ...(humanActionRequired ? { humanActionRequired: true } : {}) };
 }

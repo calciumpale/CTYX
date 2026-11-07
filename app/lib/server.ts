@@ -10,6 +10,7 @@ import { deduplicate,cosineSimilarity } from './talktrack-vectors.ts';
 import { effectiveEmbedding } from './embedding-store.ts';
 import { requestEmbeddings } from './embedding-client.ts';
 import { createTalkIndex } from './talktrack-index.ts';
+import { workbenchKnowledge } from './knowledge-library-runtime.ts';
 import { runPlaybookFeedback } from './playbook-graph.ts';
 import { feedbackBatches,maintainTalkTracks,talkText,talkTitle,transcriptHash } from './talktrack-domain.ts';
 import type { TalkTrack } from './talktrack-types.ts';
@@ -20,7 +21,7 @@ import { createSeed } from './seed.ts';
 import { readEffectiveModel } from './connection-store.ts';
 import { requestModelText } from './model-client.ts';
 import { buildModelMessages } from './model-messages.ts';
-import { readEffectiveCompanyConnection } from './company-connection.ts';
+import { readEffectiveCompanyConnection, readEffectiveJinghaiConnection } from './company-connection.ts';
 import { researchCompany } from './company-research.ts';
 import { buildTrainingMessages, demoTrainingGenerate } from './training-dialogue.ts';
 import type { TrainingGenerationInput } from './training-dialogue.ts';
@@ -88,11 +89,22 @@ export async function mutateWorkbench(userId:string,role:Role,action:string,payl
   const state=await loadWorkspace(userId,siteOrigin);assertRevision(state,revision);
   let model:Awaited<ReturnType<typeof readEffectiveModel>>=null;try{model=await readEffectiveModel(userId,siteOrigin);}catch{/* Keep customer writes usable when model settings need repair. */}
   const mutationAt=new Date().toISOString();
-  const result=await executeMemberAction(state,memberRole,action,payload,{now:mutationAt,actorName,extractIntake:model?text=>extractProjectIntake(text,messages=>requestModelText(model!,messages,{timeoutMs:60000})):undefined,contractModelName:model?.name,reviewContract:async(document,deal)=>{if(!model)throw new DomainError('请先在设置中配置并启用大模型 API，合同原文已保存',503);return reviewContract({...document,projectContext:JSON.stringify({projectName:deal.projectName??deal.name,company:deal.name,dataOrigin:deal.dataOrigin??'sample',userRecordedNeeds:deal.needs.slice(0,5).map(t=>t.slice(0,200)),userRecordedRisks:deal.risks.slice(0,5).map(t=>t.slice(0,200)),customerBudget:deal.customerProfile?.budget.slice(0,300),customerTimeline:deal.customerProfile?.timeline.slice(0,300)})},messages=>requestModelText(model,messages,{timeoutMs:60000}));},approveTalkTrack:async track=>{const embed=await effectiveEmbedding(userId);if(!embed)throw new DomainError('请在设置中配置并启用 Embedding API',503);const result=await requestEmbeddings(embed,[talkText(track)],{origin:siteOrigin});const index=createTalkIndex(database(),userId);const current=await index.all((state.talkTracks??[]).filter(t=>t.status==='candidate'||t.status==='published'),result.model);const activeIds=new Set((state.talkTracks??[]).filter(t=>t.status==='candidate'||t.status==='published').map(t=>t.id));if(current.some(v=>activeIds.has(v.id)&&v.id!==track.id&&v.model!==result.model))throw new DomainError('Embedding 模型已变更，请先重建索引',409);if(current.some(v=>v.id!==track.id&&v.model===result.model&&cosineSimilarity(v.vector,result.vectors[0])>=0.90))throw new DomainError('审核后的话术与现有条目高度相似，请调整或打回',409);const version=track.version+1;await index.upsert({...track,version,title:talkTitle(track.employeeName,track.topic,version)},result.vectors[0],result.model,'published');},retrieveTalkTracks:async query=>{const embed=await effectiveEmbedding(userId);if(!embed||!state.talkTracks?.some(t=>t.status==='published'))return [];const result=await requestEmbeddings(embed,[query],{origin:siteOrigin});return createTalkIndex(database(),userId).search(result.vectors[0],result.model,state.talkTracks);},generate:async input=>{if(input.deal&&['strategy','risk'].includes(input.agentId)){const page=await createApprovalStore(database()).list({id:userId,email:''},{scope:'mine',projectId:input.deal.id,limit:5});input.projectApprovals=await projectApprovalContext(page.records.map(item=>item.request),state,input.deal.id,userId);}return generate(input,model);},trainingGenerate:input=>generateTraining(input,model),enrichCompany:async deal=>{
-    let qcc:Awaited<ReturnType<typeof readEffectiveCompanyConnection>>=null;let configurationIssue=false;
-    try{qcc=await readEffectiveCompanyConnection(userId);}catch{configurationIssue=true;}
-    const profile=await researchCompany(deal,{qcc,model});
-    if(configurationIssue)profile.warnings.unshift('企查查配置暂时无法使用，已改用公开网络检索；请在设置中重新保存凭证。');
+  const managedByQuery = new Map<string, ReturnType<typeof workbenchKnowledge>>();
+  const retrieveManagedKnowledge = (query: string) => {
+    const cached = managedByQuery.get(query);
+    if (cached) return cached;
+    const lookup = workbenchKnowledge(database(), userId, siteOrigin, query);
+    managedByQuery.set(query, lookup);
+    return lookup;
+  };
+  const result=await executeMemberAction(state,memberRole,action,payload,{now:mutationAt,actorName,retrieveManagedKnowledge,extractIntake:model?text=>extractProjectIntake(text,messages=>requestModelText(model!,messages,{timeoutMs:60000})):undefined,contractModelName:model?.name,reviewContract:async(document,deal)=>{if(!model)throw new DomainError('请先在设置中配置并启用大模型 API，合同原文已保存',503);return reviewContract({...document,projectContext:JSON.stringify({projectName:deal.projectName??deal.name,company:deal.name,dataOrigin:deal.dataOrigin??'sample',userRecordedNeeds:deal.needs.slice(0,5).map(t=>t.slice(0,200)),userRecordedRisks:deal.risks.slice(0,5).map(t=>t.slice(0,200)),customerBudget:deal.customerProfile?.budget.slice(0,300),customerTimeline:deal.customerProfile?.timeline.slice(0,300)})},messages=>requestModelText(model,messages,{timeoutMs:60000}));},approveTalkTrack:async track=>{const embed=await effectiveEmbedding(userId);if(!embed)throw new DomainError('请在设置中配置并启用 Embedding API',503);const result=await requestEmbeddings(embed,[talkText(track)],{origin:siteOrigin});const index=createTalkIndex(database(),userId);const current=await index.all((state.talkTracks??[]).filter(t=>t.status==='candidate'||t.status==='published'),result.model);const activeIds=new Set((state.talkTracks??[]).filter(t=>t.status==='candidate'||t.status==='published').map(t=>t.id));if(current.some(v=>activeIds.has(v.id)&&v.id!==track.id&&v.model!==result.model))throw new DomainError('Embedding 模型已变更，请先重建索引',409);if(current.some(v=>v.id!==track.id&&v.model===result.model&&cosineSimilarity(v.vector,result.vectors[0])>=0.90))throw new DomainError('审核后的话术与现有条目高度相似，请调整或打回',409);const version=track.version+1;await index.upsert({...track,version,title:talkTitle(track.employeeName,track.topic,version)},result.vectors[0],result.model,'published');},retrieveTalkTracks:async query=>{const embed=await effectiveEmbedding(userId);if(!embed||!state.talkTracks?.some(t=>t.status==='published'))return [];const result=await requestEmbeddings(embed,[query],{origin:siteOrigin});return createTalkIndex(database(),userId).search(result.vectors[0],result.model,state.talkTracks);},generate:async input=>{if(input.deal&&['strategy','risk'].includes(input.agentId)){const page=await createApprovalStore(database()).list({id:userId,email:''},{scope:'mine',projectId:input.deal.id,limit:5});input.projectApprovals=await projectApprovalContext(page.records.map(item=>item.request),state,input.deal.id,userId);}return generate(input,model);},trainingGenerate:input=>generateTraining(input,model),enrichCompany:async deal=>{
+    let qcc:Awaited<ReturnType<typeof readEffectiveCompanyConnection>>=null;
+    let jinghai:Awaited<ReturnType<typeof readEffectiveJinghaiConnection>>=null;
+    const issues:string[]=[];
+    try{jinghai=await readEffectiveJinghaiConnection(userId);}catch{issues.push('鲸海数据配置暂时无法读取，请在服务连接中检查凭证。');}
+    try{qcc=await readEffectiveCompanyConnection(userId);}catch{issues.push('企查查配置暂时无法读取，请在服务连接中检查凭证。');}
+    const profile=await researchCompany(deal,{qcc,jinghai,model});
+    profile.warnings.unshift(...issues);
     return profile;
   }});
   if(result.state.revision===state.revision)return {...result,state:await loadWorkspace(userId,siteOrigin)};

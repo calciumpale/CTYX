@@ -71,6 +71,20 @@
       "when": 1793859036207,
       "tag": "0009_worthless_johnny_storm",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1793939656877,
+      "tag": "0010_conscious_killer_shrike",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1794008748640,
+      "tag": "0011_managed_knowledge",
+      "breakpoints": true
     }
   ]
 }

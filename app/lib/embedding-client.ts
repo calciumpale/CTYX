@@ -2,9 +2,9 @@ import { DomainError } from './domain.ts';
 import { normalizeModelBaseUrl } from './connection-config.ts';
 import { validateVectors } from './talktrack-vectors.ts';
 export interface EmbeddingConnection{key:string;url:string;name:string;}
-export async function requestEmbeddings(model:EmbeddingConnection,texts:string[],options:{request?:typeof fetch;origin?:string}={}):Promise<{vectors:number[][];model:string}>{
+export async function requestEmbeddings(model:EmbeddingConnection,texts:string[],options:{request?:typeof fetch;origin?:string;timeoutMs?:number}={}):Promise<{vectors:number[][];model:string}>{
   if(!texts.length||texts.length>30||texts.some(t=>typeof t!=='string'||!t.trim()||t.length>20000))throw new DomainError('向量输入为空或超出批量限制');
-  const base=normalizeModelBaseUrl(model.url,options.origin);const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),45000);
+  const base=normalizeModelBaseUrl(model.url,options.origin);const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),options.timeoutMs??45000);
   try{
     const response=await (options.request??fetch)(`${base}/embeddings`,{method:'POST',headers:{Authorization:`Bearer ${model.key}`,'Content-Type':'application/json'},body:JSON.stringify({model:model.name,input:texts,encoding_format:'float'}),signal:controller.signal,redirect:'manual'});
     if(!response.ok)throw new DomainError(`Embedding 服务返回 HTTP ${response.status}，请检查配置`,502);

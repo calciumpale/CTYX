@@ -1,5 +1,16 @@
 import { index, integer, primaryKey, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
 
+/** Managed knowledge is owner-scoped and independent of legacy workspace knowledge. FTS5 is defined in SQL. */
+export const workbenchKnowledgeLibraries=sqliteTable('workbench_knowledge_libraries',{
+ id:text('id').primaryKey(),ownerId:text('owner_id').notNull(),name:text('name').notNull(),createdAt:text('created_at').notNull(),
+},table=>[index('workbench_knowledge_library_owner').on(table.ownerId,table.createdAt)]);
+export const workbenchKnowledgeDocuments=sqliteTable('workbench_knowledge_documents',{
+ id:text('id').primaryKey(),ownerId:text('owner_id').notNull(),libraryId:text('library_id').notNull().references(()=>workbenchKnowledgeLibraries.id,{onDelete:'cascade'}),title:text('title').notNull(),fileName:text('file_name').notNull(),strategy:text('strategy').notNull(),status:text('status').notNull().default('pending'),chunkCount:integer('chunk_count').notNull(),indexedCount:integer('indexed_count').notNull().default(0),error:text('error'),modelKey:text('model_key'),generation:integer('generation').notNull().default(0),dimension:integer('dimension'),indexToken:text('index_token'),indexUntil:text('index_until'),updatedAt:text('updated_at').notNull(),
+},table=>[index('workbench_knowledge_document_owner').on(table.ownerId,table.libraryId,table.updatedAt)]);
+export const workbenchKnowledgeChunks=sqliteTable('workbench_knowledge_chunks',{
+ id:text('id').primaryKey(),ownerId:text('owner_id').notNull(),documentId:text('document_id').notNull().references(()=>workbenchKnowledgeDocuments.id,{onDelete:'cascade'}),ordinal:integer('ordinal').notNull(),parentOrdinal:integer('parent_ordinal'),kind:text('kind').notNull(),text:text('text').notNull(),heading:text('heading').notNull(),vectorJson:text('vector_json'),vectorModel:text('vector_model'),
+},table=>[uniqueIndex('workbench_knowledge_chunk_order').on(table.ownerId,table.documentId,table.ordinal),index('workbench_knowledge_chunk_model').on(table.ownerId,table.vectorModel)]);
+
 /** One isolated, versioned JSON workspace per platform-authenticated user. */
 export const workbenchWorkspaces = sqliteTable('workbench_workspaces', {
   userId: text('user_id').primaryKey(),
@@ -107,3 +118,15 @@ export const workbenchProspectLeads=sqliteTable('workbench_prospect_leads',{
 export const workbenchProspectJobs=sqliteTable('workbench_prospect_jobs',{
  id:text('id').primaryKey(),ownerId:text('owner_id').notNull(),memberId:text('member_id').notNull(),deviceId:text('device_id').notNull(),campaignId:text('campaign_id').notNull(),leadId:text('lead_id'),kind:text('kind').notNull(),status:text('status').notNull(),inputJson:text('input_json').notNull(),resultJson:text('result_json'),error:text('error'),activeKey:text('active_key'),recipientKey:text('recipient_key'),senderId:text('sender_id'),leaseHash:text('lease_hash'),leaseUntil:text('lease_until'),startedAt:text('started_at'),createdAt:text('created_at').notNull(),updatedAt:text('updated_at').notNull(),
 },table=>[uniqueIndex('workbench_prospect_job_active').on(table.activeKey),uniqueIndex('workbench_prospect_job_recipient').on(table.recipientKey),index('workbench_prospect_job_queue').on(table.deviceId,table.status,table.createdAt),index('workbench_prospect_job_sender').on(table.ownerId,table.senderId,table.startedAt)]);
+
+export const workbenchProspectConversations=sqliteTable('workbench_prospect_conversations',{
+ id:text('id').primaryKey(),ownerId:text('owner_id').notNull(),memberId:text('member_id').notNull(),campaignId:text('campaign_id').notNull(),leadId:text('lead_id').notNull(),senderId:text('sender_id').notNull(),recipientId:text('recipient_id').notNull(),profileUrl:text('profile_url').notNull(),nickname:text('nickname').notNull(),mode:text('mode').notNull().default('agent'),status:text('status').notNull().default('active'),version:integer('version').notNull().default(1),openedAt:text('opened_at').notNull(),lastReadAt:text('last_read_at'),lastSnapshotId:text('last_snapshot_id'),hasBaseline:integer('has_baseline').notNull().default(0),lastMessageAt:text('last_message_at').notNull(),lastMessagePreview:text('last_message_preview').notNull().default(''),handoffReason:text('handoff_reason'),processingToken:text('processing_token'),processingUntil:text('processing_until'),updatedAt:text('updated_at').notNull(),
+},table=>[uniqueIndex('workbench_prospect_conversation_contact').on(table.ownerId,table.senderId,table.recipientId),index('workbench_prospect_conversation_member').on(table.ownerId,table.memberId,table.campaignId)]);
+
+export const workbenchProspectMessages=sqliteTable('workbench_prospect_messages',{
+ id:text('id').primaryKey(),conversationId:text('conversation_id').notNull(),ownerId:text('owner_id').notNull(),memberId:text('member_id').notNull(),sourceKey:text('source_key').notNull(),direction:text('direction').notNull(),actor:text('actor').notNull(),text:text('text').notNull(),status:text('status').notNull(),postedAt:text('posted_at'),createdAt:text('created_at').notNull(),error:text('error'),jobId:text('job_id'),eligible:integer('eligible').notNull().default(0),processed:integer('processed').notNull().default(0),
+},table=>[uniqueIndex('workbench_prospect_message_source').on(table.conversationId,table.sourceKey),index('workbench_prospect_message_thread').on(table.conversationId,table.createdAt),index('workbench_prospect_message_pending').on(table.ownerId,table.memberId,table.eligible,table.processed)]);
+
+export const workbenchProspectLeadPool=sqliteTable('workbench_prospect_lead_pool',{
+ id:text('id').primaryKey(),ownerId:text('owner_id').notNull(),conversationId:text('conversation_id').notNull(),contactKey:text('contact_key').notNull(),contactType:text('contact_type').notNull(),contactValue:text('contact_value').notNull(),nickname:text('nickname').notNull(),score:integer('score').notNull(),grade:text('grade').notNull(),reason:text('reason').notNull(),assignedMemberId:text('assigned_member_id'),assignedName:text('assigned_name'),status:text('status').notNull(),createdAt:text('created_at').notNull(),updatedAt:text('updated_at').notNull(),
+},table=>[uniqueIndex('workbench_prospect_pool_contact').on(table.ownerId,table.conversationId,table.contactKey),index('workbench_prospect_pool_assignee').on(table.ownerId,table.assignedMemberId,table.status)]);

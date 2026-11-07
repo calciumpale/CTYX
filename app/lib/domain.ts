@@ -21,7 +21,7 @@ interface WorkflowCheckpoint {workflow:Workflow;role:Role;deal?:Deal;deals:Deal[
 type StoredState=WorkbenchState & {_access?:Record<string,string>;_workflowRuns?:Record<string,WorkflowCheckpoint>};
 export interface GenerationInput {query:string;agentId:AgentId;projectApprovals?:ProjectApprovalContext[];deal?:Deal;deals:Deal[];knowledge:Knowledge[];instruction?:string;previous?:string;history?:{query:string;answer:string}[];contractReviews?:{title:string;reviewedAt?:string;analysis:ContractAnalysis}[];purpose?:'chat'|'workflow';}
 export interface GenerationOutput {answer:string;mode:'demo'|'live';}
-export interface ActionContext {actorName?:string;extractIntake?:(text:string)=>Promise<IntakeExtraction>;now?:string;generate?:(input:GenerationInput)=>Promise<GenerationOutput>;trainingGenerate?:(input:TrainingGenerationInput)=>Promise<GenerationOutput>;enrichCompany?:(deal:Deal)=>Promise<CompanyProfile>;trustedRecording?:FollowupRecording;reviewContract?:(document:ContractDocument,deal:Deal)=>Promise<ContractAnalysis>;contractModelName?:string;approveTalkTrack?:(track:TalkTrack)=>Promise<void>;retrieveTalkTracks?:(query:string)=>Promise<TalkTrack[]>;}
+export interface ActionContext {actorName?:string;extractIntake?:(text:string)=>Promise<IntakeExtraction>;now?:string;generate?:(input:GenerationInput)=>Promise<GenerationOutput>;trainingGenerate?:(input:TrainingGenerationInput)=>Promise<GenerationOutput>;enrichCompany?:(deal:Deal)=>Promise<CompanyProfile>;trustedRecording?:FollowupRecording;reviewContract?:(document:ContractDocument,deal:Deal)=>Promise<ContractAnalysis>;contractModelName?:string;approveTalkTrack?:(track:TalkTrack)=>Promise<void>;retrieveTalkTracks?:(query:string)=>Promise<TalkTrack[]>;retrieveManagedKnowledge?:(query:string)=>Promise<Knowledge[]>;}
 const agentIds=new Set(AGENTS.map(item=>item.id));
 const nodeTypes=new Set(['start','intent','knowledge','agent','review','output']);
 const managerActions=new Set(['skill_review','knowledge_add','workflow_save','workflow_publish','workflow_review']);
@@ -91,7 +91,7 @@ function validateCompanyProfile(value:unknown,deal:Deal):CompanyProfile {
   try {
     const input=object(value);if(!input)fail('企业画像格式不正确');
     const companyName=text(input.companyName,'企业名称',200);if(companyName!==deal.name.trim())fail('企业画像与当前企业不匹配');
-    if(input.provider!=='qcc'&&input.provider!=='web')fail('企业画像来源不正确');
+    if(input.provider!=='qcc'&&input.provider!=='jinghai'&&input.provider!=='web')fail('企业画像来源不正确');
     if(input.status!=='ready'&&input.status!=='partial')fail('企业画像状态不正确');
     if(typeof input.modelUsed!=='boolean')fail('企业画像生成方式不正确');
     if(!Array.isArray(input.sources)||input.sources.length>20||!Array.isArray(input.facts)||input.facts.length>30)fail('企业画像资料数量超出限制');
@@ -115,7 +115,7 @@ async function enrichDeal(deal:Deal,context:ActionContext):Promise<CompanyProfil
   return validateCompanyProfile(await context.enrichCompany(structuredClone(deal)),deal);
 }
 function companyCitations(deal:Deal):Run['citations'] {
-  return deal.companyProfile?.sources.map(source=>({id:`company-${deal.id}-${source.id}`,title:source.title,excerpt:`${source.url}\n来源：${source.provider==='qcc'?'企查查':'公开网络'}；获取时间：${source.retrievedAt}`}))??[];
+  return deal.companyProfile?.sources.map(source=>({id:`company-${deal.id}-${source.id}`,title:source.title,excerpt:`${source.url}\n来源：${source.provider==='qcc'?'企查查':source.provider==='jinghai'?'鲸海数据':'公开网络'}；获取时间：${source.retrievedAt}`}))??[];
 }
 function companyAnswer(profile:CompanyProfile):string {
   return [`## ${profile.companyName} · 企业画像`,profile.summary,...(profile.facts.length?['### 已检索资料',...profile.facts.map(fact=>`- **${fact.label}**：${fact.value}`)]:[]),...(profile.warnings.length?['### 待核实事项',...profile.warnings.map(item=>`- ${item}`)]:[]),...(profile.sources.length?['### 来源',...profile.sources.map(source=>`- [${source.title}](${source.url})`)]:[])].join('\n\n');
@@ -254,7 +254,7 @@ function workflowIntent(query:string):AgentId {
   if(/方案|策略|谈判|拜访|开场|话术/.test(query))return 'strategy';
   return 'insight';
 }
-function publishedKnowledge(state:WorkbenchState):Knowledge[] {
+function publishedKnowledge(state:Pick<WorkbenchState,'knowledge'|'skills'>):Knowledge[] {
   const entries=state.knowledge.filter(item=>item.status==='published');
   for(const skill of state.skills.filter(item=>item.status==='published')) {
     if(entries.some(item=>item.id===`knowledge-${skill.id}`)) continue;
@@ -262,7 +262,7 @@ function publishedKnowledge(state:WorkbenchState):Knowledge[] {
   }
   return entries;
 }
-function retrieve(state:WorkbenchState,query:string):Knowledge[] {
+export function retrieveKnowledge(state:Pick<WorkbenchState,'knowledge'|'skills'>,query:string):Knowledge[] {
   return rankedKnowledge(publishedKnowledge(state),query);
 }
 function rankedKnowledge(entries:Knowledge[],query:string):Knowledge[] {
@@ -351,7 +351,6 @@ async function buildRun(state:StoredState,role:Role,query:string,context:ActionC
   const tracks=[...new Map([...explicitTracks,...semanticTracks].map(t=>[t.id,t])).values()].slice(0,5);
   let knowledge:Knowledge[]=[];
   const step=(title:string,detail:string,status:TraceStep['status']='success',agent?:AgentId,duration=0)=>steps.push({id:uid('step'),title,detail,status,agent,duration});
-  const getKnowledge=()=> {knowledge=[...tracks.map(talkKnowledge),...retrieve(state,retrievalQuery)];for(const item of knowledge) if(!citations.some(entry=>entry.id===item.id))citations.push({id:item.id,title:item.title,excerpt:item.content.slice(0,240)});return knowledge;};
   const generate=async (agentId:AgentId,instruction?:string,previous=answers.join('\n\n'))=> {
     const tick=Date.now();const input:GenerationInput={query,agentId,deal,deals:scopedDeals,knowledge,instruction:[instruction,explicitTracks.length?'用户指定采用以下已审核话术的结构和表达方式：'+explicitTracks.map(t=>t.title).join('、')+'。根据当前客户资料改写占位符，不照搬来源项目事实。':undefined].filter(Boolean).join('\n'),previous,history,...(agentId==='risk'&&deal?{contractReviews:(state.contracts??[]).filter(c=>c.dealId===deal.id&&c.analysis).slice(0,5).map(c=>({title:c.title,reviewedAt:c.reviewedAt,analysis:c.analysis!}))}:{}),purpose:'chat'};
     const output=context.generate?await context.generate(input):demoGenerate(input);
@@ -364,13 +363,18 @@ async function buildRun(state:StoredState,role:Role,query:string,context:ActionC
       const tick=Date.now();
       try {
         deal.companyProfile=await enrichDeal(deal,context);deal.version++;
-        step('检索企业公开资料',`${deal.companyProfile.provider==='qcc'?'企查查接口':'公开网络检索'}；取得${deal.companyProfile.sources.length}个来源。${deal.companyProfile.warnings.join('；')}`,deal.companyProfile.status==='partial'?'warning':'success','insight',Date.now()-tick);
+        step('检索企业公开资料',`${deal.companyProfile.provider==='qcc'?'企查查接口':deal.companyProfile.provider==='jinghai'?'鲸海数据接口':'公开网络检索'}；取得${deal.companyProfile.sources.length}个来源。${deal.companyProfile.warnings.join('；')}`,deal.companyProfile.status==='partial'?'warning':'success','insight',Date.now()-tick);
       }catch {
         step('检索企业公开资料','企业资料补全暂时未完成，本次仅依据已填写的项目资料回答；未核验信息保持未知。','warning','insight',Date.now()-tick);
       }
     }
     if(deal)citations.push(...companyCitations(deal));
-    getKnowledge();step('检索生效知识',`检索当前空间的${knowledge.length}条生效资料；未读取候选或退回Skill。`);
+    const managed = await context.retrieveManagedKnowledge?.(retrievalQuery) ?? [];
+    knowledge = [...managed, ...tracks.map(talkKnowledge), ...retrieveKnowledge(state,retrievalQuery)];
+    for (const item of knowledge) {
+      if (!citations.some(entry => entry.id === item.id)) citations.push({ id:item.id, title:item.title, excerpt:item.content.slice(0,240) });
+    }
+    step('检索生效知识',`检索当前空间的${knowledge.length}条生效资料。`);
     for(const agentId of routed)await generate(agentId);
     step('核对建议边界','保留待核实事项；健康度为规则分值；未自动承诺商务条件或修改商机。');
   return {id:uid('run'),query,answer:answers.join('\n\n────────\n\n'),agentIds:[...new Set(usedAgents)],steps,citations,mode,createdAt:now,duration:Date.now()-started,...(deal?{dealId:deal.id}:{})};
@@ -415,7 +419,9 @@ async function executeWorkflow(state:StoredState,run:Run,checkpoint:WorkflowChec
         const candidates=selected===undefined?available:available.filter(item=>selected.includes(item.id));
         const ranked=rankedKnowledge(candidates,run.query);
         // Explicit bindings remain available even when the current query has no keyword match.
-        const entries=selected===undefined?ranked:[...ranked,...candidates.filter(item=>!ranked.includes(item))].slice(0,4);
+        const entries = selected === undefined
+          ? [...await context.retrieveManagedKnowledge?.(run.query) ?? [], ...ranked].slice(0, 6)
+          : [...ranked, ...candidates.filter(item=>!ranked.includes(item))].slice(0, 4);
         for(const entry of entries) {
           checkpoint.knowledge[entry.id]={...entry,content:clip(entry.content,6000)};
           if(!run.citations.some(item=>item.id===entry.id))run.citations.push({id:entry.id,title:entry.title,excerpt:entry.content.slice(0,240)});
@@ -550,7 +556,7 @@ export async function executeAction(original:WorkbenchState,role:Role,action:str
       const profile=await enrichDeal(deal,context);
       if(deal.companyProfile?.sources.length&&!profile.sources.length)fail('本次检索未取得有效来源，已保留原企业画像，请稍后重试',503);
       deal.companyProfile=profile;deal.version++;dealId=deal.id;
-      run={id:uid('run'),query:`补全${deal.name}的企业画像`,answer:companyAnswer(profile),agentIds:['insight'],steps:[{id:uid('step'),title:'客户洞察 · 企业资料补全',detail:`${profile.provider==='qcc'?'企查查接口':'公开网络检索'}；取得${profile.sources.length}个来源、${profile.facts.length}项有来源资料。${profile.warnings.length?` ${profile.warnings.join('；')}`:''}`,status:profile.status==='partial'?'warning':'success',agent:'insight',duration:Date.now()-started}],citations:companyCitations(deal),mode:profile.modelUsed?'live':'demo',createdAt:now,duration:Date.now()-started,dealId:deal.id,status:'completed'};
+      run={id:uid('run'),query:`补全${deal.name}的企业画像`,answer:companyAnswer(profile),agentIds:['insight'],steps:[{id:uid('step'),title:'客户洞察 · 企业资料补全',detail:`${profile.provider==='qcc'?'企查查接口':profile.provider==='jinghai'?'鲸海数据接口':'公开网络检索'}；取得${profile.sources.length}个来源、${profile.facts.length}项有来源资料。${profile.warnings.length?` ${profile.warnings.join('；')}`:''}`,status:profile.status==='partial'?'warning':'success',agent:'insight',duration:Date.now()-started}],citations:companyCitations(deal),mode:profile.modelUsed?'live':'demo',createdAt:now,duration:Date.now()-started,dealId:deal.id,status:'completed'};
       state.runs.unshift(run);mark(state,run.id,role);activity(state,role,'企业画像已更新',`${deal.name} · ${profile.status==='partial'?'部分资料待核实':`${profile.sources.length}个来源`}`,'deal',now);message=profile.status==='partial'?'企业画像已保存，部分资料待核实':'企业画像已补全';break;
     }
     case 'deal_note': {

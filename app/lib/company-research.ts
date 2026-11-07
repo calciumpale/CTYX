@@ -4,10 +4,12 @@ import type {EffectiveModel} from './connection-config.ts';
 import {requestModelText} from './model-client.ts';
 
 export const QCC_ENDPOINT='https://api.qichacha.com/ECIV4/GetBasicDetailsByName';
+export const JINGHAI_ENDPOINT='https://www.kqdaas.com/DataService/api/v3/company/detail';
 export interface QccCredentials {appKey:string;secretKey:string;endpoint:string;}
+export interface JinghaiCredentials {appId:string;apiKey:string;endpoint:string;}
 type ResearchSource=CompanyProfile['sources'][number]&{snippet?:string};
 type Fact=CompanyProfile['facts'][number];
-interface Material {companyName:string;facts:Fact[];sources:ResearchSource[];provider:'qcc'|'web';}
+interface Material {companyName:string;facts:Fact[];sources:ResearchSource[];provider:CompanyProfile['provider'];}
 const RESPONSE_LIMIT=256*1024;
 class ResearchTimeout extends Error {}
 const plainObject=(value:unknown):Record<string,unknown>|null=>value!==null&&typeof value==='object'&&!Array.isArray(value)?value as Record<string,unknown>:null;
@@ -65,6 +67,64 @@ function qccMaterial(data:unknown,companyName:string,now:string):Material|null {
   return {companyName:clean(result.Name,200),facts,sources:[source],provider:'qcc'};
 }
 
+const jinghaiName=(value:string)=>value.trim().replace(/（/g,'(').replace(/）/g,')');
+
+function jinghaiMaterial(data:unknown,companyName:string,now:string):Material|null {
+  const payload=plainObject(data);
+  if (!payload || payload.success === false) return null;
+  const codes = [payload.errcode, payload.status, payload.code].filter(code => code !== undefined && code !== null);
+  if (codes.some(code => String(code).toLowerCase() !== '200')) return null;
+  if (payload.success !== true && !codes.length) return null;
+  const result=plainObject(payload.data);
+  const name=clean(result?.companyName,200);
+  if(!result||!name||jinghaiName(name)!==jinghaiName(companyName))return null;
+  const source:ResearchSource={
+    id:'jinghai-company',
+    title:`鲸海数据 · ${name}`,
+    url:'https://www.kqdaas.com/docs/getting-started',
+    provider:'jinghai',
+    retrievedAt:now,
+  };
+  const fields=[
+    ['companyName','企业名称'],
+    ['juridicalPerson','法定代表人'],
+    ['businessStatus','经营状态'],
+    ['creditNumber','统一社会信用代码'],
+    ['licenseNumber','工商注册号'],
+    ['orgCode','组织机构代码'],
+    ['registeredCapital','注册资本'],
+    ['contributedCapital','实缴资本'],
+    ['establishTime','成立日期'],
+    ['companyType','企业类型'],
+    ['regitAddress','注册地址'],
+    ['address','经营地址'],
+    ['businessScope','经营范围'],
+    ['companyIndustry','所属行业'],
+    ['products','产品与服务'],
+    ['companyProfile','企业简介'],
+    ['staffNumber','人员规模（数据源区间）'],
+    ['annualTurnover','营业额（数据源区间）'],
+    ['socialSecurityNum','参保人数'],
+    ['socialSecurityFrom','参保人数来源期间'],
+    ['province','省份'],
+    ['belongCity','城市'],
+    ['issuingAuthority','登记机关'],
+    ['approveDate','核准日期'],
+    ['businessPeriod','营业期限'],
+  ] as const;
+  const facts:Fact[]=fields.flatMap(([field,label])=>{
+    const raw=result[field];
+    const value=clean(typeof raw==='number'&&Number.isFinite(raw)?String(raw):raw);
+    return value?[{label,value,sourceIds:[source.id]}]:[];
+  });
+  if(Array.isArray(result.historyNames)){
+    const names=result.historyNames.slice(0,10).map(value=>clean(value,200)).filter(Boolean);
+    if(names.length)facts.push({label:'曾用名',value:names.join('；'),sourceIds:[source.id]});
+  }
+  source.snippet=facts.map(fact=>`${fact.label}：${fact.value}`).join('；').slice(0,2000);
+  return{companyName,facts,sources:[source],provider:'jinghai'};
+}
+
 function decodeEntities(value:string):string {
   const entities:Record<string,string>={amp:'&',lt:'<',gt:'>',quot:'"',apos:"'",nbsp:' '};
   return value.replace(/&(#x[0-9a-f]+|#\d+|amp|lt|gt|quot|apos|nbsp);/gi,(whole,entity:string)=>{
@@ -102,10 +162,26 @@ function groundedModelFacts(value:unknown,sources:ResearchSource[]):Fact[] {
 }
 
 /** Identity-only outbound contract: never pass the Deal object into a provider or model. */
-export async function researchCompany(deal:Deal,options:{qcc:QccCredentials|null;model:EffectiveModel|null;request?:typeof fetch;now?:string}):Promise<CompanyProfile> {
+export async function researchCompany(deal:Deal,options:{qcc:QccCredentials|null;jinghai?:JinghaiCredentials|null;model:EffectiveModel|null;request?:typeof fetch;now?:string}):Promise<CompanyProfile> {
   const companyName=clean(deal.name,200);const now=options.now??new Date().toISOString();const request=options.request??fetch;
   const warnings:string[]=[];let material:Material|null=null;const qcc=options.qcc;
-  if(qcc){
+  const jinghai=options.jinghai;
+  if(jinghai){
+    try{
+      if(jinghai.endpoint!==JINGHAI_ENDPOINT||!jinghai.appId.trim()||!jinghai.apiKey.trim())throw new Error('Invalid Jinghai configuration');
+      const url=new URL(`${JINGHAI_ENDPOINT}/${encodeURIComponent(jinghaiName(companyName))}`);
+      url.searchParams.set('queryType','1');
+      const {text}=await boundedResponse(url.href,{
+        method:'GET',
+        headers:{'X-Jinghai-App-Id':jinghai.appId,'X-Jinghai-Api-Key':jinghai.apiKey,Accept:'application/json'},
+      },request);
+      material=jinghaiMaterial(JSON.parse(text),companyName,now);
+      if(!material)throw new Error('No matching Jinghai record');
+    }catch{
+      warnings.push(`鲸海数据暂未返回匹配资料，已尝试${qcc?'企查查和':''}公开检索；请检查接口授权、剩余额度或企业全称。`);
+    }
+  }
+  if(!material&&qcc){
     try {
       if(qcc.endpoint!==QCC_ENDPOINT||!qcc.appKey.trim()||!qcc.secretKey.trim())throw new Error('Invalid QCC configuration');
       const seconds=String(Math.floor(Date.parse(now)/1000));
@@ -131,7 +207,7 @@ export async function researchCompany(deal:Deal,options:{qcc:QccCredentials|null
   material??={companyName,facts:[],sources:[],provider:'web'};
   const profile:CompanyProfile={companyName:material.companyName,summary:'',facts:material.facts.slice(0,30),sources:material.sources.slice(0,20),provider:material.provider,status:'partial',warnings,updatedAt:now,modelUsed:false};
   if(!material.sources.length){profile.summary='暂无可核验的公开资料，请确认企业全称或手动补充。';warnings.push('暂无可核验的公开资料，未生成企业事实或推断。');return profile;}
-  profile.summary=material.provider==='qcc'?material.facts.slice(0,5).map(f=>`${f.label}：${f.value}`).join('；'):material.sources.slice(0,3).map(s=>`${s.title}：${s.snippet}`).join('\n');
+  profile.summary=material.provider!=='web'?material.facts.slice(0,5).map(f=>`${f.label}：${f.value}`).join('；'):material.sources.slice(0,3).map(s=>`${s.title}：${s.snippet}`).join('\n');
   if(material.provider==='web')warnings.push('公开搜索摘要可能过时或指向同名企业，资料待核实，不构成工商认证。');
   if(!options.model){warnings.push('配置大模型后可继续整理企业画像；当前展示已获取的来源资料。');return profile;}
   try {
@@ -145,7 +221,7 @@ export async function researchCompany(deal:Deal,options:{qcc:QccCredentials|null
     if(summary)profile.summary=`基于来源整理（待核实）：${summary}`;
     // Registry fields remain exactly as supplied by QCC. Model interpretations never replace them.
     if(material.provider==='web')profile.facts=facts;
-    profile.modelUsed=true;profile.status=material.provider==='qcc'?'ready':'partial';
+    profile.modelUsed=true;profile.status=material.provider!=='web'?'ready':'partial';
     warnings.push('模型整理内容待核实；请结合来源确认企业身份与最新经营情况。');
   }catch{warnings.push('大模型暂未完成资料整理，已保留检索来源；请稍后重试。');}
   return profile;

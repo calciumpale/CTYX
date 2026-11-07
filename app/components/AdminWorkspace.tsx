@@ -1,11 +1,12 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
-import { ArrowRight, BookOpen, Check, CircleAlert, GitBranch, Loader2, Pencil, RefreshCw, Save, Settings, ShieldCheck, Users, X } from 'lucide-react';
+import { ArrowRight, BookOpen, Check, CircleAlert, Database, GitBranch, Loader2, Pencil, RefreshCw, Save, Settings, ShieldCheck, Users, X } from 'lucide-react';
 import type { MemberSession, WorkspaceMember } from '../lib/member-types';
 import type { View, ViewProps } from '../lib/types';
 import { ApprovalWorkspace } from './ApprovalWorkspace';
 import { useBusinessSettings } from './BusinessSettingsContext';
+import { KnowledgeLibraries } from './KnowledgeLibraries';
 import { KnowledgeView } from './StudioViews';
 import { TalkLibraryView } from './TalkLibraryView';
 import './admin-workspace.css';
@@ -51,6 +52,15 @@ export function BusinessRulesView({state,notify,onBusyChange,onDirtyChange}:{sta
 }
 
 export function KnowledgeWorkspace({member,onUsePlaybook,initialTab='documents',focus,...props}:ViewProps&{member:MemberSession;onUsePlaybook:(id:string)=>void;initialTab?:'documents'|'talktracks';focus?:string|null}) {
-  const [tab,setTab]=useState(initialTab);
-  return <div className="knowledge-workspace"><nav className="knowledge-workspace-switch" aria-label="知识库内容"><button className={tab==='documents'?'selected':''} aria-pressed={tab==='documents'} onClick={()=>setTab('documents')}><BookOpen size={16}/>知识资料与方法</button><button className={tab==='talktracks'?'selected':''} aria-pressed={tab==='talktracks'} onClick={()=>setTab('talktracks')}><GitBranch size={16}/>成单话术</button></nav>{tab==='documents'?<KnowledgeView {...props} initialTab={member.role==='manager'&&focus==='skill-review'?'review':'knowledge'} canReviewSkills={member.role==='manager'} canSubmitExperience={member.role!=='admin'}/>:<TalkLibraryView {...props} initialTab={member.role==='manager'&&focus==='talk-review'?'review':'published'} canReview={member.role==='manager'} operational={member.role==='admin'} onUsePlaybook={onUsePlaybook}/>}</div>;
+  const [tab,setTab]=useState<'libraries'|'documents'|'talktracks'>(initialTab==='talktracks'||focus==='talk-review'?'talktracks':focus?'documents':'libraries');
+  return <div className="knowledge-workspace">
+    <nav className="knowledge-workspace-switch" aria-label="知识库内容">
+      <button className={tab==='libraries'?'selected':''} aria-pressed={tab==='libraries'} onClick={()=>setTab('libraries')}><Database size={16}/>资料库</button>
+      <button className={tab==='documents'?'selected':''} aria-pressed={tab==='documents'} onClick={()=>setTab('documents')}><BookOpen size={16}/>知识资料与方法</button>
+      <button className={tab==='talktracks'?'selected':''} aria-pressed={tab==='talktracks'} onClick={()=>setTab('talktracks')}><GitBranch size={16}/>成单话术</button>
+    </nav>
+    {tab==='libraries' ? <KnowledgeLibraries notify={props.notify}/> : tab==='documents' ?
+      <KnowledgeView {...props} initialTab={member.role==='manager'&&focus==='skill-review'?'review':'knowledge'} canReviewSkills={member.role==='manager'} canSubmitExperience={member.role!=='admin'}/> :
+      <TalkLibraryView {...props} initialTab={member.role==='manager'&&focus==='talk-review'?'review':'published'} canReview={member.role==='manager'} operational={member.role==='admin'} onUsePlaybook={onUsePlaybook}/>}
+  </div>;
 }

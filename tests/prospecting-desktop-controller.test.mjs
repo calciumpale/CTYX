@@ -97,6 +97,37 @@ test('a temporary read-only fallback waits for the saved canonical identity and 
   assert.equal(data.accountId, account.accountId); assert.deepEqual(calls.bindings, []);
 });
 
+test('connect waits passively after the first strict check and verifies newly logged-in owner controls only once', async t => {
+  const checks = [];
+  const state = fakeController({ sleep: async (_ms, { signal }) => {
+    if (state.calls.runs && !signal.aborted) await new Promise(resolve => signal.addEventListener('abort', resolve, { once: true }));
+  } });
+  const { controller, calls, data, adapter } = state; data.accountId = account.accountId; t.after(() => controller.stop());
+  adapter.accountStatus = async options => {
+    checks.push(options);
+    if (checks.length <= 2) return { authenticated: false, verificationPending: true };
+    if (checks.length === 3) return { authenticated: false, verificationPending: true, needsAccountVerification: true };
+    return account;
+  };
+  await controller.connect(); await until(() => calls.runs === 1);
+  assert.deepEqual(checks.map(options => options.passive), [false, true, true, false]);
+  assert.ok(checks.every(options => options.expectedAccountId === account.accountId));
+  assert.equal(controller.status().authenticated, true); assert.equal(calls.opens, 1); assert.deepEqual(calls.bindings, []);
+});
+
+test('an unresolved login-owner hint never repeats strict verification during one connection attempt', async t => {
+  let clock = Date.now(); t.mock.method(Date, 'now', () => clock);
+  const checks = [];
+  const { controller, calls, data, adapter } = fakeController({ sleep: async () => { clock += 16000; } });
+  data.accountId = account.accountId; t.after(() => controller.stop());
+  adapter.accountStatus = async options => { checks.push(options); return { authenticated: false, verificationPending: true, needsAccountVerification: true }; };
+  await controller.connect();
+  assert.equal(checks.filter(options => options.passive === false).length, 2);
+  assert.deepEqual(checks.map(options => options.passive), [false, true, false, true, true]);
+  assert.equal(controller.status().running, false); assert.equal(controller.status().browserOpen, true); assert.equal(calls.runs, 0);
+  assert.equal(calls.opens, 1); assert.equal(calls.browserCloses, 0); assert.equal(calls.journalCloses, 0);
+});
+
 test('waiting for a login can be cancelled without polling or leaving the browser open', async t => {
   const { controller, calls, data, adapter } = fakeController(); data.accountId = account.accountId; t.after(() => controller.stop());
   adapter.accountStatus = async () => ({ authenticated: false, verificationPending: true });
@@ -229,6 +260,18 @@ test('a captcha during login confirmation preserves the current browser until ex
   await controller.stop(); assert.equal(calls.browserCloses, 1); assert.equal(calls.journalCloses, 1);
 });
 
+for (const code of ['UNAUTHENTICATED', 'ACCOUNT_CHANGED']) test(`${code} during explicit login verification keeps the existing browser available for recovery`, async t => {
+  const { controller, calls, data, adapter } = fakeController(); data.accountId = account.accountId; t.after(() => controller.stop());
+  await controller.startLogin();
+  adapter.accountStatus = async () => { throw new BridgeError(`opaque ${config.deviceToken}`, code); };
+  const paused = await controller.confirmLogin();
+  assert.equal(paused.errorCode, code); assert.equal(paused.authenticated, false); assert.equal(paused.running, false); assert.equal(paused.browserOpen, true);
+  assert.equal(calls.browserCloses, 0); assert.equal(calls.journalCloses, 0); assert.equal(calls.runs, 0);
+  adapter.accountStatus = async () => account; await controller.connect(); await until(() => calls.runs === 1);
+  assert.equal(calls.opens, 1); assert.equal(data.accountId, account.accountId); assert.deepEqual(calls.bindings, []);
+  await controller.stop(); assert.equal(calls.browserCloses, 1); assert.equal(calls.journalCloses, 1);
+});
+
 for (const challenge of ['account', 'discover', 'send']) test(`captcha during ${challenge} pauses real execution, preserves the page and never replays work`, async t => {
   const directory = await mkdtemp(join(tmpdir(), 'desktop-captcha-'));
   let controller; t.after(async () => { await controller?.stop(); await rm(directory, { recursive: true, force: true }); });
@@ -295,46 +338,74 @@ test('transient network failure stays serial and retry waits for the configured 
   assert.equal(count, 2); assert.equal(calls.journalCloses, 1);
 });
 
-test('temporary account verification retries three times without claiming authentication, then releases on the fourth failure', async t => {
+test('temporary account verification keeps the same browser open beyond four unresolved polls without claiming authentication', async t => {
   let polls = 0; const retryStates = [];
   const { controller, calls, data } = fakeController({
-    runOnce: async () => ({ worked: false, authenticated: false, verificationPending: ++polls <= 4 }),
-    sleep: async () => { retryStates.push(controller.status()); },
+    runOnce: async () => { polls++; return { worked: false, authenticated: false, verificationPending: true }; },
+    sleep: async (_ms, { signal }) => {
+      retryStates.push(controller.status());
+      if (polls >= 8 && !signal.aborted) await new Promise(resolve => signal.addEventListener('abort', resolve, { once: true }));
+    },
   }); data.accountId = account.accountId; t.after(() => controller.stop());
-  await controller.start(); await until(() => controller.status().phase === 'login_required');
-  assert.equal(polls, 4); assert.equal(retryStates.length, 3);
-  for (const [index, state] of retryStates.entries()) {
+  await controller.start(); await until(() => polls >= 8 || controller.status().phase === 'login_required');
+  assert.equal(polls, 8); assert.equal(retryStates.length, 8);
+  for (const state of retryStates) {
     assert.equal(state.running, true); assert.equal(state.browserOpen, true); assert.equal(state.authenticated, false);
-    assert.match(state.message, /核实|核验/); assert.match(state.message, /重试/); assert.ok(state.message.includes(`${index + 1}/3`));
+    assert.match(state.message, /核实|核验/); assert.match(state.message, /重试/);
   }
-  assert.equal(controller.status().running, false); assert.equal(calls.browserCloses, 1); assert.equal(calls.journalCloses, 1);
+  assert.equal(calls.opens, 1); assert.equal(calls.browserCloses, 0); assert.equal(calls.journalCloses, 0);
+  assert.equal(data.accountId, account.accountId); assert.deepEqual(calls.bindings, []);
+  await controller.stop(); assert.equal(calls.browserCloses, 1); assert.equal(calls.journalCloses, 1);
 });
 
-test('successful account verification resets the consecutive retry budget and restores the authenticated status', async t => {
+test('successful account verification restores authentication after repeated unresolved checks and can recover again', async t => {
   const pending = { worked: false, authenticated: false, verificationPending: true };
-  const sequence = [pending, pending, pending, { worked: false, authenticated: true }, pending, pending, pending, { worked: false, authenticated: false }];
+  const sequence = [pending, pending, pending, pending, { worked: false, authenticated: true }, pending, { worked: false, authenticated: true }];
   let polls = 0; const states = [];
   const { controller, calls, data } = fakeController({
-    runOnce: async () => sequence[polls++] || { worked: false, authenticated: false },
-    sleep: async () => { states.push(controller.status()); },
+    runOnce: async () => sequence[polls++],
+    sleep: async (_ms, { signal }) => {
+      states.push(controller.status());
+      if (polls >= sequence.length && !signal.aborted) await new Promise(resolve => signal.addEventListener('abort', resolve, { once: true }));
+    },
   }); data.accountId = account.accountId; t.after(() => controller.stop());
-  await controller.start(); await until(() => controller.status().phase === 'login_required');
-  assert.equal(polls, 8); assert.equal(states.length, 7); assert.equal(states[3].authenticated, true);
-  assert.equal(states[4].authenticated, false); assert.ok(states[4].message.includes('1/3')); assert.equal(states[6].running, true);
-  assert.equal(calls.browserCloses, 1); assert.equal(calls.journalCloses, 1);
+  await controller.start(); await until(() => polls >= sequence.length || controller.status().phase === 'login_required');
+  assert.equal(polls, sequence.length); assert.equal(states.length, sequence.length);
+  assert.equal(states[4].authenticated, true); assert.equal(states[5].authenticated, false); assert.equal(states[6].authenticated, true);
+  assert.equal(controller.status().running, true); assert.equal(calls.browserCloses, 0); assert.equal(calls.journalCloses, 0);
 });
 
-test('an explicit missing or changed account stops immediately even with unused verification retries', async t => {
+test('an explicit missing or changed account pauses polling but explicit reconnection reuses the retained browser and binding', async t => {
   for (const unauthenticated of [{ worked: false, authenticated: false }, { worked: false, authenticated: false, verificationPending: false }]) {
-    let polls = 0;
+    let polls = 0, restored = false;
     const { controller, calls, data } = fakeController({
-      runOnce: async () => ++polls === 1 ? { worked: false, authenticated: false, verificationPending: true } : unauthenticated,
-      sleep: async () => {},
+      runOnce: async () => { polls++; return restored ? { worked: false, authenticated: true } : polls === 1 ? { worked: false, authenticated: false, verificationPending: true } : unauthenticated; },
+      sleep: async (_ms, { signal }) => { if (restored && !signal.aborted) await new Promise(resolve => signal.addEventListener('abort', resolve, { once: true })); },
     }); data.accountId = account.accountId; t.after(() => controller.stop());
     await controller.start(); await until(() => controller.status().phase === 'login_required');
     assert.equal(polls, 2); assert.equal(controller.status().running, false); assert.equal(controller.status().authenticated, false);
-    assert.equal(calls.browserCloses, 1); assert.equal(calls.journalCloses, 1);
+    assert.equal(controller.status().browserOpen, true); assert.equal(calls.browserCloses, 0); assert.equal(calls.journalCloses, 0);
+    restored = true; await controller.connect(); await until(() => polls === 3);
+    assert.equal(controller.status().running, true); assert.equal(calls.opens, 1); assert.equal(data.accountId, account.accountId); assert.deepEqual(calls.bindings, []);
+    await controller.stop(); assert.equal(calls.browserCloses, 1); assert.equal(calls.journalCloses, 1);
   }
+});
+
+for (const code of ['UNAUTHENTICATED', 'ACCOUNT_CHANGED']) test(`${code} pauses without closing the session, and reconnecting still enforces the original account`, async t => {
+  let polls = 0, restored = false;
+  const { controller, calls, data, adapter } = fakeController({
+    runOnce: async () => { polls++; if (!restored) throw new BridgeError(`opaque ${config.deviceToken}`, code); return { worked: false, authenticated: true }; },
+  }); data.accountId = account.accountId; t.after(() => controller.stop());
+  await controller.start(); await until(() => controller.status().errorCode === code);
+  assert.equal(controller.status().running, false); assert.equal(controller.status().authenticated, false); assert.equal(controller.status().browserOpen, true);
+  assert.equal(calls.browserCloses, 0); assert.equal(calls.journalCloses, 0); assert.equal(polls, 1);
+  assert.ok(!JSON.stringify(controller.status()).includes(config.deviceToken));
+  adapter.accountStatus = async () => ({ ...account, accountId: 'different-account' });
+  await controller.connect(); assert.equal(controller.status().phase, 'account_mismatch'); assert.equal(polls, 1); assert.equal(data.accountId, account.accountId);
+  adapter.accountStatus = async () => account; restored = true;
+  await controller.connect(); await until(() => polls === 2);
+  assert.equal(controller.status().running, true); assert.equal(calls.opens, 1); assert.deepEqual(calls.bindings, []);
+  await controller.stop(); assert.equal(calls.browserCloses, 1); assert.equal(calls.journalCloses, 1);
 });
 
 test('stop after dispatch keeps real journal unknown and restart only reports the result', async t => {

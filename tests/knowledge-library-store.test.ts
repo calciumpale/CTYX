@@ -103,3 +103,27 @@ test('hybrid fusion rewards lexical and vector consensus and honors library filt
  const isolated=await f.store.createLibrary('空库');assert.equal((await f.store.search({query:'保修',libraryId:isolated.id,mode:'hybrid',modelKey:'model',embed:async()=>[1,0]})).hits.length,0);
  assert.equal((await f.store.search({query:'保修',libraryId:library.id,mode:'bm25'})).hits.length,2);
 });
+
+test('real Excel import survives persistence, both chunk strategies and all retrieval modes with source evidence',async t=>{
+ const xlsx=await import('xlsx');const {importKnowledgeFile}=await import('../app/lib/knowledge-library-import.ts');const {splitKnowledgeText}=await import('../app/lib/knowledge-library-chunks.ts');
+ const workbook=xlsx.utils.book_new();
+ xlsx.utils.book_append_sheet(workbook,xlsx.utils.aoa_to_sheet([['型号','安装要求'],['AB-12','仅限室内使用']]),'产品');
+ xlsx.utils.book_append_sheet(workbook,xlsx.utils.aoa_to_sheet([['型号','保修期'],[],['AB-12','保修三年']]),'售后');
+ const imported=await importKnowledgeFile(new File([xlsx.write(workbook,{bookType:'xlsx',type:'array'})],'产品与售后.xlsx'));
+ for(const strategy of ['flat','parent-child'] as const){
+  const f=fixture();t.after(()=>f.sqlite.close());const library=await f.store.createLibrary(`Excel ${strategy}`);
+  const document=await f.store.addDocument({libraryId:library.id,title:'产品与售后',fileName:imported.fileName,strategy,chunks:splitKnowledgeText(imported.text,strategy)});
+  for(const mode of ['bm25','hybrid'] as const){
+   const result=await f.store.search({query:'保修三年',mode,libraryId:library.id});
+   const found=result.hits.find(hit=>hit.heading==='工作表：售后');assert.ok(found);assert.equal(found.fileName,'产品与售后.xlsx');assert.match(found.context,/第3行：A3=AB-12；B3=保修三年/);assert.equal(found.parent,strategy==='parent-child');
+   if(mode==='hybrid'){assert.equal(result.mode,'bm25');assert.ok(result.notice);}
+  }
+  await f.store.indexDocument(document.id,'synthetic-model',async texts=>texts.map(text=>text.includes('保修三年')?[1,0]:[0,1]));
+  for(const mode of ['vector','hybrid'] as const){
+   const result=await f.store.search({query:'保修三年',mode,libraryId:library.id,modelKey:'synthetic-model',embed:async()=>[1,0]});
+   assert.equal(result.hits[0].heading,'工作表：售后');assert.equal(result.hits[0].fileName,'产品与售后.xlsx');assert.match(result.hits[0].context,/第3行/);
+  }
+  assert.equal((await f.other.search({query:'保修三年',mode:'bm25'})).hits.length,0);
+  await assert.rejects(f.other.chunks(document.id),{status:404});
+ }
+});

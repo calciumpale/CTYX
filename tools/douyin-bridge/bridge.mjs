@@ -54,6 +54,12 @@ export async function main(args = process.argv.slice(2)) {
   process.once('SIGINT', stop); process.once('SIGTERM', stop);
   let browser;
   try {
+    if (options.command === 'doctor') {
+      console.log(JSON.stringify({ configured: true, browser: 'not-opened', authenticated: false, loginChecked: false,
+        savedAccountId: journal.data.accountId, pendingResults: journal.data.entries.filter(entry => !entry.reported && !entry.reportRejected).length,
+        message: '仅检查本机配对和待补交记录，未打开浏览器或检查实时登录。需要核实账号时，请显式连接抖音。' }, null, 2));
+      return;
+    }
     browser = await openBrowser(config, join(stateDir, 'browser-profile'));
     if (options.command === 'login') {
       await browser.adapter.navigate('https://www.douyin.com/', controller.signal);
@@ -66,11 +72,9 @@ export async function main(args = process.argv.slice(2)) {
       await journal.bindAccount(account.accountId);
       console.log(`已确认账号：${account.accountName}（${account.accountId}）。登录态仅保存在本机。下一步运行 run。`); return;
     }
-    if (options.command === 'doctor') {
-      const account = await browser.adapter.accountStatus({ signal: controller.signal });
-      console.log(JSON.stringify({ configured: true, browser: config.cdpUrl ? 'explicit-cdp' : 'dedicated-profile', authenticated: account.authenticated, accountId: account.accountId, accountName: account.accountName, accountMatches: !journal.data.accountId || journal.data.accountId === account.accountId, pendingResults: journal.data.entries.filter(entry => !entry.reported && !entry.reportRejected).length, message: account.message }, null, 2));
-      return;
-    }
+    // `run` is an explicit user action. Initialize its owned pages once before
+    // the passive task loop; later health checks never create or navigate tabs.
+    await browser.adapter.accountStatus({ signal: controller.signal, expectedAccountId: journal.data.accountId });
     do {
       try {
         const result = await runOnce(config, { adapter: browser.adapter, journal, signal: controller.signal, logger: message => console.log(`${new Date().toISOString()} ${message}`) });

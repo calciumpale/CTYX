@@ -29,8 +29,12 @@ export function deriveKeywords(input) {
 /** Reads only rendered DOM and uses native visible controls; no request interception,
  * private endpoints, cookie extraction, page internals, or anti-challenge techniques. */
 export class DouyinBrowserAdapter {
-  constructor(context, { timeoutMs = 10000, confirmationMs = 12000, scrollDelayMs = 800 } = {}) {
+  constructor(context, { timeoutMs = 10000, confirmationMs = 12000, scrollDelayMs = 800, initialPage } = {}) {
     this.context = context; this.timeoutMs = timeoutMs; this.confirmationMs = confirmationMs; this.scrollDelayMs = scrollDelayMs;
+    if (initialPage && context.pages().includes(initialPage) && !initialPage.isClosed() &&
+        (initialPage.url() === 'about:blank' || /^https:\/\/(?:www\.)?douyin\.com\//.test(initialPage.url()))) {
+      this.activePage = initialPage; initialPage.setDefaultTimeout(timeoutMs);
+    }
   }
   async page() {
     if (!this.activePage || this.activePage.isClosed()) { this.activePage = await this.context.newPage(); this.activePage.setDefaultTimeout(this.timeoutMs); }
@@ -122,8 +126,18 @@ export class DouyinBrowserAdapter {
     const verified = proof => {
       const account = { authenticated: true, accountId: proof.accountId, accountName: proof.accountName,
         verifiedReadOnlyAccountId: `dy-readonly-${digest(proof.handle).slice(0, 24)}` };
-      this.passiveAccount = { account, checkedAt: Date.now(), context: this.context, page: this.activePage, identityPage: this.identityPage };
+      this.passiveAccount = { account, handle: proof.handle, checkedAt: Date.now(), context: this.context, page: this.activePage, identityPage: this.identityPage };
       return account;
+    };
+    const readOnlyFallback = async () => {
+      if (!allowReadOnly || !fallback.authenticated) return allowReadOnly ? fallback : pending;
+      // Discovery may have used the identity tab for search. Leave it on the
+      // proved self profile so subsequent health checks only have to read DOM.
+      const page = await this.identityNavigate(SELF, signal);
+      const proof = await this.ownProfileProof(page, signal);
+      if (!proof || `dy-readonly-${digest(proof.handle).slice(0, 24)}` !== fallback.accountId) return pending;
+      this.passiveAccount = { account: fallback, handle: proof.handle, checkedAt: Date.now(), context: this.context, page: this.activePage, identityPage: this.identityPage };
+      return fallback;
     };
     try {
       if (candidateId) {
@@ -163,15 +177,15 @@ export class DouyinBrowserAdapter {
           }, own.handle);
           const candidates = new Map();
           for (const href of matches) { try { const candidate = profileIdentity(href); if (candidate.id !== 'self') candidates.set(candidate.id, candidate); } catch { /* Only valid public profile URLs prove identity. */ } }
-          if (candidates.size > 1) return allowReadOnly ? fallback : pending;
+          if (candidates.size > 1) return await readOnlyFallback();
           if (candidates.size === 1) { canonical = [...candidates.values()][0]; break; }
           if (Date.now() < deadline) await sleep(150);
         } while (Date.now() < deadline);
-        if (!canonical) return allowReadOnly ? fallback : pending;
+        if (!canonical) return await readOnlyFallback();
         const profilePage = await this.identityNavigate(canonical.url, signal);
         const candidateProof = await this.ownProfileProof(profilePage, signal, canonical.id);
-        if (!candidateProof) return allowReadOnly ? fallback : pending;
-        if (candidateProof.handle !== own.handle) return allowReadOnly ? fallback : missing;
+        if (!candidateProof) return await readOnlyFallback();
+        if (candidateProof.handle !== own.handle) return allowReadOnly ? await readOnlyFallback() : missing;
       }
       this.senderProof = { accountId: canonical.id, handle: own.handle, accountName: own.name || '已登录抖音账号' };
       return verified(this.senderProof);
@@ -193,6 +207,14 @@ export class DouyinBrowserAdapter {
     return account.authenticated && account.accountId === expectedId ? account : { authenticated: false, message: '当前登录账号的发送身份未通过核验。' };
   }
   async accountStatus({ signal, allowReadOnly = true, expectedAccountId, passive = false } = {}) {
+    if (passive) {
+      try { return await this.passiveAccountStatus({ signal, allowReadOnly, expectedAccountId }); }
+      catch (error) {
+        checkAbort(signal);
+        if (error?.code === 'HUMAN_ACTION_REQUIRED') throw error;
+        return { authenticated: false, ...(this.activePage && !this.activePage.isClosed() ? { verificationPending: true } : {}), message: '暂未读取到账号状态，请等待页面恢复；本轮不领取任务。' };
+      }
+    }
     const page = await this.page(); if (!/^https:\/\/(?:www\.)?douyin\.com\//.test(page.url())) await this.navigate(HOME, signal);
     await this.guard(page, signal);
     let status = await this.currentAccount(page);
@@ -201,10 +223,6 @@ export class DouyinBrowserAdapter {
       this.passiveAccount = undefined;
       return status.ambiguous ? { ...status, verificationPending: true } : status;
     }
-    const cached = this.passiveAccount, age = cached ? Date.now() - cached.checkedAt : Infinity;
-    if (passive && cached && age >= 0 && age < PASSIVE_ACCOUNT_TTL_MS && cached.context === this.context && cached.page === page &&
-        cached.identityPage === this.identityPage && !cached.identityPage.isClosed() && cached.account.accountId === expected &&
-        (status.authenticated && status.accountId === expected || !status.authenticated && status.hasSelfLink)) return { ...cached.account };
     const recover = () => this.recoverOwnAccount(signal, { allowReadOnly, expectedAccountId });
     if (status.authenticated) return this.senderProof?.accountId === status.accountId ? recover() : status;
     if (expected || status.hasSelfLink || /\/user\/self\/?(?:[?#]|$)/.test(page.url())) return recover();
@@ -217,6 +235,46 @@ export class DouyinBrowserAdapter {
     if (!status.authenticated && (this.senderProof || status.hasSelfLink)) return recover();
     this.passiveAccount = undefined;
     return status;
+  }
+  async passiveAccountStatus({ signal, allowReadOnly, expectedAccountId }) {
+    checkAbort(signal);
+    const pending = { authenticated: false, verificationPending: true, message: '暂未核实当前账号，正在等待页面恢复；本轮不领取任务。' };
+    const page = this.activePage;
+    // Health checks must not resurrect a tab or navigate away from a draft.
+    if (!page || page.isClosed() || !/^https:\/\/(?:www\.)?douyin\.com\//.test(page.url())) return { authenticated: false, message: '抖音任务页面已关闭或离开，请点击“连接抖音”恢复。' };
+    await this.guard(page, signal);
+    const status = await this.currentAccount(page);
+    const expected = canonicalAccount(expectedAccountId) ? expectedAccountId : this.senderProof?.accountId;
+    if (status.ambiguous || status.authenticated && expected && status.accountId !== expected) {
+      this.passiveAccount = undefined;
+      return status.ambiguous ? { ...status, verificationPending: true } : status;
+    }
+    if (!status.authenticated && !status.hasSelfLink) return pending;
+    let cached = this.passiveAccount;
+    if (!cached && status.authenticated && !this.senderProof) return status;
+    const identity = this.identityPage;
+    if (!identity || identity.isClosed()) return { authenticated: false, message: '身份核验页面已关闭，请点击“连接抖音”恢复。' };
+    if (cached && (cached.context !== this.context || cached.page !== page || cached.identityPage !== identity)) cached = undefined;
+    const account = cached?.account;
+    const matched = account && (account.accountId === expectedAccountId || account.accountId === expected || !expectedAccountId && !expected);
+    const age = cached ? Date.now() - cached.checkedAt : Infinity;
+    if (matched && !allowReadOnly && READ_ONLY_ACCOUNT.test(account.accountId)) return pending;
+    if (matched && age >= 0 && age < PASSIVE_ACCOUNT_TTL_MS) return { ...account };
+    // Re-read visible ownership evidence after expiry; only an explicit connect
+    // or a strict pre-send check may reload it. This is never send authorization.
+    const candidate = matched ? account : this.senderProof && (!expected || this.senderProof.accountId === expected)
+      ? { authenticated: true, accountId: this.senderProof.accountId, accountName: this.senderProof.accountName, verifiedReadOnlyAccountId: `dy-readonly-${digest(this.senderProof.handle).slice(0, 24)}` } : undefined;
+    if (!candidate) {
+      // During an explicit connect, newly rendered owner controls can request
+      // one final strict check. The idle runner never follows this with a goto.
+      const newlySignedIn = !cached && !this.senderProof && await this.ownProfileProof(identity, signal);
+      return newlySignedIn ? { ...pending, needsAccountVerification: true } : pending;
+    }
+    if (!allowReadOnly && READ_ONLY_ACCOUNT.test(candidate.accountId)) return pending;
+    const proof = await this.ownProfileProof(identity, signal, READ_ONLY_ACCOUNT.test(candidate.accountId) ? 'self' : candidate.accountId);
+    if (!proof || proof.handle !== (matched ? cached.handle : this.senderProof?.handle)) return pending;
+    this.passiveAccount = { account: candidate, handle: proof.handle, checkedAt: Date.now(), context: this.context, page, identityPage: identity };
+    return { ...candidate };
   }
   async waitForContent(page, selector, signal) {
     try { await page.locator(selector).first().waitFor({ state: 'attached', timeout: this.timeoutMs }); }
@@ -638,5 +696,8 @@ export async function openBrowser(config, profileDir) {
   await mkdir(profileDir, { recursive: true, mode: 0o700 });
   let context; try { context = await chromium.launchPersistentContext(profileDir, { headless: false, viewport: { width: 1320, height: 900 } }); }
   catch { fail('无法启动专用浏览器，请安装 Chromium 并确认没有其他执行器占用。', 'BROWSER_MISSING'); }
-  return { adapter: new DouyinBrowserAdapter(context), close: () => context.close() };
+  // This context belongs only to the pairing's dedicated profile. Never adopt
+  // an arbitrary page from a user's CDP browser (the explicit-CDP path above).
+  const initialPage = context.pages().find(page => !page.isClosed() && (page.url() === 'about:blank' || /^https:\/\/(?:www\.)?douyin\.com\//.test(page.url())));
+  return { adapter: new DouyinBrowserAdapter(context, { initialPage }), close: () => context.close() };
 }

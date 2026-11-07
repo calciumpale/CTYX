@@ -1,7 +1,7 @@
 export const KNOWLEDGE_FILE_LIMIT = 10 * 1024 * 1024;
 export const KNOWLEDGE_TEXT_LIMIT = 80_000;
 export const KNOWLEDGE_SEARCHABLE_LIMIT = 1_000;
-export const KNOWLEDGE_UPLOAD_ACCEPT = '.pdf,.docx,.txt,.md,.markdown,.csv';
+export const KNOWLEDGE_UPLOAD_ACCEPT = '.xlsx,.xls,.pdf,.docx,.txt,.md,.markdown,.csv';
 
 export type KnowledgeChunkStrategy = 'flat' | 'parent-child';
 export type KnowledgeRetrievalMode = 'hybrid' | 'bm25' | 'vector';

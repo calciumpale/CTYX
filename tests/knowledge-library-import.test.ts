@@ -31,7 +31,7 @@ test('knowledge import rejects oversized, empty, binary, unsupported and overlon
   await assert.rejects(importKnowledgeFile(new File([new Uint8Array(10 * 1024 * 1024 + 1)], '大.md')), /10\s?MB/);
   await assert.rejects(importKnowledgeFile(new File(['字'.repeat(80_001)], '长.csv')), /80,000|80000/);
   await assert.rejects(importKnowledgeFile(new File(['hello\0world'], 'binary.txt')), /二进制|编码/);
-  await assert.rejects(importKnowledgeFile(new File(['产品说明'], '产品.xlsx')), /PDF|DOCX|TXT|CSV/);
+  await assert.rejects(importKnowledgeFile(new File(['产品说明'], '产品.ods')), /PDF|DOCX|TXT|CSV/);
   await assert.rejects(importKnowledgeFile(new File(['not a PDF'], '产品.pdf')), /PDF/);
 });
 

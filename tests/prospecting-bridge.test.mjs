@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm, readFile, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { BridgeError, validateConfig, saveConfig, loadConfig, normalizeMediaCrawler, validateJob, runOnce, Journal } from '../tools/douyin-bridge/bridge-core.mjs';
 import { DouyinBrowserAdapter } from '../tools/douyin-bridge/browser-adapter.mjs';
 
@@ -12,6 +14,18 @@ async function temporary(t) { const dir = await mkdtemp(join(tmpdir(), 'prospect
 async function journalFor(t) { const journal = await Journal.open(join(await temporary(t), 'journal.json')); t.after(() => journal.close()); return journal; }
 const account = () => ({ authenticated: true, accountId: 'sender-1', accountName: '我' });
 const response = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } });
+
+test('doctor inspects local pairing without launching a browser or claiming a live login', async t => {
+  const directory = await temporary(t), path = join(directory, 'config.json');
+  await saveConfig(path, config);
+  const { stdout } = await promisify(execFile)(process.execPath, ['tools/douyin-bridge/bridge.mjs', 'doctor', '--config', path], {
+    cwd: new URL('..', import.meta.url), env: { ...process.env, PLAYWRIGHT_BROWSERS_PATH: join(directory, 'no-installed-browser') },
+  });
+  const result = JSON.parse(stdout);
+  assert.equal(result.configured, true); assert.equal(result.browser, 'not-opened');
+  assert.equal(result.authenticated, false); assert.equal(result.loginChecked, false);
+  assert.ok(!stdout.includes(config.deviceToken));
+});
 
 test('config stays private and never accepts remote CDP or insecure cloud origin', async t => {
   assert.throws(() => validateConfig({ ...config, origin: 'http://public.example' }));

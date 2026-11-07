@@ -109,7 +109,7 @@ browserTest('a bound canonical is only a fresh owner-proof hint and skips self/s
   assert.deepEqual(state.requests, ['/user/recipient-1', '/user/sender-1']);
 });
 
-browserTest('passive identity reuse avoids navigation for 15 seconds but fresh checks and expiry revalidate ownership', async t => {
+browserTest('passive identity expiry rereads owner DOM without navigation while strict checks still reload ownership', async t => {
   const { adapter, page, state } = await fixture(t);
   const options = { expectedAccountId: 'sender-1' };
   assert.equal((await adapter.accountStatus(options)).accountId, 'sender-1');
@@ -122,7 +122,11 @@ browserTest('passive identity reuse avoids navigation for 15 seconds but fresh c
   t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
   t.mock.timers.tick(15001);
   assert.equal((await adapter.accountStatus({ ...options, passive: true })).accountId, 'sender-1');
-  assert.equal(count(), initial + 3);
+  assert.equal(count(), initial + 2);
+  await adapter.identityPage.locator('[role=tab]').evaluate(node => node.remove());
+  t.mock.timers.tick(15001);
+  assert.equal((await adapter.accountStatus({ ...options, passive: true })).authenticated, false);
+  assert.equal(count(), initial + 2);
 });
 
 browserTest('a conflicting or ambiguous current header invalidates passive identity reuse', async t => {
@@ -133,7 +137,7 @@ browserTest('a conflicting or ambiguous current header invalidates passive ident
   assert.equal((await adapter.accountStatus(options)).accountId, 'sender-2');
   await page.locator('header').evaluate(node => { node.innerHTML = '<a aria-label="我的主页" href="/user/self">我</a>'; });
   const count = state.requests.length;
-  await adapter.accountStatus(options); assert.equal(state.requests.length, count + 1);
+  await adapter.accountStatus(options); assert.equal(state.requests.length, count);
   await page.locator('header').evaluate(node => { node.innerHTML = '<a aria-label="我的主页" href="/user/sender-1">我</a><a aria-label="我的主页" href="/user/sender-2">其他账号</a>'; });
   const ambiguous = await adapter.accountStatus(options);
   assert.equal(ambiguous.authenticated, false); assert.equal(ambiguous.accountId, undefined);
@@ -166,15 +170,81 @@ browserTest('a different freshly proved self handle still resolves the real repl
   assert.equal(observed.verificationPending, undefined);
 });
 
-browserTest('closing the verified identity page invalidates reuse and a failed fresh navigation remains pending', async t => {
+browserTest('closing the verified identity page pauses passive checks without opening tabs and explicit reconnect can recover', async t => {
   const { adapter, state } = await fixture(t);
   const options = { expectedAccountId: 'sender-1', passive: true };
   await adapter.accountStatus({ expectedAccountId: 'sender-1' });
   await adapter.identityPage.close();
   const count = state.requests.length;
-  assert.equal((await adapter.accountStatus(options)).accountId, 'sender-1');
+  const pages = adapter.context.pages().length;
+  assert.equal((await adapter.accountStatus(options)).authenticated, false);
+  assert.equal(state.requests.length, count);
+  assert.equal(adapter.context.pages().length, pages);
+  assert.equal((await adapter.accountStatus({ expectedAccountId: 'sender-1' })).accountId, 'sender-1');
   assert.equal(state.requests.length, count + 1);
   state.failCanonical = true;
   const result = await adapter.accountStatus({ expectedAccountId: 'sender-1' });
   assert.equal(result.authenticated, false); assert.equal(result.verificationPending, true); assert.equal(result.accountId, undefined);
+});
+
+
+browserTest('passive health checks on an unopened or closed workspace never create or navigate a tab', async t => {
+  const { adapter, page, state } = await fixture(t);
+  await page.close();
+  const before = state.requests.length;
+  const pages = adapter.context.pages().length;
+  assert.equal((await adapter.accountStatus({ passive: true, expectedAccountId: 'sender-1' })).authenticated, false);
+  assert.equal(state.requests.length, before);
+  assert.equal(adapter.context.pages().length, pages);
+  const fresh = new DouyinBrowserAdapter(adapter.context, { timeoutMs: 100 });
+  assert.equal((await fresh.accountStatus({ passive: true })).authenticated, false);
+  assert.equal(adapter.context.pages().length, pages);
+});
+
+browserTest('temporary missing owner DOM recovers passively without navigating or authorizing a send', async t => {
+  const { adapter, page, state } = await fixture(t);
+  await adapter.accountStatus({ expectedAccountId: 'sender-1' });
+  const initial = state.requests.length;
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() }); t.mock.timers.tick(15001);
+  await adapter.identityPage.locator('[role=tab]').evaluate(node => node.remove());
+  const pending = await adapter.accountStatus({ expectedAccountId: 'sender-1', passive: true });
+  assert.equal(pending.authenticated, false); assert.equal(pending.verificationPending, true);
+  assert.equal(state.requests.length, initial);
+  await adapter.identityPage.locator('main').evaluate(node => node.insertAdjacentHTML('beforeend', '<button role="tab">私密作品</button>'));
+  assert.equal((await adapter.accountStatus({ expectedAccountId: 'sender-1', passive: true })).accountId, 'sender-1');
+  assert.equal(state.requests.length, initial);
+  state.canonical = ownProfile(handle, false); state.self = ownProfile(handle, false);
+  assert.equal((await adapter.verifiedSender(page, 'sender-1')).authenticated, false);
+});
+
+browserTest('read-only sessions retain a live owner-proof page for quiet passive collection checks', async t => {
+  const { adapter, state } = await fixture(t, { search: result('other-user', `${handle}_other`) });
+  const first = await adapter.accountStatus();
+  assert.match(first.accountId, /^dy-readonly-/);
+  const initial = state.requests.length;
+  const realNow = Date.now.bind(Date); t.mock.method(Date, 'now', () => realNow() + 15001);
+  const observed = await adapter.accountStatus({ passive: true, expectedAccountId: first.accountId });
+  assert.equal(observed.authenticated, true); assert.equal(observed.accountId, first.accountId);
+  assert.equal(state.requests.length, initial);
+});
+
+browserTest('dedicated session initialization reuses its owned existing page instead of opening another tab', async t => {
+  const { adapter, page } = await fixture(t);
+  const pages = adapter.context.pages().length;
+  const resumed = new DouyinBrowserAdapter(adapter.context, { initialPage: page, timeoutMs: 100 });
+  assert.equal(await resumed.page() === page, true);
+  assert.equal(adapter.context.pages().length, pages);
+});
+
+browserTest('a transient DOM read interruption stays unauthenticated and recovers on the same pages', async t => {
+  const { adapter, state } = await fixture(t);
+  await adapter.accountStatus({ expectedAccountId: 'sender-1' });
+  const before = state.requests.length, readAccount = adapter.currentAccount.bind(adapter);
+  adapter.currentAccount = async () => { throw Error('Execution context was destroyed'); };
+  const pending = await adapter.accountStatus({ passive: true, expectedAccountId: 'sender-1' });
+  assert.equal(pending.authenticated, false); assert.equal(pending.verificationPending, true);
+  assert.equal(state.requests.length, before);
+  adapter.currentAccount = readAccount;
+  assert.equal((await adapter.accountStatus({ passive: true, expectedAccountId: 'sender-1' })).accountId, 'sender-1');
+  assert.equal(state.requests.length, before);
 });

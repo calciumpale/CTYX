@@ -8,7 +8,12 @@ export async function importKnowledgeFile(file: File): Promise<{ text: string; f
   if (!file.size) throw new Error('文件为空，请选择包含正文的文档。');
   if (file.size > KNOWLEDGE_FILE_LIMIT) throw new Error('知识文件不能超过 10 MB，请压缩或拆分后重试。');
   const extension = file.name.split('.').pop()?.toLowerCase();
-  if (!extension || !['txt', 'md', 'markdown', 'csv', 'docx', 'pdf'].includes(extension)) throw new Error('支持 PDF、DOCX、TXT、Markdown 和 CSV；旧版 DOC 请另存为 DOCX。');
+  if (!extension || !['txt', 'md', 'markdown', 'csv', 'docx', 'pdf', 'xlsx', 'xls'].includes(extension)) throw new Error('支持 Excel（XLSX / XLS）、PDF、DOCX、TXT、Markdown 和 CSV；旧版 DOC 请另存为 DOCX。');
+  if (extension === 'xlsx' || extension === 'xls') {
+    const { importKnowledgeExcel } = await import('./knowledge-excel.ts');
+    const result = await importKnowledgeExcel(file, extension);
+    return { ...result, fileName: file.name };
+  }
   // Reuse the existing bounded decoding, ZIP/CRC validation and PDF worker.
   const input = ['md', 'markdown', 'csv'].includes(extension) ? new File([file], `${file.name}.txt`, { type: 'text/plain' }) : file;
   try {

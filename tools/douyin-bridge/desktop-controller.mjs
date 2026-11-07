@@ -5,6 +5,7 @@ import { BridgeError, Journal, loadConfig, runOnce, validateConfig, verifiedAcco
 import { openBrowser } from './browser-adapter.mjs';
 
 const HOME = 'https://www.douyin.com/';
+const RECOVERABLE_SESSION_ERRORS = new Set(['HUMAN_ACTION_REQUIRED', 'UNAUTHENTICATED', 'ACCOUNT_CHANGED']);
 const PUBLIC_ERRORS = {
   INVALID_CONFIG: '配对配置不完整，请重新导入工作台下载的配置。',
   PRIVATE_FILE: '本机配置权限不正确，请通过助手重新导入配置。',
@@ -139,7 +140,7 @@ export class DesktopController {
       try { await work(controller.signal); }
       catch (error) {
         if (!controller.signal.aborted && !this.#stopping) {
-          if (error?.code !== 'HUMAN_ACTION_REQUIRED') await this.#release();
+          if (!RECOVERABLE_SESSION_ERRORS.has(error?.code)) await this.#release();
           this.#set({ phase: 'error', authenticated: false, running: false, ...this.#publicFailure(error) });
         }
       } finally {
@@ -219,8 +220,17 @@ export class DesktopController {
       this.#set({ message: '正在恢复已保存的抖音登录，请稍候。' });
       await this.#ensureSession(signal);
       const deadline = Date.now() + 60000;
+      let firstCheck = true, loginVerificationRetried = false;
       do {
-        const observed = await this.#browser.adapter.accountStatus({ signal, expectedAccountId: this.#journal.data.accountId });
+        const passive = !firstCheck; firstCheck = false;
+        let observed = await this.#browser.adapter.accountStatus({ signal, expectedAccountId: this.#journal.data.accountId, passive });
+        this.#check(signal);
+        if (passive && observed?.needsAccountVerification === true && !loginVerificationRetried) {
+          // The existing login page just exposed owner controls. Verify it once;
+          // waiting for login must not navigate or reopen the profile every second.
+          loginVerificationRetried = true;
+          observed = await this.#browser.adapter.accountStatus({ signal, expectedAccountId: this.#journal.data.accountId, passive: false });
+        }
         const account = this.#account(observed); this.#check(signal);
         if (account.authenticated) {
           const bound = this.#journal.data.accountId;
@@ -240,7 +250,7 @@ export class DesktopController {
   }
 
   async #runLoop(signal) {
-    let exitState, verificationRetries = 0;
+    let exitState;
     try {
       while (!signal.aborted) {
         try {
@@ -256,15 +266,14 @@ export class DesktopController {
             break;
           }
           if (result?.authenticated === false) {
-            if (result.verificationPending === true && verificationRetries < 3) {
-              verificationRetries++;
-              this.#set({ authenticated: false, errorCode: undefined, message: `暂未核实当前账号，正在重试（${verificationRetries}/3）。本轮未领取任务。` });
+            if (result.verificationPending === true) {
+              this.#set({ authenticated: false, errorCode: undefined, message: '暂未核实当前账号，正在重试，专用浏览器保持打开。本轮未领取任务。' });
             } else {
-              exitState = { phase: 'login_required', authenticated: false, errorCode: 'UNAUTHENTICATED', message: result.verificationPending === true ? '多次未能核实当前账号，同步已停止。请在专用浏览器确认登录后重新启动。' : '登录或账号确认已失效，同步已停止。请重新扫码并确认账号。' };
+              exitState = { phase: 'login_required', authenticated: false, errorCode: 'UNAUTHENTICATED', message: '登录或账号确认已失效，同步已暂停，专用浏览器已保留。请完成登录或切回已配对账号，再点击“连接抖音”。' };
               break;
             }
           } else {
-            if (result?.authenticated === true) { verificationRetries = 0; this.#set({ authenticated: true }); }
+            if (result?.authenticated === true) this.#set({ authenticated: true });
             this.#set({ errorCode: undefined, message: result?.pendingReport ? '结果已保存在本机，正在等待补交；不会重新执行发送。' : result?.worked ? '任务结果已处理，可在工作台查看详情。' : '同步运行中，等待工作台任务。' });
           }
         } catch (error) {
@@ -278,9 +287,10 @@ export class DesktopController {
     } catch (error) {
       if (!signal.aborted) exitState = { phase: 'error', authenticated: false, ...this.#publicFailure(error) };
     } finally {
-      // Keep the live challenge and journal lock until the user resumes or stops.
-      const preserveChallenge = exitState?.errorCode === 'HUMAN_ACTION_REQUIRED' && !signal.aborted && !this.#stopping;
-      const released = preserveChallenge || await this.#release();
+      // Login and account recovery reuse this dedicated browser and its journal.
+      // Explicit stop and permanent errors still release both resources.
+      const preserveSession = RECOVERABLE_SESSION_ERRORS.has(exitState?.errorCode) && !signal.aborted && !this.#stopping;
+      const released = preserveSession || await this.#release();
       this.#loopPromise = undefined; this.#runAbort = undefined;
       if (!this.#stopping) this.#set({ running: false, busy: false, ...(released ? exitState || { phase: 'stopped', authenticated: false, message: '同步已停止。' } : { phase: 'error', authenticated: false, ...this.#publicFailure({ code: 'RESOURCE_RELEASE' }) }) });
     }

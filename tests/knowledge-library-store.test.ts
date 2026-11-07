@@ -127,3 +127,23 @@ test('real Excel import survives persistence, both chunk strategies and all retr
   await assert.rejects(f.other.chunks(document.id),{status:404});
  }
 });
+
+test('explicit multi-library allowlist scopes lexical and vector retrieval, with empty selection closed',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());
+ const a=await add(f.store,['招商红色管道对外说明。'],'对外产品');
+ const b=await add(f.store,['招商红色管道公开位置。'],'对外位置');
+ const internal=await add(f.store,['招商红色管道内部底价。'],'内部审批');
+ const foreign=await add(f.other,['招商红色管道其他租户。'],'其他租户');
+ for(const d of [a.document,b.document,internal.document])await f.store.indexDocument(d.id,'model',async()=>[[1,0]]);
+ for(const mode of ['bm25','vector','hybrid'] as const){
+  const result=await f.store.search({query:'招商红色管道',libraryIds:[a.library.id,b.library.id],mode,modelKey:'model',embed:async()=>[1,0],limit:10});
+  assert.deepEqual(new Set(result.hits.map(hit=>hit.documentId)),new Set([a.document.id,b.document.id]));
+  let called=false;
+  assert.deepEqual((await f.store.search({query:'招商红色管道',libraryIds:[],mode,modelKey:'model',embed:async()=>{called=true;return[1,0];}})).hits,[]);
+  assert.equal(called,false);
+ }
+ await assert.rejects(f.store.search({query:'招商',libraryIds:[a.library.id,foreign.library.id],mode:'bm25'}),{status:404});
+ await assert.rejects(f.store.search({query:'招商',libraryId:a.library.id,libraryIds:[b.library.id],mode:'bm25'}),{status:400});
+ // Existing workbench QA without an explicit allowlist retains its full owner scope.
+ assert.equal((await f.store.search({query:'招商红色管道',mode:'bm25',limit:10})).hits.length,3);
+});

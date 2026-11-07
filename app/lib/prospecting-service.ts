@@ -40,7 +40,7 @@ export function createProspectingService(deps:Dependencies){
    assertMemberOrigin(request);const input=await readMeetingBody(request,1600000);const action=input.action;
    let campaignId=typeof input.campaignId==='string'?prospectId(input.campaignId):undefined;let message='操作已保存';let deviceCredentials:Awaited<ReturnType<typeof store.connect>>|undefined;
    if(['chatSettings','chatTakeover','chatResume','chatReply','chatSync'].includes(String(action))){
-    if(action==='chatSettings'){if(!campaignId||typeof input.enabled!=='boolean')throw new DomainError('请选择获客任务并设置会话开关');await store.chat.settings(ownerId,memberId,campaignId,input.enabled);message=input.enabled?'会话同步和获客助手已开启':'已停止自动同步和回复，未执行的回复已取消';}
+    if(action==='chatSettings'){if(!campaignId||typeof input.enabled!=='boolean')throw new DomainError('请选择获客任务并设置会话开关');await store.chat.settings(ownerId,memberId,campaignId,input.enabled,input.policy);message=input.enabled?'会话同步和获客助手已开启':'已停止自动同步和回复，未执行的回复已取消';}
     else if(action==='chatSync'){if(!campaignId)throw new DomainError('请选择要同步的会话');const queued=await store.chat.sync(ownerId,memberId,campaignId,prospectId(input.conversationId));message=queued?'已请求助手同步抖音私信':'同步已在队列中或刚完成';}
     else{if(!Number.isInteger(input.version)||Number(input.version)<1)throw new DomainError('会话版本无效');const id=prospectId(input.conversationId);
      if(action==='chatTakeover'){await store.chat.takeover(ownerId,memberId,id,Number(input.version));message='已接管会话，助手不会继续自动回复';}
@@ -93,6 +93,12 @@ export function createProspectingService(deps:Dependencies){
     const acknowledgement=verifiedAccountId?{verifiedAccountId}:{};
     const claim=()=>store.claim(deviceId,input.sendRetryVersion===1,supportsConversations);
     if(supportsConversations&&await store.chat.hasQueuedManualSync(deviceId)){
+     if(request.signal.aborted)throw new DomainError('请求已取消，未领取新任务',409);
+     const queued=await claim();
+     if(queued)return json({job:queued,...acknowledgement});
+    }
+    if(supportsConversations&&await store.chat.hasQueuedConversationWork(deviceId)){
+     await store.chat.processOne(device.owner_id,device.member_id,new URL(request.url).origin,undefined,true);
      if(request.signal.aborted)throw new DomainError('请求已取消，未领取新任务',409);
      const queued=await claim();
      if(queued)return json({job:queued,...acknowledgement});

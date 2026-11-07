@@ -12,8 +12,10 @@ export async function workbenchKnowledge(
   ownerId: string,
   origin: string,
   query: string,
+  options?: { libraryIds: string[] },
 ): Promise<Knowledge[]> {
   try {
+    if (options && !options.libraryIds.length) return [];
     const text = query.trim().slice(-1_500);
     if (!text) return [];
     const connection = await effectiveEmbedding(ownerId).catch(() => null);
@@ -21,6 +23,7 @@ export async function workbenchKnowledge(
       query: text,
       mode: 'hybrid',
       limit: 4,
+      ...(options ? { libraryIds: options.libraryIds } : {}),
       ...(connection ? {
         modelKey: knowledgeModelKey(connection),
         embed: async () => (await requestEmbeddings(connection, [text], { origin, timeoutMs: 4_500 })).vectors[0],

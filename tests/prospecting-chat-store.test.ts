@@ -283,6 +283,187 @@ test('additional contact methods keep the same enabled assignee and assigned sal
  await readConversation(f,x,[{id:'phone',direction:'inbound',text:'我的手机号是13800138000',postedAt:f.now()}]);await f.chat.processOne('owner-a','member-a','https://example.test',(_owner,_origin,input)=>chooseProspectChatAction(input,{}));
  let assigned=await f.chat.snapshot('owner-a','member-b','sales',undefined,x.conversation.id);assert.equal(assigned.pool[0].assignedMemberId,'member-b');assert.equal(assigned.messages.some(message=>message.text.includes('13800138000')),true);
  await assert.rejects(f.chat.takeover('owner-a','member-b',x.conversation.id,assigned.conversations[0].version),/不存在|无权/);
+ // Contact acknowledgement is now a safe reply; complete it before another read.
+ f.advance(61000);await f.store.seen(x.device.deviceId,{authenticated:true,accountId:'MS4wSender001'});const acknowledgement=await f.store.claim(x.device.deviceId,false,true);if(acknowledgement?.kind==='reply')await f.store.complete(x.device.deviceId,acknowledgement.id,acknowledgement.leaseToken,{outcome:'submitted'});
  f.advance(61000);await readConversation(f,x,[{id:'email',direction:'inbound',text:'我的邮箱是PERSON@Example.com',postedAt:f.now()}],'snapshot-2');await f.chat.processOne('owner-a','member-a','https://example.test',(_owner,_origin,input)=>chooseProspectChatAction(input,{}));
  assigned=await f.chat.snapshot('owner-a','member-b','sales');assert.equal(assigned.pool.length,2);assert.ok(assigned.pool.every(lead=>lead.assignedMemberId==='member-b'));
+});
+
+test('reply policy validates owned libraries and persists memory across store instances',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);
+ f.sqlite.prepare("INSERT INTO workbench_knowledge_libraries(id,owner_id,name,created_at) VALUES ('mine','owner-a','招商资料',?),('foreign','owner-z','私有资料',?)").run(f.now(),f.now());
+ const policy={libraryIds:['mine'],replyDailyLimit:2,conversationReplyLimit:2,workStart:'08:30',workEnd:'21:30'};
+ await assert.rejects(f.chat.settings('owner-a','member-a',x.campaign.id,true,{...policy,libraryIds:['foreign']}),/知识库/);
+ await f.chat.settings('owner-a','member-a',x.campaign.id,true,policy);
+ await readConversation(f,x,[{id:'needs',direction:'inbound',text:'想找海盐60平米餐饮店',postedAt:f.now()}]);
+ const memory={needs:{area:'60平米',category:'餐饮',location:'海盐'},stage:'qualifying' as const,contactCaptured:false,contactDeclines:0,contactAsks:0,summary:'海盐餐饮需求'};
+ await f.chat.processOne('owner-a','member-a','https://example.test',async(_owner,_origin,input)=>{assert.deepEqual(input.policy,policy);return{action:'wait',memory};});
+ const fresh=createProspectingChatStore(f.db,()=>Date.parse(f.now()));const snapshot=await fresh.snapshot('owner-a','member-a','sales',x.campaign.id);
+ assert.deepEqual(snapshot.policy,policy);assert.deepEqual(snapshot.libraries,[{id:'mine',name:'招商资料'}]);assert.deepEqual(snapshot.conversations[0].memory,memory);
+});
+
+test('stop requests close durably outside work hours and prevent future greetings across campaigns',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.chat.settings('owner-a','member-a',x.campaign.id,true);
+ f.advance(12*3600000);await readConversation(f,x,[{id:'stop',direction:'inbound',text:'不要再给我发消息了',postedAt:f.now()}]);
+ let calls=0;assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',async()=>{calls++;return{action:'reply',reply:'不应回复'};}),false);assert.equal(calls,0);
+ const snapshot=await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id);assert.equal(snapshot.conversations[0].status,'closed');assert.ok(snapshot.conversations[0].closeReason);assert.equal(snapshot.conversations[0].memory?.stage,'closed');
+ await assert.rejects(f.chat.resume('owner-a','member-a',x.conversation.id,snapshot.conversations[0].version),/更新|关闭|停止/);
+ const campaign=await f.store.createCampaign('owner-a','member-a',normalizeCampaignInput({requirements:'商铺出租咨询服务',keywords:['商铺'],greetingTemplate:'你好'}));
+ const comment=normalizeComments([{id:'stop-again',videoId:'7654321234567890',text:'想租商铺',profileUrl:'https://www.douyin.com/user/MS4wRecipient001'}],'browser')[0];
+ await f.store.insertComments('owner-a','member-a',campaign.id,[scoreComment(comment,campaign)]);const lead=(await f.store.leads('owner-a','member-a',campaign.id))[0];
+ await assert.rejects(f.store.review('owner-a','member-a',campaign.id,lead.id,lead.version,'approve',lead.greeting,'销售甲'),/停止|拒绝|联系/);
+ assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS total FROM workbench_prospect_contact_optouts WHERE owner_id=? AND sender_id=? AND recipient_id=?').get('owner-a','MS4wSender001','MS4wRecipient001')?.total,1);
+});
+
+test('outside hours inbound remains pending until eligible and queued agent reply rechecks current hours',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.chat.settings('owner-a','member-a',x.campaign.id,true,{libraryIds:[],replyDailyLimit:30,conversationReplyLimit:12,workStart:'13:00',workEnd:'14:00'});
+ await readConversation(f,x,[{id:'wait-hours',direction:'inbound',text:'60平米有合适的吗',postedAt:f.now()}]);let calls=0;
+ const decide=async()=>{calls++;return{action:'reply' as const,reply:'想做什么业态？'};};
+ assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',decide),false);assert.equal(calls,0);assert.equal(f.sqlite.prepare("SELECT processed FROM workbench_prospect_messages WHERE source_key='wait-hours'").get()?.processed,0);
+ f.advance(3600000);await f.store.seen(x.device.deviceId,{authenticated:true,accountId:'MS4wSender001'});assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',decide),true);assert.equal(calls,1);
+ f.advance(3600000);assert.equal(await f.store.claim(x.device.deviceId,false,true),null,'14:00 end boundary is exclusive');
+});
+
+function replyHistory(f:ReturnType<typeof fixture>,x:Awaited<ReturnType<typeof prepared>>,count:number,startedAt:string,campaignId=x.campaign.id){
+ for(let i=0;i<count;i++)f.sqlite.prepare("INSERT INTO workbench_prospect_jobs(id,owner_id,member_id,device_id,campaign_id,lead_id,kind,status,input_json,sender_id,started_at,created_at,updated_at) VALUES (?,?,?,?,?,?,'reply','done',?,?,?,?,?)").run(`history-${campaignId}-${i}`,'owner-a','member-a',x.device.deviceId,campaignId,x.lead.id,JSON.stringify({conversationId:x.conversation.id,actor:'agent',recipientId:'MS4wRecipient001'}),'MS4wSender001',startedAt,startedAt,startedAt);
+}
+
+test('reply daily cap aggregates across campaigns without consuming the greeting daily limit',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.chat.settings('owner-a','member-a',x.campaign.id,true,{libraryIds:[],replyDailyLimit:1,conversationReplyLimit:12,workStart:'00:00',workEnd:'23:59'});
+ f.advance(61000);replyHistory(f,x,1,'2026-11-06T01:00:00.000Z','other-campaign');await readConversation(f,x,[{id:'capped',direction:'inbound',text:'想问下位置',postedAt:f.now()}]);let calls=0;
+ assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',async()=>{calls++;return{action:'reply',reply:'在哪里找？'};}),false);assert.equal(calls,0);
+ f.sqlite.prepare('UPDATE workbench_prospect_jobs SET started_at=? WHERE id LIKE ?').run('2026-11-05T15:59:59.999Z','history-%');
+ assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',async()=>({action:'reply',reply:'在哪里找？'})),true);
+ const job=(await f.store.claim(x.device.deviceId,false,true))!;assert.equal(job.kind,'reply');
+ f.sqlite.prepare("UPDATE workbench_prospect_campaigns SET data_json=json_set(data_json,'$.chatPolicy.replyDailyLimit',1)").run();
+ replyHistory(f,x,1,'2026-11-06T02:00:00.000Z','racing-campaign');await assert.rejects(f.store.renew(x.device.deviceId,job.id,job.leaseToken),/额度|上限|停止|凭证/);
+});
+
+test('conversation rolling cap rechecks claim and resumes only after a full 24 hours',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.chat.settings('owner-a','member-a',x.campaign.id,true,{libraryIds:[],replyDailyLimit:30,conversationReplyLimit:1,workStart:'00:00',workEnd:'23:59'});
+ f.advance(61000);await readConversation(f,x,[{id:'cap-race',direction:'inbound',text:'想找50平米',postedAt:f.now()}]);await f.chat.processOne('owner-a','member-a','https://example.test',async()=>({action:'reply',reply:'有位置偏好吗？'}));
+ replyHistory(f,x,1,'2026-11-05T05:00:00.000Z');assert.equal(await f.store.claim(x.device.deviceId,false,true),null);
+ f.advance(3600000);const job=(await f.store.claim(x.device.deviceId,false,true))!;assert.equal(job.kind,'reply');
+});
+
+test('saving a narrowed library policy during a decision prevents the stale reply and memory from committing',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.chat.settings('owner-a','member-a',x.campaign.id,true);
+ await readConversation(f,x,[{id:'policy-race',direction:'inbound',text:'具体租金多少',postedAt:f.now()}]);
+ let release!:(value:{action:'reply';reply:string})=>void,entered!:()=>void;const waiting=new Promise<void>(resolve=>{entered=resolve;});
+ const processing=f.chat.processOne('owner-a','member-a','https://example.test',async()=>{entered();return new Promise(resolve=>{release=resolve;});});await waiting;
+ await f.chat.settings('owner-a','member-a',x.campaign.id,true,{libraryIds:[],replyDailyLimit:29,conversationReplyLimit:12,workStart:'08:30',workEnd:'21:30'});
+ release({action:'reply',reply:'旧知识库中的具体租金'});await processing;
+ assert.equal((await f.store.jobs('owner-a','member-a',x.campaign.id)).filter(job=>job.kind==='reply').length,0);
+ assert.equal(f.sqlite.prepare("SELECT processed FROM workbench_prospect_messages WHERE source_key='policy-race'").get()?.processed,0);
+});
+
+test('saving policy cancels queued agent replies and blocks the lease of a running prior policy',async t=>{
+ for(const running of [false,true]){
+  const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.chat.settings('owner-a','member-a',x.campaign.id,true);f.advance(61000);
+  await readConversation(f,x,[{id:'policy-old',direction:'inbound',text:'想了解这里租金',postedAt:f.now()}]);await f.chat.processOne('owner-a','member-a','https://example.test',async()=>({action:'reply',reply:'请问你想了解哪个位置？'}));
+  const queued=(await f.store.jobs('owner-a','member-a',x.campaign.id)).find(j=>j.kind==='reply')!;const claimed=running?(await f.store.claim(x.device.deviceId,false,true))!:undefined;
+  await f.chat.settings('owner-a','member-a',x.campaign.id,true,{libraryIds:[],replyDailyLimit:29,conversationReplyLimit:12,workStart:'08:30',workEnd:'21:30'});
+  if(claimed)await assert.rejects(f.store.renew(x.device.deviceId,claimed.id,claimed.leaseToken),/策略|停止|凭证/);
+  else {assert.equal(f.sqlite.prepare('SELECT status FROM workbench_prospect_jobs WHERE id=?').get(queued.id)?.status,'cancelled');const snapshot=await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id);assert.equal(snapshot.conversations[0].mode,'human');assert.equal(snapshot.conversations[0].memory?.stage,'handoff');assert.match(snapshot.conversations[0].handoffReason??'',/策略.*销售|策略.*人工/);}
+ }
+});
+
+test('a policy change between reply validation and renewal is rejected by the atomic lease write',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.chat.settings('owner-a','member-a',x.campaign.id,true);f.advance(61000);
+ await readConversation(f,x,[{id:'policy-renew',direction:'inbound',text:'附近位置有吗',postedAt:f.now()}]);await f.chat.processOne('owner-a','member-a','https://example.test',async()=>({action:'reply',reply:'想在哪条路附近找？'}));const job=(await f.store.claim(x.device.deviceId,false,true))!;
+ f.interceptNextBatch(()=>{f.sqlite.prepare("UPDATE workbench_prospect_campaigns SET data_json=json_set(data_json,'$.chatPolicyVersion',1) WHERE id=?").run(x.campaign.id);});
+ await assert.rejects(f.store.renew(x.device.deviceId,job.id,job.leaseToken),/凭证|停止|策略/);
+});
+
+test('a reliably observed stop is durable even when manual sync observes a disabled chat',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.chat.sync('owner-a','member-a',x.campaign.id,x.conversation.id);
+ const read=(await f.store.claim(x.device.deviceId,false,true))!;await f.store.complete(x.device.deviceId,read.id,read.leaseToken,{senderAccountId:'MS4wSender001',recipientId:'MS4wRecipient001',observedAt:f.now(),snapshotId:'manual-stop',reliable:true,messages:[{id:'manual-stop',direction:'inbound',text:'请不要再联系我',postedAt:f.now()}]});
+ assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',async()=>{assert.fail('stop needs no model');}),false);
+ assert.equal((await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations[0].status,'closed');
+});
+
+test('stop closes queued jobs across campaigns without rewriting completed history or another owner',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.chat.settings('owner-a','member-a',x.campaign.id,true);
+ const original=f.sqlite.prepare('SELECT * FROM workbench_prospect_jobs WHERE kind=\'send\'').get();
+ const insert=f.sqlite.prepare("INSERT INTO workbench_prospect_jobs(id,owner_id,member_id,device_id,campaign_id,lead_id,kind,status,input_json,sender_id,created_at,updated_at) VALUES (?,?,?,?,?,?,?,'queued',?,?,?,?)");
+ for(const [id,owner,kind] of [['queued-greeting','owner-a','send'],['queued-reply','owner-a','reply'],['other-owner','owner-z','send']])insert.run(id,owner,'member-a',x.device.deviceId,'other-campaign',x.lead.id,kind,JSON.stringify({recipientId:'MS4wRecipient001',conversationId:x.conversation.id,actor:'agent'}),'MS4wSender001',f.now(),f.now());
+ await readConversation(f,x,[{id:'stop-all',direction:'inbound',text:'别再发消息了',postedAt:f.now()}]);
+ await f.chat.processOne('owner-a','member-a','https://example.test',async()=>{assert.fail('stop needs no model');});
+ assert.equal(f.sqlite.prepare("SELECT status FROM workbench_prospect_jobs WHERE id='queued-greeting'").get()?.status,'cancelled');assert.equal(f.sqlite.prepare("SELECT status FROM workbench_prospect_jobs WHERE id='queued-reply'").get()?.status,'cancelled');assert.equal(f.sqlite.prepare("SELECT status FROM workbench_prospect_jobs WHERE id='other-owner'").get()?.status,'queued');
+ assert.deepEqual(f.sqlite.prepare('SELECT * FROM workbench_prospect_jobs WHERE id=?').get(original!.id),original);
+});
+
+test('the last outbound question disambiguates a visit refusal from a global stop before workhours gating',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.chat.settings('owner-a','member-a',x.campaign.id,true);f.advance(61000);await readConversation(f,x,[]);
+ let snapshot=await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id,x.conversation.id);await f.chat.reply('owner-a','member-a',x.conversation.id,snapshot.conversations[0].version,'是否需要实地看场？');const reply=(await f.store.claim(x.device.deviceId,false,true))!;await f.store.complete(x.device.deviceId,reply.id,reply.leaseToken,{outcome:'submitted'});
+ f.advance(61000);await readConversation(f,x,[{id:'no-visit',direction:'inbound',text:'不需要',postedAt:f.now()}],'no-visit');f.advance(12*3600000);
+ assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',async()=>{assert.fail('outside hours must preserve inbound');}),false);
+ snapshot=await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id);assert.equal(snapshot.conversations[0].status,'active');assert.equal(f.sqlite.prepare("SELECT processed FROM workbench_prospect_messages WHERE source_key='no-visit'").get()?.processed,0);
+});
+
+test('bounded scanning advances past 100 held conversations to an eligible conversation and stop request',async t=>{
+ for(const stop of [false,true]){
+  const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.chat.settings('owner-a','member-a',x.campaign.id,true);
+  const held=await f.store.createCampaign('owner-a','member-a',normalizeCampaignInput({requirements:'暂时等待工作时间的会话',keywords:['商铺']}));
+  const conversation=f.sqlite.prepare("INSERT INTO workbench_prospect_conversations(id,owner_id,member_id,campaign_id,lead_id,sender_id,recipient_id,profile_url,nickname,opened_at,last_message_at,updated_at) VALUES (?,'owner-a','member-a',?,'held-lead','MS4wSender001',?,'https://www.douyin.com/user/held','等待客户',?,?,?)");
+  const inbound=f.sqlite.prepare("INSERT INTO workbench_prospect_messages(id,conversation_id,owner_id,member_id,source_key,direction,actor,text,status,created_at,eligible) VALUES (?,?,'owner-a','member-a',?,'inbound','customer',?,'received',?,1)");
+  for(let i=0;i<100;i++){const id=`held-${String(i).padStart(3,'0')}`;conversation.run(id,held.id,id,'2026-11-05T01:00:00.000Z','2026-11-05T01:00:00.000Z',f.now());inbound.run(`msg-${id}`,id,`src-${id}`,'想咨询一下',f.now());}
+  if(stop)inbound.run('scan-stop',x.conversation.id,'scan-stop','不要联系我了',f.now());else await readConversation(f,x,[{id:'scan-target',direction:'inbound',text:'想找50平米',postedAt:f.now()}]);let calls=0;
+  const decide=async()=>{calls++;return{action:'wait' as const};};
+  assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',decide),false);
+  assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',decide),true);assert.equal(calls,stop?0:1);
+  assert.equal((await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations[0].status,stop?'closed':'active');
+ }
+});
+
+test('an old refusal in a first reliable baseline does not opt out a newly opened conversation',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.chat.settings('owner-a','member-a',x.campaign.id,true);
+ await readConversation(f,x,[{id:'historic-stop',direction:'inbound',text:'不要联系我',postedAt:'2026-11-05T04:00:00.000Z'}]);
+ assert.equal((await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations[0].status,'active');assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM workbench_prospect_contact_optouts').get()?.n,0);
+});
+
+test('saving identical normalized policy keeps a queued reply and its policy revision',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);const policy={libraryIds:[],replyDailyLimit:5,conversationReplyLimit:2,workStart:'08:30',workEnd:'21:30'};await f.chat.settings('owner-a','member-a',x.campaign.id,true,policy);
+ await readConversation(f,x,[{id:'same-policy',direction:'inbound',text:'想找合适面积',postedAt:f.now()}]);await f.chat.processOne('owner-a','member-a','https://example.test',async()=>({action:'reply',reply:'大概需要多大面积？'}));
+ const queued=(await f.store.jobs('owner-a','member-a',x.campaign.id)).find(j=>j.kind==='reply')!;const before=f.sqlite.prepare('SELECT data_json FROM workbench_prospect_campaigns WHERE id=?').get(x.campaign.id)!.data_json;
+ await f.chat.settings('owner-a','member-a',x.campaign.id,true,policy);
+ assert.equal(f.sqlite.prepare('SELECT data_json FROM workbench_prospect_campaigns WHERE id=?').get(x.campaign.id)!.data_json,before);assert.equal(f.sqlite.prepare('SELECT status FROM workbench_prospect_jobs WHERE id=?').get(queued.id)?.status,'queued');
+});
+
+test('legacy contact pool evidence hydrates memory even after contact messages leave the recent history window',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.chat.settings('owner-a','member-a',x.campaign.id,true);
+ f.sqlite.prepare("INSERT INTO workbench_prospect_lead_pool(id,owner_id,conversation_id,contact_key,contact_type,contact_value,nickname,score,grade,reason,status,created_at,updated_at) VALUES ('legacy-contact','owner-a',?,'legacy-phone','phone','13800138000','已留资客户',80,'high','旧版已捕获联系方式','unassigned',?,?)").run(x.conversation.id,f.now(),f.now());
+ const before=await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id);assert.equal(before.conversations[0].memory?.contactCaptured,true);
+ await readConversation(f,x,[{id:'legacy-followup',direction:'inbound',text:'还是想找60平米的',postedAt:f.now()}]);let called=false;
+ await f.chat.processOne('owner-a','member-a','https://example.test',async(_owner,_origin,input)=>{called=true;assert.equal(input.conversation.memory?.contactCaptured,true);assert.ok(input.messages.every(m=>!m.text.includes('13800138000')));return{action:'wait'};});assert.equal(called,true);
+ assert.equal((await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations[0].memory?.contactCaptured,true);
+});
+
+test('a reliably reobserved stop closes after an unreliable read while pre-open history stays unchanged',async t=>{
+ for(const historic of [false,true]){
+  const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.chat.settings('owner-a','member-a',x.campaign.id,true);
+  const inbound={id:'reobserved-stop',direction:'inbound' as const,text:'别再联系我',postedAt:historic?'2026-11-05T04:00:00.000Z':f.now()};
+  await f.chat.schedule(x.device.deviceId);const first=(await f.store.claim(x.device.deviceId,false,true))!;
+  await f.store.complete(x.device.deviceId,first.id,first.leaseToken,{senderAccountId:'MS4wSender001',recipientId:'MS4wRecipient001',observedAt:f.now(),snapshotId:'stop-unreliable',reliable:false,messages:[inbound]});
+  assert.equal((await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations[0].status,'active');assert.notEqual(f.sqlite.prepare("SELECT eligible FROM workbench_prospect_messages WHERE source_key='reobserved-stop'").get()?.eligible,1);
+  f.advance(61000);await readConversation(f,x,[inbound],'stop-reliably-confirmed');
+  const c=(await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations[0];assert.equal(c.status,historic?'active':'closed');assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM workbench_prospect_contact_optouts').get()?.n,historic?0:1);
+  if(!historic)await assert.rejects(f.chat.resume('owner-a','member-a',c.id,c.version),/关闭|更新|停止/);
+  assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM workbench_prospect_messages WHERE source_key='reobserved-stop'").get()?.n,1,'reliable reobservation does not duplicate or replay an inbound row');
+ }
+});
+
+test('untimed baseline stops stay historical while a new untimed stop after baseline can recover reliability',async t=>{
+ for(const historical of [true,false]){
+  const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.chat.settings('owner-a','member-a',x.campaign.id,true);
+  const stop={id:'untimed-stop',direction:'inbound' as const,text:'别再联系我'};
+  await readConversation(f,x,historical?[stop]:[],'initial-baseline');
+  if(!historical){
+   f.advance(61000);await f.store.seen(x.device.deviceId,{authenticated:true,accountId:'MS4wSender001'});await f.chat.schedule(x.device.deviceId);const job=(await f.store.claim(x.device.deviceId,false,true))!;
+   await f.store.complete(x.device.deviceId,job.id,job.leaseToken,{senderAccountId:'MS4wSender001',recipientId:'MS4wRecipient001',observedAt:f.now(),snapshotId:'unreliable-after-baseline',reliable:false,messages:[stop]});
+  }
+  f.advance(61000);await readConversation(f,x,[stop],historical?'initial-baseline':'reliable-after-baseline');
+  assert.equal((await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations[0].status,historical?'active':'closed');
+  assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM workbench_prospect_contact_optouts').get()?.n,historical?0:1);
+ }
 });

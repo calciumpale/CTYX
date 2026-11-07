@@ -1,11 +1,10 @@
 .prospect-chat-workspace { --prospect-handoff-bg: var(--cds-surface-0); --prospect-handoff-badge: var(--cds-fill-ghost-selected); --prospect-handoff-text: var(--cds-text-primary); --prospect-handoff-line: var(--cds-border-strong); }
 .prospect-chat-workspace[hidden] { display: none; }
-.prospect-chat-agent { display: flex; align-items: center; gap: 20px; justify-content: space-between; padding: 0 0 14px; margin-bottom: 16px; border-bottom: 1px solid var(--cds-border); }
-.prospect-chat-agent > div { flex: 1; }
+.prospect-chat-agent { padding: 0 0 12px; margin-bottom: 14px; border-bottom: 1px solid var(--cds-border); }
+.prospect-chat-agent-toolbar { display: flex; align-items: center; gap: 12px; justify-content: space-between; }
 .prospect-chat-agent-title { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .prospect-chat-agent-title strong { font-size: 13px; font-weight: 550; }
-.prospect-chat-agent p { margin-top: 8px; max-width: 68ch; color: var(--cds-text-secondary); font-size: 13px; }
-.prospect-chat-agent > .button { flex: none; }
+.prospect-chat-agent-toolbar > .button { flex: none; }
 .prospect-chat-scope { display: flex; align-items: center; gap: 20px; justify-content: space-between; padding: 17px 19px; margin-bottom: 22px; background: var(--cds-surface-0); border-radius: 12px; }
 .prospect-chat-scope strong { font-weight: 550; }
 .prospect-chat-scope p { margin-top: 5px; color: var(--cds-text-secondary); font-size: 12px; }
@@ -125,15 +124,56 @@
   .prospect-pool-table td:first-child, .prospect-pool-table td:last-child { grid-column: 1 / -1; }
 }
 
-.prospect-chat-agent-settings { margin-top: 5px; }
-.prospect-chat-agent-settings summary { display: flex; align-items: center; gap: 6px; min-height: 28px; width: fit-content; list-style: none; cursor: pointer; font-size: 12px; color: var(--cds-text-secondary); }
+.prospect-chat-agent-settings { margin-top: 4px; }
+.prospect-chat-agent-settings summary { display: flex; align-items: center; gap: 6px; min-height: var(--control-height); width: fit-content; list-style: none; cursor: pointer; font-size: 12px; color: var(--cds-text-secondary); border-radius: var(--control-radius); }
 .prospect-chat-agent-settings summary::-webkit-details-marker { display: none; }
-.prospect-chat-agent-settings[open] summary > svg { transform: rotate(180deg); }
+.prospect-chat-agent-settings[open] summary > svg, .prospect-chat-needs[open] summary > svg { transform: rotate(180deg); }
+.prospect-chat-unsaved { color: var(--cds-text-primary); font-size: 11px; }
+.prospect-chat-policy { padding: 8px 0 2px; }
+.prospect-chat-policy fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+.prospect-chat-policy-label, .prospect-chat-policy .prospect-field > label { display: block; font-size: 12px; font-weight: 500; line-height: 1.5; margin-bottom: 6px; }
+.prospect-chat-policy-libraries > p { margin: 0 0 7px; color: var(--cds-text-secondary); font-size: 12px; }
+.prospect-chat-library-options { display: flex; flex-wrap: wrap; gap: 0 18px; }
+.prospect-chat-library-options > label { display: inline-flex; align-items: center; gap: 7px; min-height: var(--control-height); max-width: 100%; cursor: pointer; font-size: 13px; }
+.prospect-chat-library-options > label > span { overflow-wrap: anywhere; }
+.prospect-chat-library-options input { flex: none; width: 15px; height: 15px; accent-color: var(--cds-text-primary); }
+.prospect-chat-policy fieldset:disabled label, .prospect-chat-library-options label:has(input:disabled) { cursor: default; color: var(--cds-text-secondary); }
+.prospect-chat-policy-empty { padding: 5px 0; font-size: 12px; color: var(--cds-text-secondary); }
+.prospect-chat-policy-fields { display: grid; grid-template-columns: minmax(130px, 1fr) minmax(150px, 1fr) minmax(250px, 1.5fr); gap: 16px; margin-top: 14px; }
+.prospect-chat-policy .prospect-field { min-width: 0; margin: 0; }
+.prospect-chat-policy .prospect-field > small { font-size: 11px; line-height: 1.5; margin-top: 5px; }
+.prospect-chat-policy-hours > div { display: flex; align-items: center; gap: 8px; }
+.prospect-chat-policy-hours input { width: 100%; min-width: 0; font-variant-numeric: tabular-nums; }
+.prospect-chat-policy-footer { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-top: 14px; }
+.prospect-chat-policy-footer > p { color: var(--cds-text-secondary); font-size: 12px; }
+.prospect-chat-policy-footer > p[role="alert"] { color: var(--cds-fill-danger); }
+.prospect-chat-policy-footer > .button { flex: none; }
+.prospect-chat-needs { border-bottom: 1px solid var(--cds-border); background: var(--cds-surface-2); }
+.prospect-chat-needs summary { display: flex; align-items: center; gap: 10px; padding: 6px 16px; min-height: var(--control-height); list-style: none; cursor: pointer; color: var(--cds-text-secondary); font-size: 11px; }
+.prospect-chat-needs summary::-webkit-details-marker { display: none; }
+.prospect-chat-needs summary > strong { font-size: 12px; color: var(--cds-text-primary); font-weight: 500; }
+.prospect-chat-needs summary > svg { margin-inline-start: auto; flex: none; }
+.prospect-chat-needs-body { padding: 0 16px 12px; }
+.prospect-chat-needs dl { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px 16px; margin: 6px 0 0; }
+.prospect-chat-needs dt { color: var(--cds-text-secondary); font-size: 11px; }
+.prospect-chat-needs dd { color: var(--cds-text-primary); font-size: 13px; margin: 3px 0 0; overflow-wrap: anywhere; }
+.prospect-chat-needs .prospect-chat-needs-body > p { color: var(--cds-text-secondary); font-size: 12px; margin-top: 12px; overflow-wrap: anywhere; }
+.prospect-chat-needs-body > .prospect-chat-contact-history { font-size: 11px; font-variant-numeric: tabular-nums; }
+.prospect-chat-agent-settings summary:focus-visible, .prospect-chat-needs summary:focus-visible { outline: 2px solid var(--cds-border-strong); outline-offset: 2px; }
 .prospect-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+@media (max-width: 1000px) { .prospect-chat-policy-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); } .prospect-chat-policy-hours { grid-column: 1 / -1; max-width: 350px; } }
 @media (max-width: 700px) {
-  .prospect-chat-agent { flex-direction: row; align-items: flex-start; padding: 0 0 14px; gap: 12px; }
-  .prospect-chat-agent > .button { width: auto; }
-  .prospect-chat-agent-settings summary { min-height: 44px; }
+  .prospect-chat-agent { padding: 0 0 12px; }
+  .prospect-chat-agent-toolbar { align-items: flex-start; gap: 10px; }
+  .prospect-chat-agent-title { gap: 5px 7px; }
+  .prospect-chat-agent-title .prospect-chat-badge { flex-basis: auto; }
+  .prospect-chat-agent-toolbar > .button { padding-inline: 10px; }
+  .prospect-chat-policy-fields { gap: 12px; }
+  .prospect-chat-policy-hours { max-width: none; }
+  .prospect-chat-policy-footer { align-items: flex-start; gap: 10px; }
+  .prospect-chat-library-options { gap: 0 14px; }
+  .prospect-chat-needs summary { padding-inline: 16px; }
+  .prospect-chat-needs dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .prospect-pool-table td { padding: 0; }
   .prospect-pool-table caption.prospect-sr-only { display: none; }
 }

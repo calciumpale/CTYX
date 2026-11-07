@@ -88,9 +88,21 @@ export function createKnowledgeLibraryStore(db:D1Database,ownerId:string){
   return publicDocument(await ownDocument(id));
  }
 
- async function search(input:{query:string;libraryId?:string;mode:KnowledgeRetrievalMode;modelKey?:string;embed?:()=>Promise<number[]>;limit?:number}):Promise<KnowledgeSearchResult>{
-  const query=clean(input.query,2000,'检索问题');if(!['hybrid','bm25','vector'].includes(input.mode))throw new DomainError('检索方式无效');if(input.libraryId)await ownLibrary(input.libraryId);
-  const limit=Math.max(1,Math.min(20,Math.trunc(input.limit||5))),values=[ownerId,...(input.libraryId?[input.libraryId]:[])],scope=`c.owner_id=?${input.libraryId?' AND d.library_id=?':''} AND c.kind!='parent'`;
+ async function search(input:{query:string;libraryId?:string;libraryIds?:string[];mode:KnowledgeRetrievalMode;modelKey?:string;embed?:()=>Promise<number[]>;limit?:number}):Promise<KnowledgeSearchResult>{
+  const query=clean(input.query,2000,'检索问题');if(!['hybrid','bm25','vector'].includes(input.mode))throw new DomainError('检索方式无效');
+  if(input.libraryId&&input.libraryIds!==undefined)throw new DomainError('请使用单个知识库或知识库列表');
+  const allowlist=input.libraryIds;
+  if(allowlist!==undefined){
+   if(!Array.isArray(allowlist)||allowlist.length>20||allowlist.some(id=>typeof id!=='string'||!id||id.length>140))throw new DomainError('最多选择20个有效知识库');
+   // An explicit empty allowlist is closed, never shorthand for all owner content.
+   if(!allowlist.length)return{hits:[],mode:input.mode,notice:null};
+   const ids=[...new Set(allowlist)];
+   const owned=await db.prepare(`SELECT COUNT(*) AS total FROM workbench_knowledge_libraries WHERE owner_id=? AND id IN (${ids.map(()=>'?').join(',')})`).bind(ownerId,...ids).first<{total:number}>();
+   if(owned?.total!==ids.length)throw new DomainError('知识库不存在或无权使用',404);
+  }
+  if(input.libraryId)await ownLibrary(input.libraryId);
+  const selectedIds=allowlist?[...new Set(allowlist)]:undefined;
+  const limit=Math.max(1,Math.min(20,Math.trunc(input.limit||5))),values=[ownerId,...(input.libraryId?[input.libraryId]:selectedIds??[])],scope=`c.owner_id=?${input.libraryId?' AND d.library_id=?':selectedIds?` AND d.library_id IN (${selectedIds.map(()=>'?').join(',')})`:''} AND c.kind!='parent'`;
   // Hold only lightweight keys for the corpus and FTS rankings; text and vectors are paged below.
   const corpus=(await db.prepare(`${candidateKeySelect} WHERE ${scope} ORDER BY d.updated_at DESC,c.document_id,c.ordinal LIMIT ?`).bind(...values,KNOWLEDGE_SEARCHABLE_LIMIT+1).all<CandidateKey>()).results;
   const notices:string[]=[];if(corpus.length>KNOWLEDGE_SEARCHABLE_LIMIT)notices.push(`当前范围超过${KNOWLEDGE_SEARCHABLE_LIMIT}个检索片段，向量和精确词匹配仅扫描最近${KNOWLEDGE_SEARCHABLE_LIMIT}个；可选择单个知识库缩小范围`);

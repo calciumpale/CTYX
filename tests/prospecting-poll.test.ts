@@ -40,8 +40,8 @@ function fixture(){
   await store.insertComments('owner-a','member-a',c.id,[scoreComment(comment,c)]);
   return{campaign:c,lead:(await store.leads('owner-a','member-a',c.id))[0]};
  }
- function poll(device:{deviceId:string;deviceToken:string},signal?:AbortSignal){
-  return service.bridge(new Request('https://prospecting-poll.test/api/prospecting-bridge/poll',{method:'POST',headers:{Authorization:`Bearer ${device.deviceToken}`,'Content-Type':'application/json'},body:JSON.stringify({...sender,deviceId:device.deviceId}),signal}),'poll');
+ function poll(device:{deviceId:string;deviceToken:string},signal?:AbortSignal,conversationVersion?:number){
+  return service.bridge(new Request('https://prospecting-poll.test/api/prospecting-bridge/poll',{method:'POST',headers:{Authorization:`Bearer ${device.deviceToken}`,'Content-Type':'application/json'},body:JSON.stringify({...sender,deviceId:device.deviceId,...(conversationVersion?{conversationVersion}:{})}),signal}),'poll');
  }
  return{sqlite,store,hooks,connect,campaign,poll};
 }
@@ -87,4 +87,22 @@ test('cancellation during automatic queue preparation does not claim an existing
  assert.equal(response.status,409);
  const job=f.sqlite.prepare("SELECT status,started_at FROM workbench_prospect_jobs WHERE kind='send'").get()!;
  assert.equal(job.status,'queued');assert.equal(job.started_at,null);
+});
+
+test('queued ongoing conversation work is claimed before new prospect model analysis',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const device=await f.connect();const ongoing=await f.campaign('ongoing');
+ await f.store.review('owner-a','member-a',ongoing.campaign.id,ongoing.lead.id,ongoing.lead.version,'approve',ongoing.lead.greeting,'销售');const greeting=(await f.store.claim(device.deviceId))!;await f.store.complete(device.deviceId,greeting.id,greeting.leaseToken,{outcome:'submitted'});
+ await f.store.chat.settings('owner-a','member-a',ongoing.campaign.id,true);await f.store.chat.schedule(device.deviceId);await f.campaign('backlog');
+ let modelCalls=0;t.mock.method(globalThis,'fetch',async(_url:unknown,init?:RequestInit)=>{modelCalls++;return modelReply(init);});
+ const response=await f.poll(device,undefined,1);assert.equal(response.status,200);assert.equal((await response.json() as {job:ProspectBridgeJob}).job.kind,'readConversation');assert.equal(modelCalls,0);
+});
+
+test('a reliable customer stop closes immediately before a manual reply can be queued',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const device=await f.connect();const ongoing=await f.campaign('stop');
+ await f.store.review('owner-a','member-a',ongoing.campaign.id,ongoing.lead.id,ongoing.lead.version,'approve',ongoing.lead.greeting,'销售');const greeting=(await f.store.claim(device.deviceId))!;await f.store.complete(device.deviceId,greeting.id,greeting.leaseToken,{outcome:'submitted'});
+ await f.store.chat.settings('owner-a','member-a',ongoing.campaign.id,true);await f.store.chat.schedule(device.deviceId);const read=(await f.store.claim(device.deviceId,false,true))!;
+ await f.store.complete(device.deviceId,read.id,read.leaseToken,{senderAccountId:sender.accountId,recipientId:ongoing.lead.recipientId,observedAt:new Date().toISOString(),snapshotId:'stop-before-manual-reply',reliable:true,messages:[{id:'stop-now',direction:'inbound',text:'不要再联系我了',postedAt:new Date().toISOString()}]});
+ const snapshot=await f.store.chat.snapshot('owner-a','member-a','sales',ongoing.campaign.id);const c=snapshot.conversations[0];await assert.rejects(f.store.chat.reply('owner-a','member-a',c.id,c.version,'人工不应越过客户停止请求'),/关闭|更新|停止/);
+ f.sqlite.prepare('UPDATE workbench_prospect_jobs SET started_at=? WHERE id=?').run(new Date(Date.now()-61000).toISOString(),greeting.id);
+ const response=await f.poll(device,undefined,1);assert.equal(response.status,200);assert.equal((await response.json() as {job:ProspectBridgeJob|null}).job,null);assert.equal((await f.store.chat.snapshot('owner-a','member-a','sales',ongoing.campaign.id)).conversations[0].status,'closed');
 });

@@ -2,7 +2,7 @@ import {DomainError} from './domain.ts';
 import {canAutoApprove,greetingText,normalizeCandidates,normalizeComments,normalizeCampaignInput,object,prospectHash,prospectToken,safeProspectError,scoreComment,scoreCommentIntent,text,MAX_PROSPECT_COMMENTS,PROSPECT_LEASE_MS,PROSPECT_SEND_INTERVAL_MS} from './prospecting-domain.ts';
 import type {AnalyzedComment,CampaignInput} from './prospecting-domain.ts';
 import type {ProspectBridgeJob,ProspectCampaign,ProspectDeviceView,ProspectJobView,ProspectLead} from './prospecting-types.ts';
-import {createProspectingChatStore,isProspectChatJob} from './prospecting-chat-store.ts';
+import {createProspectingChatStore,isProspectChatJob,prospectReplyPolicyGate,prospectContactAllowedSql} from './prospecting-chat-store.ts';
 
 interface DeviceRow {id:string;owner_id:string;member_id:string;label:string;token_hash:string;enabled:number;authenticated:number;account_id:string|null;account_name:string|null;message:string|null;last_seen_at:string|null}
 interface CampaignRow {id:string;owner_id:string;member_id:string;status:'active'|'paused';data_json:string;created_at:string;updated_at:string}
@@ -119,12 +119,13 @@ export function createProspectingStore(db:D1Database,now:()=>number=Date.now){
   if(decision==='reject'){const r=await db.prepare("UPDATE workbench_prospect_leads SET status='rejected',data_json=?,version=version+1,updated_at=? WHERE campaign_id=? AND id=? AND owner_id=? AND member_id=? AND version=? AND job_id IS NULL").bind(JSON.stringify(updated),stamp(),campaignId,leadId,ownerId,memberId,version).run();if(!r.meta.changes)throw conflict();return;}
   if(!lead.recipientId||!lead.profileUrl||lead.source!=='browser')throw new DomainError('评论缺少可联系的公开身份，不能私信',409);
   const d=await readyDevice(ownerId,memberId);if(readOnlyAccount(d.account_id))throw readOnlyMessage();if(lead.recipientId===d.account_id)throw new DomainError('不能向当前登录账号发送获客私信');
+  if(await db.prepare('SELECT 1 FROM workbench_prospect_contact_optouts WHERE owner_id=? AND sender_id=? AND recipient_id=?').bind(ownerId,d.account_id,lead.recipientId).first())throw new DomainError('客户已要求停止联系，不能再次安排私信',409);
   const recipientKey=await prospectHash(`${ownerId}\0${d.account_id}\0${lead.recipientId}`);
   if(await db.prepare('SELECT id FROM workbench_prospect_jobs WHERE recipient_key=?').bind(recipientKey).first())throw new DomainError('此发送账号已安排或已触达该用户，请勿重复打招呼',409);
   const id=`pj-${crypto.randomUUID()}`,time=stamp();
   const input={recipientId:lead.recipientId,profileUrl:lead.profileUrl,message,senderAccountId:d.account_id};
   const results=await db.batch([
-   db.prepare("INSERT OR IGNORE INTO workbench_prospect_jobs(id,owner_id,member_id,device_id,campaign_id,lead_id,kind,status,input_json,recipient_key,sender_id,created_at,updated_at) SELECT ?,?,?,?,?,?,'send','queued',?,?,?,?,? WHERE EXISTS (SELECT 1 FROM workbench_prospect_leads WHERE campaign_id=? AND id=? AND owner_id=? AND member_id=? AND version=? AND job_id IS NULL AND status IN ('pending','rejected')) AND EXISTS (SELECT 1 FROM workbench_prospect_campaigns WHERE id=? AND status='active') AND EXISTS (SELECT 1 FROM workbench_prospect_devices WHERE id=? AND enabled=1 AND authenticated=1 AND account_id=?)").bind(id,ownerId,memberId,d.id,campaignId,leadId,JSON.stringify(input),recipientKey,d.account_id,time,time,campaignId,leadId,ownerId,memberId,version,campaignId,d.id,d.account_id),
+   db.prepare("INSERT OR IGNORE INTO workbench_prospect_jobs(id,owner_id,member_id,device_id,campaign_id,lead_id,kind,status,input_json,recipient_key,sender_id,created_at,updated_at) SELECT ?,?,?,?,?,?,'send','queued',?,?,?,?,? WHERE EXISTS (SELECT 1 FROM workbench_prospect_leads WHERE campaign_id=? AND id=? AND owner_id=? AND member_id=? AND version=? AND job_id IS NULL AND status IN ('pending','rejected')) AND EXISTS (SELECT 1 FROM workbench_prospect_campaigns WHERE id=? AND status='active') AND EXISTS (SELECT 1 FROM workbench_prospect_devices WHERE id=? AND enabled=1 AND authenticated=1 AND account_id=?) AND NOT EXISTS (SELECT 1 FROM workbench_prospect_contact_optouts WHERE owner_id=? AND sender_id=? AND recipient_id=?)").bind(id,ownerId,memberId,d.id,campaignId,leadId,JSON.stringify(input),recipientKey,d.account_id,time,time,campaignId,leadId,ownerId,memberId,version,campaignId,d.id,d.account_id,ownerId,d.account_id,lead.recipientId),
    db.prepare("UPDATE workbench_prospect_leads SET status='queued',job_id=?,data_json=?,version=version+1,updated_at=? WHERE campaign_id=? AND id=? AND owner_id=? AND member_id=? AND version=? AND EXISTS (SELECT 1 FROM workbench_prospect_jobs WHERE id=?)").bind(id,JSON.stringify(updated),time,campaignId,leadId,ownerId,memberId,version,id),
   ]);if(!results[0].meta.changes||!results[1].meta.changes)throw conflict();
  }
@@ -157,6 +158,7 @@ export function createProspectingStore(db:D1Database,now:()=>number=Date.now){
   // Keep the exact approved input and its property order for local journal verification.
   const input={...previousInput,retry},id=`pj-${crypto.randomUUID()}`,time=stamp();
   const updated={...JSON.parse(row.data_json),greeting:previousInput.message,reviewedBy:reviewer,reviewedAt:time,autoSuppressed:1};
+  if(await db.prepare('SELECT 1 FROM workbench_prospect_contact_optouts WHERE owner_id=? AND sender_id=? AND recipient_id=?').bind(ownerId,d.account_id,previousInput.recipientId).first())throw new DomainError('客户已要求停止联系，不能再次安排私信',409);
   const results=await db.batch([
    db.prepare(`INSERT INTO workbench_prospect_jobs(id,owner_id,member_id,device_id,campaign_id,lead_id,kind,status,input_json,recipient_key,sender_id,created_at,updated_at)
     SELECT ?,?,?,?,?,?,'send','queued',?,NULL,?,?,? WHERE EXISTS (
@@ -167,7 +169,7 @@ export function createProspectingStore(db:D1Database,now:()=>number=Date.now){
      WHERE l.campaign_id=? AND l.id=? AND l.owner_id=? AND l.member_id=? AND l.version=? AND l.job_id=?
      AND old.status=? AND old.recipient_key=? AND old.input_json=? AND old.sender_id=?
      AND c.status='active' AND d.enabled=1 AND d.authenticated=1 AND d.account_id=? AND d.last_seen_at>?
-     AND m.enabled=1 AND m.role IN ('sales','manager'))`).bind(id,ownerId,memberId,d.id,campaignId,leadId,JSON.stringify(input),d.account_id,time,time,d.id,campaignId,leadId,ownerId,memberId,version,previous.id,previous.status,recipientKey,previous.input_json,d.account_id,d.account_id,new Date(now()-90000).toISOString()),
+     AND m.enabled=1 AND m.role IN ('sales','manager') AND NOT EXISTS (SELECT 1 FROM workbench_prospect_contact_optouts stopped WHERE stopped.owner_id=l.owner_id AND stopped.sender_id=old.sender_id AND stopped.recipient_id=json_extract(old.input_json,'$.recipientId')) )`).bind(id,ownerId,memberId,d.id,campaignId,leadId,JSON.stringify(input),d.account_id,time,time,d.id,campaignId,leadId,ownerId,memberId,version,previous.id,previous.status,recipientKey,previous.input_json,d.account_id,d.account_id,new Date(now()-90000).toISOString()),
    db.prepare('UPDATE workbench_prospect_jobs SET recipient_key=NULL WHERE id=? AND recipient_key=? AND EXISTS (SELECT 1 FROM workbench_prospect_jobs WHERE id=?)').bind(previous.id,recipientKey,id),
    db.prepare('UPDATE workbench_prospect_jobs SET recipient_key=? WHERE id=? AND recipient_key IS NULL AND EXISTS (SELECT 1 FROM workbench_prospect_jobs WHERE id=? AND recipient_key IS NULL)').bind(recipientKey,id,previous.id),
    db.prepare("UPDATE workbench_prospect_leads SET status='queued',job_id=?,data_json=?,version=version+1,updated_at=? WHERE campaign_id=? AND id=? AND owner_id=? AND member_id=? AND version=? AND job_id=? AND EXISTS (SELECT 1 FROM workbench_prospect_jobs WHERE id=? AND recipient_key=?)").bind(id,JSON.stringify(updated),time,campaignId,leadId,ownerId,memberId,version,previous.id,id,recipientKey),
@@ -178,10 +180,13 @@ export function createProspectingStore(db:D1Database,now:()=>number=Date.now){
  async function claim(deviceId:string,allowSendRetry=false,allowConversation=false):Promise<ProspectBridgeJob|null>{
   const d=await findDevice(deviceId);if(!d)throw new DomainError('设备已停用',401);await expire(deviceId);if(!d.authenticated||!d.account_id)return null;
   const leaseToken=prospectToken(),time=stamp();const dayStart=new Date(Math.floor((now()+8*3600000)/86400000)*86400000-8*3600000).toISOString();
+  const policyGate=prospectReplyPolicyGate('j','c',now());
   const row=await db.prepare(`UPDATE workbench_prospect_jobs SET status='running',lease_hash=?,lease_until=?,started_at=?,updated_at=? WHERE id=(
     SELECT j.id FROM workbench_prospect_jobs j JOIN workbench_prospect_campaigns c ON c.id=j.campaign_id
     WHERE j.device_id=? AND j.owner_id=? AND j.member_id=? AND j.status='queued' AND c.status='active'
     AND (json_type(j.input_json,'$.retry') IS NULL OR ?=1)
+    AND (j.kind NOT IN ('send','reply') OR ${prospectContactAllowedSql('j')})
+    AND ${policyGate.sql}
     AND (j.kind NOT IN ('readConversation','reply') OR ?=1)
     AND EXISTS (SELECT 1 FROM workbench_prospect_devices d JOIN workbench_member_accounts m ON m.account_id=d.member_id AND m.owner_id=d.owner_id WHERE d.id=j.device_id AND d.enabled=1 AND d.authenticated=1 AND m.enabled=1 AND m.role IN ('sales','manager') AND (j.kind NOT IN ('send','reply','readConversation') OR (d.account_id=j.sender_id AND d.account_id NOT LIKE 'dy-readonly-%')))
     AND (j.kind NOT IN ('readConversation','reply') OR EXISTS (SELECT 1 FROM workbench_prospect_conversations thread WHERE thread.id=json_extract(j.input_json,'$.conversationId') AND thread.owner_id=j.owner_id AND thread.member_id=j.member_id AND thread.status='active' AND thread.sender_id=j.sender_id AND thread.recipient_id=json_extract(j.input_json,'$.recipientId') AND thread.profile_url=json_extract(j.input_json,'$.profileUrl') AND (json_extract(c.data_json,'$.chatEnabled')=1 OR (j.kind='readConversation' AND json_extract(j.input_json,'$.manualSync')=1)) AND (j.kind='readConversation' OR (thread.mode=json_extract(j.input_json,'$.actor') AND thread.last_snapshot_id=json_extract(j.input_json,'$.expectedSnapshotId') AND NOT EXISTS (SELECT 1 FROM workbench_prospect_jobs unresolved WHERE unresolved.kind='reply' AND unresolved.status='unknown' AND json_extract(unresolved.input_json,'$.conversationId')=thread.id)))))
@@ -189,10 +194,9 @@ export function createProspectingStore(db:D1Database,now:()=>number=Date.now){
     AND (j.kind NOT IN ('send','reply') OR (j.sender_id=?
       AND NOT EXISTS (SELECT 1 FROM workbench_prospect_jobs other WHERE other.owner_id=j.owner_id AND other.sender_id=j.sender_id AND other.status='running')
       AND NOT EXISTS (SELECT 1 FROM workbench_prospect_jobs recent WHERE recent.owner_id=j.owner_id AND recent.sender_id=j.sender_id AND recent.kind IN ('send','reply') AND recent.started_at>?)
-      AND (SELECT COUNT(*) FROM workbench_prospect_jobs day WHERE day.owner_id=j.owner_id AND day.sender_id=j.sender_id AND day.kind IN ('send','reply') AND day.started_at>=?)<CAST(json_extract(c.data_json,'$.dailyLimit') AS INTEGER)))
-    ORDER BY CASE WHEN j.kind='readConversation' THEN 2 WHEN j.kind IN ('send','reply') THEN 1 ELSE 0 END,
-      CASE WHEN j.kind='readConversation' AND json_extract(j.input_json,'$.manualSync')=1 THEN 0 ELSE 1 END,
-      j.created_at,j.id LIMIT 1) RETURNING *`).bind(await prospectHash(leaseToken),new Date(now()+PROSPECT_LEASE_MS).toISOString(),time,time,deviceId,d.owner_id,d.member_id,allowSendRetry?1:0,allowConversation?1:0,d.account_id,new Date(now()-PROSPECT_SEND_INTERVAL_MS).toISOString(),dayStart).first<ProspectJobRow>();
+      AND (j.kind='reply' OR (SELECT COUNT(*) FROM workbench_prospect_jobs day WHERE day.owner_id=j.owner_id AND day.sender_id=j.sender_id AND day.kind='send' AND day.started_at>=?)<CAST(json_extract(c.data_json,'$.dailyLimit') AS INTEGER))))
+    ORDER BY CASE WHEN j.kind='readConversation' AND json_extract(j.input_json,'$.manualSync')=1 THEN 0 WHEN j.kind='reply' THEN 1 WHEN j.kind='readConversation' THEN 2 ELSE 3 END,
+      j.created_at,j.id LIMIT 1) RETURNING *`).bind(await prospectHash(leaseToken),new Date(now()+PROSPECT_LEASE_MS).toISOString(),time,time,deviceId,d.owner_id,d.member_id,allowSendRetry?1:0,...policyGate.values,allowConversation?1:0,d.account_id,new Date(now()-PROSPECT_SEND_INTERVAL_MS).toISOString(),dayStart).first<ProspectJobRow>();
   return row?{id:row.id,campaignId:row.campaign_id,kind:row.kind,leaseToken,input:JSON.parse(row.input_json)}:null;
  }
  async function leased(deviceId:string,id:string,token:string,allowTerminal=false):Promise<ProspectJobRow>{
@@ -207,18 +211,19 @@ export function createProspectingStore(db:D1Database,now:()=>number=Date.now){
   if(r.kind==='send'&&readOnlyAccount(d.account_id))throw readOnlyMessage();
   if(c.status!=='active'||!d.authenticated)throw new DomainError('任务已暂停或登录已失效，请停止执行',409);
   if(Date.parse(r.created_at)<now()-24*3600000)throw new DomainError('任务已超过执行时限',409);
-  const time=stamp(),until=new Date(now()+PROSPECT_LEASE_MS).toISOString();
+  const time=stamp(),until=new Date(now()+PROSPECT_LEASE_MS).toISOString(),policyGate=prospectReplyPolicyGate('job','p',now(),true);
   const [renewed]=await db.batch([
    db.prepare(`UPDATE workbench_prospect_jobs AS job SET lease_until=?,updated_at=?
     WHERE job.id=? AND job.lease_hash=? AND job.status='running' AND job.lease_until>?
       AND EXISTS (SELECT 1 FROM workbench_prospect_devices WHERE id=? AND enabled=1 AND authenticated=1 AND account_id=?)
-      AND EXISTS (SELECT 1 FROM workbench_prospect_campaigns p WHERE p.id=job.campaign_id AND p.status='active'
+      AND (job.kind NOT IN ('send','reply') OR ${prospectContactAllowedSql('job')})
+      AND EXISTS (SELECT 1 FROM workbench_prospect_campaigns p WHERE p.id=job.campaign_id AND p.status='active' AND ${policyGate.sql}
         AND (job.kind NOT IN ('readConversation','reply') OR (
           (json_extract(p.data_json,'$.chatEnabled')=1 OR (job.kind='readConversation' AND json_extract(job.input_json,'$.manualSync')=1))
           AND EXISTS (SELECT 1 FROM workbench_prospect_conversations thread
             WHERE thread.id=json_extract(job.input_json,'$.conversationId') AND thread.status='active' AND thread.sender_id=job.sender_id
               AND (job.kind='readConversation' OR (thread.mode=json_extract(job.input_json,'$.actor') AND thread.last_snapshot_id=json_extract(job.input_json,'$.expectedSnapshotId')))))))`)
-    .bind(until,time,id,r.lease_hash,time,deviceId,d.account_id),
+    .bind(until,time,id,r.lease_hash,time,deviceId,d.account_id,...policyGate.values),
    db.prepare("UPDATE workbench_prospect_devices SET last_seen_at=? WHERE id=? AND enabled=1 AND authenticated=1 AND (last_seen_at IS NULL OR last_seen_at<?) AND EXISTS (SELECT 1 FROM workbench_prospect_jobs WHERE id=? AND device_id=? AND lease_hash=? AND status='running' AND lease_until=?)").bind(time,deviceId,time,id,deviceId,r.lease_hash,until),
   ]);
   if(!renewed.meta.changes)throw new DomainError('执行凭证已失效，请重新连接',409);
@@ -259,7 +264,7 @@ export function createProspectingStore(db:D1Database,now:()=>number=Date.now){
    ORDER BY l.updated_at LIMIT 30`).bind(ownerId,memberId).all<LeadRow>();
   for(const row of rows.results){const lead=publicLead(row),c=await campaign(ownerId,memberId,row.campaign_id);if(!canAutoApprove(lead,c))continue;
    try{await review(ownerId,memberId,c.id,lead.id,lead.version,'approve',lead.greeting,'自动策略',true);}
-   catch(error){if(!(error instanceof DomainError))throw error;const terminal=/已安排|已触达/.test(error.message);await db.prepare("UPDATE workbench_prospect_leads SET data_json=json_set(data_json,'$.error',?,'$.autoSuppressed',?),updated_at=? WHERE campaign_id=? AND id=? AND job_id IS NULL AND version=?").bind(error.message,terminal?1:0,stamp(),c.id,lead.id,lead.version).run();}
+   catch(error){if(!(error instanceof DomainError))throw error;const terminal=/已安排|已触达|停止联系/.test(error.message);await db.prepare("UPDATE workbench_prospect_leads SET data_json=json_set(data_json,'$.error',?,'$.autoSuppressed',?),updated_at=? WHERE campaign_id=? AND id=? AND job_id IS NULL AND version=?").bind(error.message,terminal?1:0,stamp(),c.id,lead.id,lead.version).run();}
   }
  }
  return{chat,enqueueAutomatic,connect,disconnect,authenticate,device,seen,createCampaign,campaigns,campaign,leads,jobs,setPaused,createJob,insertComments,review,retrySend,claim,leased,renew,complete,pendingAnalysis,saveAnalysis,retryAnalysis};

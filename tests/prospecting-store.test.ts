@@ -385,3 +385,22 @@ for(const stop of ['pause','disconnect'] as const)test(`${stop} cancellation sur
  await f.store.review('owner-a','member-a',c.id,current.id,current.version,'approve','重新审核后的招呼','销售');
  assert.equal((await f.store.claim(device.deviceId))?.input.message,'重新审核后的招呼');
 });
+
+test('persistent contact stops block approval, queued claim and running renewal while keeping owner boundaries',async t=>{
+ for(const stage of ['approval','queued','running'] as const){
+  const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);let running:Awaited<ReturnType<typeof f.store.claim>>;
+  if(stage!=='approval'){await f.store.review('owner-a','member-a',x.campaign.id,x.lead.id,x.lead.version,'approve',x.lead.greeting,'审核员');if(stage==='running')running=(await f.store.claim(x.device.deviceId))!;}
+  // A stop by another workspace cannot suppress this workspace's customer.
+  f.sqlite.prepare('INSERT INTO workbench_prospect_contact_optouts VALUES (?,?,?,?,?)').run('owner-b','MS4wSender001','MS4wTarget001','停止联系','2026-11-05T02:00:00.000Z');
+  if(stage==='approval'){await f.store.review('owner-a','member-a',x.campaign.id,x.lead.id,x.lead.version,'approve',x.lead.greeting,'审核员');}
+  f.sqlite.prepare('INSERT INTO workbench_prospect_contact_optouts VALUES (?,?,?,?,?)').run('owner-a','MS4wSender001','MS4wTarget001','停止联系','2026-11-05T02:00:00.000Z');
+  if(stage==='running')await assert.rejects(f.store.renew(x.device.deviceId,running!.id,running!.leaseToken),/凭证|停止/);
+  else assert.equal(await f.store.claim(x.device.deviceId),null);
+ }
+});
+
+test('an opted out recipient cannot be explicitly retried and failed history remains untouched',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await completedSend(f);const prior=f.sqlite.prepare('SELECT * FROM workbench_prospect_jobs WHERE id=?').get(x.job.id);
+ f.sqlite.prepare('INSERT INTO workbench_prospect_contact_optouts VALUES (?,?,?,?,?)').run('owner-a','MS4wSender001','MS4wTarget001','停止联系','2026-11-05T02:00:00.000Z');
+ await assert.rejects(f.store.retrySend('owner-a','member-a',x.campaign.id,x.lead.id,x.lead.version,'审核员'),/停止联系/);assert.deepEqual(f.sqlite.prepare('SELECT * FROM workbench_prospect_jobs WHERE id=?').get(x.job.id),prior);assert.equal((await f.store.jobs('owner-a','member-a',x.campaign.id)).length,1);
+});

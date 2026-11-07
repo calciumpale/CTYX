@@ -78,3 +78,9 @@ Sites 返回 succeeded，生产地址：https://ctai-marketing-workbench-2026102
 - 抖音浏览器 fixture 使用隔离 Chromium，所有目标站点请求本地拦截；验证轮询不导航、不新开页，短暂身份缺证据不关闭窗口，明确失效不领取任务，发送前核验仍严格。未登录真实抖音账号、未采集真实客户或发送消息。
 - 本机助手更新使用既有安装器，用户退出旧版后安装；旧应用已备份，安装后源码哈希和严格签名验证通过，配对及浏览器状态目录未变。
 - 本轮 CUA 会话连续超时，未完成网页手工上传验收；Excel 导入、持久化与检索闭环以真实文件和 SQLite 自动化验证。
+
+## 2026-11-07 Excel Worker 线上加载修复
+
+- 用户截图的通用解析器错误对应 Worker.onerror。生产父加载器把 import.meta.url 固化为 file:///ROOT/app/lib/knowledge-excel.ts，导致 Worker 地址为 file:///_next/static/...，无法由 HTTPS 页面加载。
+- 新增生产产物检查 scripts/checks/excel-worker-url.mjs，实际执行父加载器与 Worker factory，捕获 Worker 构造参数，验证 HTTPS 同源、模块类型、资产存在与消息返回。原 v43 产物明确复现 file: !== https:；旧的 Node fallback 与直接 Worker 资产测试覆盖不到这一问题。
+- 修复采用按需导入 Vite ?worker factory，Node 无 Worker 时保留原解析路径。仅修改 Worker 加载方式，未改 Excel 解析规则、知识库数据或权限。

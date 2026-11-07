@@ -100,6 +100,20 @@ browserTest('owner proof waits for the visible handle after owner controls have 
   assert.equal((await adapter.ownProfileProof(page, undefined, 'sender-1'))?.handle, handle);
 });
 
+browserTest('strict sender proof waits for delayed owner search hydration without another reload', async t => {
+  const { adapter, page, state } = await fixture(t);
+  await adapter.accountStatus({ expectedAccountId: 'sender-1' });
+  state.canonical = ownProfile().replace('<input placeholder="搜索你发布的作品">', '') + '<script>setTimeout(() => document.querySelector("main").insertAdjacentHTML("beforeend", \'<input placeholder="搜索你发布的作品">\'), 3000)</script>';
+  adapter.timeoutMs = 5000;
+  advanceIdentityNavigation(t, adapter);
+  const before = state.requests.length;
+  const verified = await adapter.verifiedSender(page, 'sender-1');
+  assert.equal(verified.authenticated, true);
+  assert.equal(verified.accountId, 'sender-1');
+  assert.deepEqual(state.requests.slice(before), ['/user/sender-1']);
+  assert.equal(await page.locator('textarea').inputValue(), '保留的私信草稿');
+});
+
 browserTest('waiting for owner hydration never accepts duplicate handles or a changed profile path', async t => {
   for (const canonical of [ownProfile() + `<span>抖音号：${handle}</span>`, ownProfile().replace(`<span>抖音号：${handle}</span>`, '<span id="pending-handle"></span>') + `<script>setTimeout(() => {history.replaceState({}, '', '/user/another-user'); document.querySelector('#pending-handle').textContent='抖音号：${handle}'}, 100)</script>`]) {
     const { adapter } = await fixture(t, { canonical });

@@ -103,7 +103,7 @@ export class DouyinBrowserAdapter {
       .or(page.getByRole('textbox', { name: '搜索你发布的作品', exact: true })).first();
     try {
       await privateTab.waitFor({ state: 'visible', timeout: this.timeoutMs });
-      await ownWorks.waitFor({ state: 'visible', timeout: Math.min(this.timeoutMs, 2000) });
+      await ownWorks.waitFor({ state: 'visible', timeout: this.timeoutMs });
     } catch { await this.guard(page, signal); return null; }
     // Owner controls can render before the profile handle hydrates. Wait only
     // for missing evidence; a conflicting label or changed page fails at once.

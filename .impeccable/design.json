@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-11-07T06:48:24.339Z",
+  "generatedAt": "2026-11-07T16:19:51.642Z",
   "title": "Design System: 营销工作台",
   "extensions": {
     "colorMeta": {
@@ -8,392 +8,392 @@
         "role": "primary",
         "displayName": "primary",
         "tonalRamp": [
-          "oklch(15% 0.0055 286.0)",
-          "oklch(26% 0.0055 286.0)",
-          "oklch(38% 0.0055 286.0)",
-          "oklch(49% 0.0055 286.0)",
-          "oklch(61% 0.0055 286.0)",
-          "oklch(72% 0.0055 286.0)",
-          "oklch(84% 0.0055 286.0)",
-          "oklch(95% 0.0055 286.0)"
+          "color-mix(in oklab, #25272a 100%, white)",
+          "color-mix(in oklab, #25272a 90%, white)",
+          "color-mix(in oklab, #25272a 75%, white)",
+          "color-mix(in oklab, #25272a 60%, white)",
+          "color-mix(in oklab, #25272a 45%, white)",
+          "color-mix(in oklab, #25272a 30%, white)",
+          "color-mix(in oklab, #25272a 15%, white)",
+          "color-mix(in oklab, #25272a 5%, white)"
         ]
       },
       "primary-hover": {
         "role": "primary",
         "displayName": "primary-hover",
         "tonalRamp": [
-          "oklch(15% 0.0120 285.8)",
-          "oklch(26% 0.0120 285.8)",
-          "oklch(38% 0.0120 285.8)",
-          "oklch(49% 0.0120 285.8)",
-          "oklch(61% 0.0120 285.8)",
-          "oklch(72% 0.0120 285.8)",
-          "oklch(84% 0.0120 285.8)",
-          "oklch(95% 0.0120 285.8)"
+          "color-mix(in oklab, #34393f 100%, white)",
+          "color-mix(in oklab, #34393f 90%, white)",
+          "color-mix(in oklab, #34393f 75%, white)",
+          "color-mix(in oklab, #34393f 60%, white)",
+          "color-mix(in oklab, #34393f 45%, white)",
+          "color-mix(in oklab, #34393f 30%, white)",
+          "color-mix(in oklab, #34393f 15%, white)",
+          "color-mix(in oklab, #34393f 5%, white)"
         ]
       },
       "surface": {
         "role": "neutral",
         "displayName": "surface",
         "tonalRamp": [
-          "oklch(15% 0.0000 89.9)",
-          "oklch(26% 0.0000 89.9)",
-          "oklch(38% 0.0000 89.9)",
-          "oklch(49% 0.0000 89.9)",
-          "oklch(61% 0.0000 89.9)",
-          "oklch(72% 0.0000 89.9)",
-          "oklch(84% 0.0000 89.9)",
-          "oklch(95% 0.0000 89.9)"
+          "color-mix(in oklab, #fff 100%, white)",
+          "color-mix(in oklab, #fff 90%, white)",
+          "color-mix(in oklab, #fff 75%, white)",
+          "color-mix(in oklab, #fff 60%, white)",
+          "color-mix(in oklab, #fff 45%, white)",
+          "color-mix(in oklab, #fff 30%, white)",
+          "color-mix(in oklab, #fff 15%, white)",
+          "color-mix(in oklab, #fff 5%, white)"
         ]
       },
       "sidebar": {
         "role": "neutral",
         "displayName": "sidebar",
         "tonalRamp": [
-          "oklch(15% 0.0013 286.4)",
-          "oklch(26% 0.0013 286.4)",
-          "oklch(38% 0.0013 286.4)",
-          "oklch(49% 0.0013 286.4)",
-          "oklch(61% 0.0013 286.4)",
-          "oklch(72% 0.0013 286.4)",
-          "oklch(84% 0.0013 286.4)",
-          "oklch(95% 0.0013 286.4)"
+          "color-mix(in oklab, #242628 100%, white)",
+          "color-mix(in oklab, #242628 90%, white)",
+          "color-mix(in oklab, #242628 75%, white)",
+          "color-mix(in oklab, #242628 60%, white)",
+          "color-mix(in oklab, #242628 45%, white)",
+          "color-mix(in oklab, #242628 30%, white)",
+          "color-mix(in oklab, #242628 15%, white)",
+          "color-mix(in oklab, #242628 5%, white)"
         ]
       },
       "text": {
         "role": "neutral",
         "displayName": "text",
         "tonalRamp": [
-          "oklch(15% 0.0075 285.8)",
-          "oklch(26% 0.0075 285.8)",
-          "oklch(38% 0.0075 285.8)",
-          "oklch(49% 0.0075 285.8)",
-          "oklch(61% 0.0075 285.8)",
-          "oklch(72% 0.0075 285.8)",
-          "oklch(84% 0.0075 285.8)",
-          "oklch(95% 0.0075 285.8)"
+          "color-mix(in oklab, #25272a 100%, white)",
+          "color-mix(in oklab, #25272a 90%, white)",
+          "color-mix(in oklab, #25272a 75%, white)",
+          "color-mix(in oklab, #25272a 60%, white)",
+          "color-mix(in oklab, #25272a 45%, white)",
+          "color-mix(in oklab, #25272a 30%, white)",
+          "color-mix(in oklab, #25272a 15%, white)",
+          "color-mix(in oklab, #25272a 5%, white)"
         ]
       },
       "text-secondary": {
         "role": "neutral",
         "displayName": "text-secondary",
         "tonalRamp": [
-          "oklch(15% 0.0142 285.9)",
-          "oklch(26% 0.0142 285.9)",
-          "oklch(38% 0.0142 285.9)",
-          "oklch(49% 0.0142 285.9)",
-          "oklch(61% 0.0142 285.9)",
-          "oklch(72% 0.0142 285.9)",
-          "oklch(84% 0.0142 285.9)",
-          "oklch(95% 0.0142 285.9)"
+          "color-mix(in oklab, #61666e 100%, white)",
+          "color-mix(in oklab, #61666e 90%, white)",
+          "color-mix(in oklab, #61666e 75%, white)",
+          "color-mix(in oklab, #61666e 60%, white)",
+          "color-mix(in oklab, #61666e 45%, white)",
+          "color-mix(in oklab, #61666e 30%, white)",
+          "color-mix(in oklab, #61666e 15%, white)",
+          "color-mix(in oklab, #61666e 5%, white)"
         ]
       },
       "text-muted": {
         "role": "neutral",
         "displayName": "text-muted",
         "tonalRamp": [
-          "oklch(15% 0.0153 285.9)",
-          "oklch(26% 0.0153 285.9)",
-          "oklch(38% 0.0153 285.9)",
-          "oklch(49% 0.0153 285.9)",
-          "oklch(61% 0.0153 285.9)",
-          "oklch(72% 0.0153 285.9)",
-          "oklch(84% 0.0153 285.9)",
-          "oklch(95% 0.0153 285.9)"
+          "color-mix(in oklab, #61666e 100%, white)",
+          "color-mix(in oklab, #61666e 90%, white)",
+          "color-mix(in oklab, #61666e 75%, white)",
+          "color-mix(in oklab, #61666e 60%, white)",
+          "color-mix(in oklab, #61666e 45%, white)",
+          "color-mix(in oklab, #61666e 30%, white)",
+          "color-mix(in oklab, #61666e 15%, white)",
+          "color-mix(in oklab, #61666e 5%, white)"
         ]
       },
       "border": {
         "role": "neutral",
         "displayName": "border",
         "tonalRamp": [
-          "oklch(15% 0.0054 286.3)",
-          "oklch(26% 0.0054 286.3)",
-          "oklch(38% 0.0054 286.3)",
-          "oklch(49% 0.0054 286.3)",
-          "oklch(61% 0.0054 286.3)",
-          "oklch(72% 0.0054 286.3)",
-          "oklch(84% 0.0054 286.3)",
-          "oklch(95% 0.0054 286.3)"
+          "color-mix(in oklab, #e1e4e8 100%, white)",
+          "color-mix(in oklab, #e1e4e8 90%, white)",
+          "color-mix(in oklab, #e1e4e8 75%, white)",
+          "color-mix(in oklab, #e1e4e8 60%, white)",
+          "color-mix(in oklab, #e1e4e8 45%, white)",
+          "color-mix(in oklab, #e1e4e8 30%, white)",
+          "color-mix(in oklab, #e1e4e8 15%, white)",
+          "color-mix(in oklab, #e1e4e8 5%, white)"
         ]
       },
       "border-strong": {
         "role": "neutral",
         "displayName": "border-strong",
         "tonalRamp": [
-          "oklch(15% 0.0096 286.2)",
-          "oklch(26% 0.0096 286.2)",
-          "oklch(38% 0.0096 286.2)",
-          "oklch(49% 0.0096 286.2)",
-          "oklch(61% 0.0096 286.2)",
-          "oklch(72% 0.0096 286.2)",
-          "oklch(84% 0.0096 286.2)",
-          "oklch(95% 0.0096 286.2)"
+          "color-mix(in oklab, #c8cdd4 100%, white)",
+          "color-mix(in oklab, #c8cdd4 90%, white)",
+          "color-mix(in oklab, #c8cdd4 75%, white)",
+          "color-mix(in oklab, #c8cdd4 60%, white)",
+          "color-mix(in oklab, #c8cdd4 45%, white)",
+          "color-mix(in oklab, #c8cdd4 30%, white)",
+          "color-mix(in oklab, #c8cdd4 15%, white)",
+          "color-mix(in oklab, #c8cdd4 5%, white)"
         ]
       },
       "hover": {
         "role": "neutral",
         "displayName": "hover",
         "tonalRamp": [
-          "oklch(15% 0.0027 286.3)",
-          "oklch(26% 0.0027 286.3)",
-          "oklch(38% 0.0027 286.3)",
-          "oklch(49% 0.0027 286.3)",
-          "oklch(61% 0.0027 286.3)",
-          "oklch(72% 0.0027 286.3)",
-          "oklch(84% 0.0027 286.3)",
-          "oklch(95% 0.0027 286.3)"
+          "color-mix(in oklab, #eceff2 100%, white)",
+          "color-mix(in oklab, #eceff2 90%, white)",
+          "color-mix(in oklab, #eceff2 75%, white)",
+          "color-mix(in oklab, #eceff2 60%, white)",
+          "color-mix(in oklab, #eceff2 45%, white)",
+          "color-mix(in oklab, #eceff2 30%, white)",
+          "color-mix(in oklab, #eceff2 15%, white)",
+          "color-mix(in oklab, #eceff2 5%, white)"
         ]
       },
       "selected": {
         "role": "neutral",
         "displayName": "selected",
         "tonalRamp": [
-          "oklch(15% 0.0027 286.3)",
-          "oklch(26% 0.0027 286.3)",
-          "oklch(38% 0.0027 286.3)",
-          "oklch(49% 0.0027 286.3)",
-          "oklch(61% 0.0027 286.3)",
-          "oklch(72% 0.0027 286.3)",
-          "oklch(84% 0.0027 286.3)",
-          "oklch(95% 0.0027 286.3)"
+          "color-mix(in oklab, #e4e7eb 100%, white)",
+          "color-mix(in oklab, #e4e7eb 90%, white)",
+          "color-mix(in oklab, #e4e7eb 75%, white)",
+          "color-mix(in oklab, #e4e7eb 60%, white)",
+          "color-mix(in oklab, #e4e7eb 45%, white)",
+          "color-mix(in oklab, #e4e7eb 30%, white)",
+          "color-mix(in oklab, #e4e7eb 15%, white)",
+          "color-mix(in oklab, #e4e7eb 5%, white)"
         ]
       },
       "danger": {
         "role": "neutral",
         "displayName": "danger",
         "tonalRamp": [
-          "oklch(15% 0.1738 18.9)",
-          "oklch(26% 0.1738 18.9)",
-          "oklch(38% 0.1738 18.9)",
-          "oklch(49% 0.1738 18.9)",
-          "oklch(61% 0.1738 18.9)",
-          "oklch(72% 0.1738 18.9)",
-          "oklch(84% 0.1738 18.9)",
-          "oklch(95% 0.1738 18.9)"
+          "color-mix(in oklab, #bf3545 100%, white)",
+          "color-mix(in oklab, #bf3545 90%, white)",
+          "color-mix(in oklab, #bf3545 75%, white)",
+          "color-mix(in oklab, #bf3545 60%, white)",
+          "color-mix(in oklab, #bf3545 45%, white)",
+          "color-mix(in oklab, #bf3545 30%, white)",
+          "color-mix(in oklab, #bf3545 15%, white)",
+          "color-mix(in oklab, #bf3545 5%, white)"
         ]
       },
       "success": {
         "role": "neutral",
         "displayName": "success",
         "tonalRamp": [
-          "oklch(15% 0.1045 157.6)",
-          "oklch(26% 0.1045 157.6)",
-          "oklch(38% 0.1045 157.6)",
-          "oklch(49% 0.1045 157.6)",
-          "oklch(61% 0.1045 157.6)",
-          "oklch(72% 0.1045 157.6)",
-          "oklch(84% 0.1045 157.6)",
-          "oklch(95% 0.1045 157.6)"
+          "color-mix(in oklab, #287c52 100%, white)",
+          "color-mix(in oklab, #287c52 90%, white)",
+          "color-mix(in oklab, #287c52 75%, white)",
+          "color-mix(in oklab, #287c52 60%, white)",
+          "color-mix(in oklab, #287c52 45%, white)",
+          "color-mix(in oklab, #287c52 30%, white)",
+          "color-mix(in oklab, #287c52 15%, white)",
+          "color-mix(in oklab, #287c52 5%, white)"
         ]
       },
       "warning": {
         "role": "neutral",
         "displayName": "warning",
         "tonalRamp": [
-          "oklch(15% 0.1141 72.2)",
-          "oklch(26% 0.1141 72.2)",
-          "oklch(38% 0.1141 72.2)",
-          "oklch(49% 0.1141 72.2)",
-          "oklch(61% 0.1141 72.2)",
-          "oklch(72% 0.1141 72.2)",
-          "oklch(84% 0.1141 72.2)",
-          "oklch(95% 0.1141 72.2)"
+          "color-mix(in oklab, #9a650c 100%, white)",
+          "color-mix(in oklab, #9a650c 90%, white)",
+          "color-mix(in oklab, #9a650c 75%, white)",
+          "color-mix(in oklab, #9a650c 60%, white)",
+          "color-mix(in oklab, #9a650c 45%, white)",
+          "color-mix(in oklab, #9a650c 30%, white)",
+          "color-mix(in oklab, #9a650c 15%, white)",
+          "color-mix(in oklab, #9a650c 5%, white)"
         ]
       },
       "dark-primary": {
         "role": "primary",
         "displayName": "dark-primary",
         "tonalRamp": [
-          "oklch(15% 0.0067 286.3)",
-          "oklch(26% 0.0067 286.3)",
-          "oklch(38% 0.0067 286.3)",
-          "oklch(49% 0.0067 286.3)",
-          "oklch(61% 0.0067 286.3)",
-          "oklch(72% 0.0067 286.3)",
-          "oklch(84% 0.0067 286.3)",
-          "oklch(95% 0.0067 286.3)"
+          "color-mix(in oklab, #eef1f5 100%, white)",
+          "color-mix(in oklab, #eef1f5 90%, white)",
+          "color-mix(in oklab, #eef1f5 75%, white)",
+          "color-mix(in oklab, #eef1f5 60%, white)",
+          "color-mix(in oklab, #eef1f5 45%, white)",
+          "color-mix(in oklab, #eef1f5 30%, white)",
+          "color-mix(in oklab, #eef1f5 15%, white)",
+          "color-mix(in oklab, #eef1f5 5%, white)"
         ]
       },
       "dark-primary-hover": {
         "role": "primary",
         "displayName": "dark-primary-hover",
         "tonalRamp": [
-          "oklch(15% 0.0109 286.2)",
-          "oklch(26% 0.0109 286.2)",
-          "oklch(38% 0.0109 286.2)",
-          "oklch(49% 0.0109 286.2)",
-          "oklch(61% 0.0109 286.2)",
-          "oklch(72% 0.0109 286.2)",
-          "oklch(84% 0.0109 286.2)",
-          "oklch(95% 0.0109 286.2)"
+          "color-mix(in oklab, #d4dce6 100%, white)",
+          "color-mix(in oklab, #d4dce6 90%, white)",
+          "color-mix(in oklab, #d4dce6 75%, white)",
+          "color-mix(in oklab, #d4dce6 60%, white)",
+          "color-mix(in oklab, #d4dce6 45%, white)",
+          "color-mix(in oklab, #d4dce6 30%, white)",
+          "color-mix(in oklab, #d4dce6 15%, white)",
+          "color-mix(in oklab, #d4dce6 5%, white)"
         ]
       },
       "dark-surface": {
         "role": "neutral",
         "displayName": "dark-surface",
         "tonalRamp": [
-          "oklch(15% 0.0077 285.8)",
-          "oklch(26% 0.0077 285.8)",
-          "oklch(38% 0.0077 285.8)",
-          "oklch(49% 0.0077 285.8)",
-          "oklch(61% 0.0077 285.8)",
-          "oklch(72% 0.0077 285.8)",
-          "oklch(84% 0.0077 285.8)",
-          "oklch(95% 0.0077 285.8)"
+          "color-mix(in oklab, #1d2126 100%, white)",
+          "color-mix(in oklab, #1d2126 90%, white)",
+          "color-mix(in oklab, #1d2126 75%, white)",
+          "color-mix(in oklab, #1d2126 60%, white)",
+          "color-mix(in oklab, #1d2126 45%, white)",
+          "color-mix(in oklab, #1d2126 30%, white)",
+          "color-mix(in oklab, #1d2126 15%, white)",
+          "color-mix(in oklab, #1d2126 5%, white)"
         ]
       },
       "dark-sidebar": {
         "role": "neutral",
         "displayName": "dark-sidebar",
         "tonalRamp": [
-          "oklch(15% 0.0060 285.8)",
-          "oklch(26% 0.0060 285.8)",
-          "oklch(38% 0.0060 285.8)",
-          "oklch(49% 0.0060 285.8)",
-          "oklch(61% 0.0060 285.8)",
-          "oklch(72% 0.0060 285.8)",
-          "oklch(84% 0.0060 285.8)",
-          "oklch(95% 0.0060 285.8)"
+          "color-mix(in oklab, #171a1e 100%, white)",
+          "color-mix(in oklab, #171a1e 90%, white)",
+          "color-mix(in oklab, #171a1e 75%, white)",
+          "color-mix(in oklab, #171a1e 60%, white)",
+          "color-mix(in oklab, #171a1e 45%, white)",
+          "color-mix(in oklab, #171a1e 30%, white)",
+          "color-mix(in oklab, #171a1e 15%, white)",
+          "color-mix(in oklab, #171a1e 5%, white)"
         ]
       },
       "dark-text": {
         "role": "neutral",
         "displayName": "dark-text",
         "tonalRamp": [
-          "oklch(15% 0.0053 286.3)",
-          "oklch(26% 0.0053 286.3)",
-          "oklch(38% 0.0053 286.3)",
-          "oklch(49% 0.0053 286.3)",
-          "oklch(61% 0.0053 286.3)",
-          "oklch(72% 0.0053 286.3)",
-          "oklch(84% 0.0053 286.3)",
-          "oklch(95% 0.0053 286.3)"
+          "color-mix(in oklab, #f0f3f7 100%, white)",
+          "color-mix(in oklab, #f0f3f7 90%, white)",
+          "color-mix(in oklab, #f0f3f7 75%, white)",
+          "color-mix(in oklab, #f0f3f7 60%, white)",
+          "color-mix(in oklab, #f0f3f7 45%, white)",
+          "color-mix(in oklab, #f0f3f7 30%, white)",
+          "color-mix(in oklab, #f0f3f7 15%, white)",
+          "color-mix(in oklab, #f0f3f7 5%, white)"
         ]
       },
       "dark-text-secondary": {
         "role": "neutral",
         "displayName": "dark-text-secondary",
         "tonalRamp": [
-          "oklch(15% 0.0141 286.1)",
-          "oklch(26% 0.0141 286.1)",
-          "oklch(38% 0.0141 286.1)",
-          "oklch(49% 0.0141 286.1)",
-          "oklch(61% 0.0141 286.1)",
-          "oklch(72% 0.0141 286.1)",
-          "oklch(84% 0.0141 286.1)",
-          "oklch(95% 0.0141 286.1)"
+          "color-mix(in oklab, #bac2ce 100%, white)",
+          "color-mix(in oklab, #bac2ce 90%, white)",
+          "color-mix(in oklab, #bac2ce 75%, white)",
+          "color-mix(in oklab, #bac2ce 60%, white)",
+          "color-mix(in oklab, #bac2ce 45%, white)",
+          "color-mix(in oklab, #bac2ce 30%, white)",
+          "color-mix(in oklab, #bac2ce 15%, white)",
+          "color-mix(in oklab, #bac2ce 5%, white)"
         ]
       },
       "dark-text-muted": {
         "role": "neutral",
         "displayName": "dark-text-muted",
         "tonalRamp": [
-          "oklch(15% 0.0173 286.0)",
-          "oklch(26% 0.0173 286.0)",
-          "oklch(38% 0.0173 286.0)",
-          "oklch(49% 0.0173 286.0)",
-          "oklch(61% 0.0173 286.0)",
-          "oklch(72% 0.0173 286.0)",
-          "oklch(84% 0.0173 286.0)",
-          "oklch(95% 0.0173 286.0)"
+          "color-mix(in oklab, #a3adba 100%, white)",
+          "color-mix(in oklab, #a3adba 90%, white)",
+          "color-mix(in oklab, #a3adba 75%, white)",
+          "color-mix(in oklab, #a3adba 60%, white)",
+          "color-mix(in oklab, #a3adba 45%, white)",
+          "color-mix(in oklab, #a3adba 30%, white)",
+          "color-mix(in oklab, #a3adba 15%, white)",
+          "color-mix(in oklab, #a3adba 5%, white)"
         ]
       },
       "dark-border": {
         "role": "neutral",
         "displayName": "dark-border",
         "tonalRamp": [
-          "oklch(15% 0.0141 285.6)",
-          "oklch(26% 0.0141 285.6)",
-          "oklch(38% 0.0141 285.6)",
-          "oklch(49% 0.0141 285.6)",
-          "oklch(61% 0.0141 285.6)",
-          "oklch(72% 0.0141 285.6)",
-          "oklch(84% 0.0141 285.6)",
-          "oklch(95% 0.0141 285.6)"
+          "color-mix(in oklab, #363e48 100%, white)",
+          "color-mix(in oklab, #363e48 90%, white)",
+          "color-mix(in oklab, #363e48 75%, white)",
+          "color-mix(in oklab, #363e48 60%, white)",
+          "color-mix(in oklab, #363e48 45%, white)",
+          "color-mix(in oklab, #363e48 30%, white)",
+          "color-mix(in oklab, #363e48 15%, white)",
+          "color-mix(in oklab, #363e48 5%, white)"
         ]
       },
       "dark-border-strong": {
         "role": "neutral",
         "displayName": "dark-border-strong",
         "tonalRamp": [
-          "oklch(15% 0.0181 285.6)",
-          "oklch(26% 0.0181 285.6)",
-          "oklch(38% 0.0181 285.6)",
-          "oklch(49% 0.0181 285.6)",
-          "oklch(61% 0.0181 285.6)",
-          "oklch(72% 0.0181 285.6)",
-          "oklch(84% 0.0181 285.6)",
-          "oklch(95% 0.0181 285.6)"
+          "color-mix(in oklab, #505b68 100%, white)",
+          "color-mix(in oklab, #505b68 90%, white)",
+          "color-mix(in oklab, #505b68 75%, white)",
+          "color-mix(in oklab, #505b68 60%, white)",
+          "color-mix(in oklab, #505b68 45%, white)",
+          "color-mix(in oklab, #505b68 30%, white)",
+          "color-mix(in oklab, #505b68 15%, white)",
+          "color-mix(in oklab, #505b68 5%, white)"
         ]
       },
       "dark-hover": {
         "role": "neutral",
         "displayName": "dark-hover",
         "tonalRamp": [
-          "oklch(15% 0.0127 285.6)",
-          "oklch(26% 0.0127 285.6)",
-          "oklch(38% 0.0127 285.6)",
-          "oklch(49% 0.0127 285.6)",
-          "oklch(61% 0.0127 285.6)",
-          "oklch(72% 0.0127 285.6)",
-          "oklch(84% 0.0127 285.6)",
-          "oklch(95% 0.0127 285.6)"
+          "color-mix(in oklab, #2d343d 100%, white)",
+          "color-mix(in oklab, #2d343d 90%, white)",
+          "color-mix(in oklab, #2d343d 75%, white)",
+          "color-mix(in oklab, #2d343d 60%, white)",
+          "color-mix(in oklab, #2d343d 45%, white)",
+          "color-mix(in oklab, #2d343d 30%, white)",
+          "color-mix(in oklab, #2d343d 15%, white)",
+          "color-mix(in oklab, #2d343d 5%, white)"
         ]
       },
       "dark-selected": {
         "role": "neutral",
         "displayName": "dark-selected",
         "tonalRamp": [
-          "oklch(15% 0.0141 285.6)",
-          "oklch(26% 0.0141 285.6)",
-          "oklch(38% 0.0141 285.6)",
-          "oklch(49% 0.0141 285.6)",
-          "oklch(61% 0.0141 285.6)",
-          "oklch(72% 0.0141 285.6)",
-          "oklch(84% 0.0141 285.6)",
-          "oklch(95% 0.0141 285.6)"
+          "color-mix(in oklab, #363e48 100%, white)",
+          "color-mix(in oklab, #363e48 90%, white)",
+          "color-mix(in oklab, #363e48 75%, white)",
+          "color-mix(in oklab, #363e48 60%, white)",
+          "color-mix(in oklab, #363e48 45%, white)",
+          "color-mix(in oklab, #363e48 30%, white)",
+          "color-mix(in oklab, #363e48 15%, white)",
+          "color-mix(in oklab, #363e48 5%, white)"
         ]
       },
       "dark-danger": {
         "role": "neutral",
         "displayName": "dark-danger",
         "tonalRamp": [
-          "oklch(15% 0.1479 13.2)",
-          "oklch(26% 0.1479 13.2)",
-          "oklch(38% 0.1479 13.2)",
-          "oklch(49% 0.1479 13.2)",
-          "oklch(61% 0.1479 13.2)",
-          "oklch(72% 0.1479 13.2)",
-          "oklch(84% 0.1479 13.2)",
-          "oklch(95% 0.1479 13.2)"
+          "color-mix(in oklab, #f07888 100%, white)",
+          "color-mix(in oklab, #f07888 90%, white)",
+          "color-mix(in oklab, #f07888 75%, white)",
+          "color-mix(in oklab, #f07888 60%, white)",
+          "color-mix(in oklab, #f07888 45%, white)",
+          "color-mix(in oklab, #f07888 30%, white)",
+          "color-mix(in oklab, #f07888 15%, white)",
+          "color-mix(in oklab, #f07888 5%, white)"
         ]
       },
       "dark-success": {
         "role": "neutral",
         "displayName": "dark-success",
         "tonalRamp": [
-          "oklch(15% 0.0964 158.9)",
-          "oklch(26% 0.0964 158.9)",
-          "oklch(38% 0.0964 158.9)",
-          "oklch(49% 0.0964 158.9)",
-          "oklch(61% 0.0964 158.9)",
-          "oklch(72% 0.0964 158.9)",
-          "oklch(84% 0.0964 158.9)",
-          "oklch(95% 0.0964 158.9)"
+          "color-mix(in oklab, #72bd94 100%, white)",
+          "color-mix(in oklab, #72bd94 90%, white)",
+          "color-mix(in oklab, #72bd94 75%, white)",
+          "color-mix(in oklab, #72bd94 60%, white)",
+          "color-mix(in oklab, #72bd94 45%, white)",
+          "color-mix(in oklab, #72bd94 30%, white)",
+          "color-mix(in oklab, #72bd94 15%, white)",
+          "color-mix(in oklab, #72bd94 5%, white)"
         ]
       },
       "dark-warning": {
         "role": "neutral",
         "displayName": "dark-warning",
         "tonalRamp": [
-          "oklch(15% 0.1065 83.9)",
-          "oklch(26% 0.1065 83.9)",
-          "oklch(38% 0.1065 83.9)",
-          "oklch(49% 0.1065 83.9)",
-          "oklch(61% 0.1065 83.9)",
-          "oklch(72% 0.1065 83.9)",
-          "oklch(84% 0.1065 83.9)",
-          "oklch(95% 0.1065 83.9)"
+          "color-mix(in oklab, #d8b264 100%, white)",
+          "color-mix(in oklab, #d8b264 90%, white)",
+          "color-mix(in oklab, #d8b264 75%, white)",
+          "color-mix(in oklab, #d8b264 60%, white)",
+          "color-mix(in oklab, #d8b264 45%, white)",
+          "color-mix(in oklab, #d8b264 30%, white)",
+          "color-mix(in oklab, #d8b264 15%, white)",
+          "color-mix(in oklab, #d8b264 5%, white)"
         ]
       }
     },
@@ -515,7 +515,7 @@
       "refersTo": "button-primary",
       "description": "现有 primary 按钮变体。",
       "html": "<button class=\"ds-button-primary\">保存更改</button>",
-      "css": ".ds-button-primary{display:inline-flex;align-items:center;justify-content:center;gap:7px;box-sizing:border-box;height:var(--control-height, 36px);min-height:var(--control-height, 36px);border:1px solid transparent;border-radius:var(--control-radius, 7px);padding:0 13px;font-family:system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei\", sans-serif;font-size:13px;font-weight:500;line-height:1.3;cursor:pointer;transition:background-color 180ms var(--cds-ease-swift, cubic-bezier(.16,1,.3,1));background:var(--brand, #252528);color:var(--cds-gray-0, #fff);}.ds-button-primary:hover:not(:disabled){background:var(--cds-clay-hover, #3b3b42)}.ds-button-primary:focus-visible{outline:2px solid var(--cds-clay, #45454c);outline-offset:4px}.ds-button-primary:active:not(:disabled){transform:translateY(1px)}.ds-button-primary:disabled{opacity:.45;cursor:not-allowed}@media(prefers-reduced-motion:reduce){.ds-button-primary{transition:none}}@media(max-width:850px){.ds-button-primary{height:var(--control-height, 44px);min-height:var(--control-height, 44px)}}"
+      "css": ".ds-button-primary{display:inline-flex;align-items:center;justify-content:center;gap:7px;box-sizing:border-box;height:var(--control-height, 36px);min-height:var(--control-height, 36px);border:1px solid transparent;border-radius:var(--control-radius, 9px);padding:0 13px;font-family:system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei\", sans-serif;font-size:13px;font-weight:500;line-height:1.3;cursor:pointer;transition:background-color 180ms var(--cds-ease-swift, cubic-bezier(.16,1,.3,1));background:var(--brand, #25272a);color:var(--cds-gray-0, #fff);}.ds-button-primary:hover:not(:disabled){background:var(--cds-clay-hover, #34393f)}.ds-button-primary:focus-visible{outline:2px solid var(--cds-clay, #41464d);outline-offset:4px}.ds-button-primary:active:not(:disabled){transform:translateY(1px)}.ds-button-primary:disabled{opacity:.45;cursor:not-allowed}@media(prefers-reduced-motion:reduce){.ds-button-primary{transition:none}}@media(max-width:850px){.ds-button-primary{height:var(--control-height, 44px);min-height:var(--control-height, 44px)}}"
     },
     {
       "name": "次按钮",
@@ -523,7 +523,7 @@
       "refersTo": "button-secondary",
       "description": "现有 secondary 按钮变体。",
       "html": "<button class=\"ds-button-secondary\">保存更改</button>",
-      "css": ".ds-button-secondary{display:inline-flex;align-items:center;justify-content:center;gap:7px;box-sizing:border-box;height:var(--control-height, 36px);min-height:var(--control-height, 36px);border:1px solid transparent;border-radius:var(--control-radius, 7px);padding:0 13px;font-family:system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei\", sans-serif;font-size:13px;font-weight:500;line-height:1.3;cursor:pointer;transition:background-color 180ms var(--cds-ease-swift, cubic-bezier(.16,1,.3,1));background:var(--cds-surface-2, #fff);color:var(--cds-text-primary, #202024);border-color:var(--cds-border, #e6e6ea)}.ds-button-secondary:hover:not(:disabled){background:var(--cds-fill-ghost-hover, #f3f3f5)}.ds-button-secondary:focus-visible{outline:2px solid var(--cds-clay, #45454c);outline-offset:4px}.ds-button-secondary:active:not(:disabled){transform:translateY(1px)}.ds-button-secondary:disabled{opacity:.45;cursor:not-allowed}@media(prefers-reduced-motion:reduce){.ds-button-secondary{transition:none}}@media(max-width:850px){.ds-button-secondary{height:var(--control-height, 44px);min-height:var(--control-height, 44px)}}"
+      "css": ".ds-button-secondary{display:inline-flex;align-items:center;justify-content:center;gap:7px;box-sizing:border-box;height:var(--control-height, 36px);min-height:var(--control-height, 36px);border:1px solid transparent;border-radius:var(--control-radius, 9px);padding:0 13px;font-family:system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei\", sans-serif;font-size:13px;font-weight:500;line-height:1.3;cursor:pointer;transition:background-color 180ms var(--cds-ease-swift, cubic-bezier(.16,1,.3,1));background:var(--cds-surface-2, #fff);color:var(--cds-text-primary, #25272a);border-color:var(--cds-border, #e1e4e8)}.ds-button-secondary:hover:not(:disabled){background:var(--cds-fill-ghost-hover, #eceff2)}.ds-button-secondary:focus-visible{outline:2px solid var(--cds-clay, #41464d);outline-offset:4px}.ds-button-secondary:active:not(:disabled){transform:translateY(1px)}.ds-button-secondary:disabled{opacity:.45;cursor:not-allowed}@media(prefers-reduced-motion:reduce){.ds-button-secondary{transition:none}}@media(max-width:850px){.ds-button-secondary{height:var(--control-height, 44px);min-height:var(--control-height, 44px)}}"
     },
     {
       "name": "透明按钮",
@@ -531,7 +531,7 @@
       "refersTo": "button-ghost",
       "description": "现有 ghost 按钮变体。",
       "html": "<button class=\"ds-button-ghost\">保存更改</button>",
-      "css": ".ds-button-ghost{display:inline-flex;align-items:center;justify-content:center;gap:7px;box-sizing:border-box;height:var(--control-height, 36px);min-height:var(--control-height, 36px);border:1px solid transparent;border-radius:var(--control-radius, 7px);padding:0 13px;font-family:system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei\", sans-serif;font-size:13px;font-weight:500;line-height:1.3;cursor:pointer;transition:background-color 180ms var(--cds-ease-swift, cubic-bezier(.16,1,.3,1));background:transparent;color:var(--cds-text-secondary, #62626b);}.ds-button-ghost:hover:not(:disabled){background:var(--cds-fill-ghost-hover, #f3f3f5)}.ds-button-ghost:focus-visible{outline:2px solid var(--cds-clay, #45454c);outline-offset:4px}.ds-button-ghost:active:not(:disabled){transform:translateY(1px)}.ds-button-ghost:disabled{opacity:.45;cursor:not-allowed}@media(prefers-reduced-motion:reduce){.ds-button-ghost{transition:none}}@media(max-width:850px){.ds-button-ghost{height:var(--control-height, 44px);min-height:var(--control-height, 44px)}}"
+      "css": ".ds-button-ghost{display:inline-flex;align-items:center;justify-content:center;gap:7px;box-sizing:border-box;height:var(--control-height, 36px);min-height:var(--control-height, 36px);border:1px solid transparent;border-radius:var(--control-radius, 9px);padding:0 13px;font-family:system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei\", sans-serif;font-size:13px;font-weight:500;line-height:1.3;cursor:pointer;transition:background-color 180ms var(--cds-ease-swift, cubic-bezier(.16,1,.3,1));background:transparent;color:var(--cds-text-secondary, #61666e);}.ds-button-ghost:hover:not(:disabled){background:var(--cds-fill-ghost-hover, #eceff2)}.ds-button-ghost:focus-visible{outline:2px solid var(--cds-clay, #41464d);outline-offset:4px}.ds-button-ghost:active:not(:disabled){transform:translateY(1px)}.ds-button-ghost:disabled{opacity:.45;cursor:not-allowed}@media(prefers-reduced-motion:reduce){.ds-button-ghost{transition:none}}@media(max-width:850px){.ds-button-ghost{height:var(--control-height, 44px);min-height:var(--control-height, 44px)}}"
     },
     {
       "name": "危险按钮",
@@ -539,7 +539,7 @@
       "refersTo": "button-danger",
       "description": "现有 danger 按钮变体。",
       "html": "<button class=\"ds-button-danger\">删除</button>",
-      "css": ".ds-button-danger{display:inline-flex;align-items:center;justify-content:center;gap:7px;box-sizing:border-box;height:var(--control-height, 36px);min-height:var(--control-height, 36px);border:1px solid transparent;border-radius:var(--control-radius, 7px);padding:0 13px;font-family:system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei\", sans-serif;font-size:13px;font-weight:500;line-height:1.3;cursor:pointer;transition:background-color 180ms var(--cds-ease-swift, cubic-bezier(.16,1,.3,1));background:var(--cds-fill-danger, #bf3545);color:var(--cds-gray-0, #fff);}.ds-button-danger:focus-visible{outline:2px solid var(--cds-clay, #45454c);outline-offset:4px}.ds-button-danger:active:not(:disabled){transform:translateY(1px)}.ds-button-danger:disabled{opacity:.45;cursor:not-allowed}@media(prefers-reduced-motion:reduce){.ds-button-danger{transition:none}}@media(max-width:850px){.ds-button-danger{height:var(--control-height, 44px);min-height:var(--control-height, 44px)}}"
+      "css": ".ds-button-danger{display:inline-flex;align-items:center;justify-content:center;gap:7px;box-sizing:border-box;height:var(--control-height, 36px);min-height:var(--control-height, 36px);border:1px solid transparent;border-radius:var(--control-radius, 9px);padding:0 13px;font-family:system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei\", sans-serif;font-size:13px;font-weight:500;line-height:1.3;cursor:pointer;transition:background-color 180ms var(--cds-ease-swift, cubic-bezier(.16,1,.3,1));background:var(--cds-fill-danger, #bf3545);color:var(--cds-gray-0, #fff);}.ds-button-danger:focus-visible{outline:2px solid var(--cds-clay, #41464d);outline-offset:4px}.ds-button-danger:active:not(:disabled){transform:translateY(1px)}.ds-button-danger:disabled{opacity:.45;cursor:not-allowed}@media(prefers-reduced-motion:reduce){.ds-button-danger{transition:none}}@media(max-width:850px){.ds-button-danger{height:var(--control-height, 44px);min-height:var(--control-height, 44px)}}"
     },
     {
       "name": "输入框",
@@ -547,15 +547,15 @@
       "refersTo": "input",
       "description": "中性表面、完整边框与清楚焦点。",
       "html": "<input class=\"ds-input\" aria-label=\"项目名称\" placeholder=\"项目名称\" />",
-      "css": ".ds-input{box-sizing:border-box;width:100%;height:var(--control-height, 36px);min-height:var(--control-height, 36px);max-height:var(--control-height, 36px);border:1px solid var(--cds-border, #e6e6ea);color:var(--cds-text-primary, #202024);background:var(--cds-surface-2, #fff);border-radius:var(--control-radius, 7px);padding:0 var(--control-padding-inline, 11px);font-family:system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei\", sans-serif;font-size:var(--control-font-size, 13px);line-height:normal;transition:box-shadow 180ms var(--cds-ease-swift, cubic-bezier(.16,1,.3,1))}.ds-input::placeholder{color:var(--cds-text-muted, #71717b)}.ds-input:focus-visible{outline:none;box-shadow:var(--cds-focus-shadow,0 0 0 2px #fff,0 0 0 4px #858590)}.ds-input:disabled{opacity:.45}@media(max-width:850px){.ds-input{height:var(--control-height, 44px);min-height:var(--control-height, 44px);max-height:var(--control-height, 44px);font-size:var(--control-font-size, 16px)}}@media(prefers-reduced-motion:reduce){.ds-input{transition:none}}"
+      "css": ".ds-input{box-sizing:border-box;width:100%;height:var(--control-height, 36px);min-height:var(--control-height, 36px);max-height:var(--control-height, 36px);border:1px solid var(--cds-border, #e1e4e8);color:var(--cds-text-primary, #25272a);background:var(--cds-surface-2, #fff);border-radius:var(--control-radius, 9px);padding:0 var(--control-padding-inline, 11px);font-family:system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei\", sans-serif;font-size:var(--control-font-size, 13px);line-height:normal;transition:box-shadow 180ms var(--cds-ease-swift, cubic-bezier(.16,1,.3,1))}.ds-input::placeholder{color:var(--cds-text-muted, #61666e)}.ds-input:focus-visible{outline:none;box-shadow:var(--cds-focus-shadow,0 0 0 2px #fff,0 0 0 4px #858590)}.ds-input:disabled{opacity:.45}@media(max-width:850px){.ds-input{height:var(--control-height, 44px);min-height:var(--control-height, 44px);max-height:var(--control-height, 44px);font-size:var(--control-font-size, 16px)}}@media(prefers-reduced-motion:reduce){.ds-input{transition:none}}"
     },
     {
       "name": "当前导航",
       "kind": "nav",
       "refersTo": "navigation-selected",
       "description": "通过中性背景与字重标识当前位置。",
-      "html": "<nav aria-label=\"业务导航\"><a class=\"ds-nav\" href=\"?view=prospecting\">社交平台获客</a><a class=\"ds-nav\" aria-current=\"page\" href=\"?view=deals\">项目跟进</a><a class=\"ds-nav\" href=\"?view=schedule\">提醒及日程</a><a class=\"ds-nav\" href=\"?view=contracts\">合同及审批</a><a class=\"ds-nav\" href=\"?view=training\">培训提升</a><a class=\"ds-nav\" href=\"?view=knowledge\">知识库</a></nav>",
-      "css": ".ds-nav{display:flex;align-items:center;gap:12px;min-height:36px;border:0;border-radius:7px;padding:9px 12px;font-family:system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei\", sans-serif;font-size:13px;text-decoration:none;color:var(--cds-text-secondary, #62626b);background:transparent}.ds-nav:hover{background:var(--cds-fill-ghost-hover, #f3f3f5)}.ds-nav[aria-current=page]{background:var(--cds-fill-ghost-selected, #eaeaec);color:var(--cds-text-primary, #202024);font-weight:550}.ds-nav:focus-visible{outline:2px solid var(--cds-clay, #45454c);outline-offset:4px}"
+      "html": "<nav class=\"ds-primary-nav\" aria-label=\"业务导航\"><a class=\"ds-nav\" href=\"?view=prospecting\">社交平台获客</a><a class=\"ds-nav\" aria-current=\"page\" href=\"?view=deals\">项目跟进</a><a class=\"ds-nav\" href=\"?view=schedule\">提醒及日程</a><a class=\"ds-nav\" href=\"?view=contracts\">合同及审批</a><a class=\"ds-nav\" href=\"?view=training\">培训提升</a><a class=\"ds-nav\" href=\"?view=knowledge\">知识库</a></nav>",
+      "css": ".ds-primary-nav{background:var(--nav-bg,#242628);border-radius:14px;padding:8px}.ds-nav{display:flex;align-items:center;gap:12px;min-height:36px;border:0;border-radius:9px;padding:9px 12px;font-family:system-ui,-apple-system,BlinkMacSystemFont,\"Segoe UI\",\"PingFang SC\",\"Microsoft YaHei\",sans-serif;font-size:13px;text-decoration:none;color:var(--nav-muted,#b8c0c9);background:transparent}.ds-nav:hover{background:var(--nav-hover,#35383c)}.ds-nav[aria-current=page]{background:var(--nav-selected,#41454b);color:var(--nav-text,#f5f7fa);font-weight:550}.ds-nav:focus-visible{outline:2px solid var(--nav-muted,#b8c0c9);outline-offset:3px}"
     },
     {
       "name": "中性标签",
@@ -563,7 +563,7 @@
       "refersTo": "badge",
       "description": "紧凑静态元数据标签。",
       "html": "<span class=\"ds-badge\">待跟进</span>",
-      "css": ".ds-badge{display:inline-flex;align-items:center;gap:4px;border-radius:5px;font-family:system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei\", sans-serif;font-size:11px;line-height:1.5;padding:3px 7px;background:var(--cds-fill-ghost-hover, #f3f3f5);color:var(--cds-text-secondary, #62626b);white-space:nowrap}"
+      "css": ".ds-badge{display:inline-flex;align-items:center;gap:4px;border-radius:5px;font-family:system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei\", sans-serif;font-size:11px;line-height:1.5;padding:3px 7px;background:var(--cds-fill-ghost-hover, #eceff2);color:var(--cds-text-secondary, #61666e);white-space:nowrap}"
     },
     {
       "name": "项目卡片",
@@ -571,7 +571,7 @@
       "refersTo": "project-card",
       "description": "看板内的项目与下一步动作。",
       "html": "<article class=\"ds-project-card\"><button class=\"ds-project-open\"><strong>客户项目</strong><span>下一步：确认拜访时间</span></button></article>",
-      "css": ".ds-project-card{padding:12px;border:1px solid var(--cds-border, #e6e6ea);border-radius:8px;background:var(--cds-surface-2, #fff);color:var(--cds-text-primary, #202024)}.ds-project-card:hover{border-color:var(--cds-border-strong, #ccccd3)}.ds-project-open{display:block;width:100%;padding:0;text-align:left;border:0;border-radius:3px;background:transparent;color:inherit;font-family:system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei\", sans-serif;cursor:pointer}.ds-project-open strong{font-size:14px;line-height:1.7;font-weight:550}.ds-project-open span{display:block;margin-top:4px;color:var(--cds-text-secondary, #62626b);font-size:12px;line-height:1.75}.ds-project-open:hover strong{text-decoration:underline;text-underline-offset:4px}.ds-project-open:focus-visible{outline:2px solid var(--cds-clay, #45454c);outline-offset:4px}"
+      "css": ".ds-project-card{padding:12px;border:1px solid var(--cds-border, #e1e4e8);border-radius:8px;background:var(--cds-surface-2, #fff);color:var(--cds-text-primary, #25272a)}.ds-project-card:hover{border-color:var(--cds-border-strong, #c8cdd4)}.ds-project-open{display:block;width:100%;padding:0;text-align:left;border:0;border-radius:3px;background:transparent;color:inherit;font-family:system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei\", sans-serif;cursor:pointer}.ds-project-open strong{font-size:14px;line-height:1.7;font-weight:550}.ds-project-open span{display:block;margin-top:4px;color:var(--cds-text-secondary, #61666e);font-size:12px;line-height:1.75}.ds-project-open:hover strong{text-decoration:underline;text-underline-offset:4px}.ds-project-open:focus-visible{outline:2px solid var(--cds-clay, #41464d);outline-offset:4px}"
     },
     {
       "name": "可展开原文",
@@ -579,7 +579,7 @@
       "refersTo": "disclosure",
       "description": "让历史与原文在需要时展开。",
       "html": "<details class=\"ds-disclosure\"><summary><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" aria-hidden=\"true\"><path d=\"m9 18 6-6-6-6\"/></svg>查看原文</summary><p>保留完整原文与来源，在需要时展开阅读。</p></details>",
-      "css": ".ds-disclosure{font-family:system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei\", sans-serif;color:var(--cds-text-primary, #202024);border-bottom:1px solid var(--cds-border, #e6e6ea)}.ds-disclosure summary{display:flex;gap:6px;align-items:flex-start;min-height:40px;cursor:pointer;list-style:none;font-size:14px;line-height:1.6;padding:8px 0}.ds-disclosure summary::-webkit-details-marker{display:none}.ds-disclosure summary svg{flex:none;margin-top:3px}.ds-disclosure[open] summary svg{transform:rotate(90deg)}.ds-disclosure summary:focus-visible{outline:2px solid var(--cds-clay, #45454c);outline-offset:4px}.ds-disclosure p{margin:5px 0 9px;white-space:pre-wrap;overflow-wrap:anywhere;font-size:14px;line-height:1.7}"
+      "css": ".ds-disclosure{font-family:system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei\", sans-serif;color:var(--cds-text-primary, #25272a);border-bottom:1px solid var(--cds-border, #e1e4e8)}.ds-disclosure summary{display:flex;gap:6px;align-items:flex-start;min-height:40px;cursor:pointer;list-style:none;font-size:14px;line-height:1.6;padding:8px 0}.ds-disclosure summary::-webkit-details-marker{display:none}.ds-disclosure summary svg{flex:none;margin-top:3px}.ds-disclosure[open] summary svg{transform:rotate(90deg)}.ds-disclosure summary:focus-visible{outline:2px solid var(--cds-clay, #41464d);outline-offset:4px}.ds-disclosure p{margin:5px 0 9px;white-space:pre-wrap;overflow-wrap:anywhere;font-size:14px;line-height:1.7}"
     },
     {
       "name": "离开确认",
@@ -587,12 +587,12 @@
       "refersTo": "confirmation-dialog",
       "description": "共享的未保存更改确认布局。",
       "html": "<section class=\"ds-dialog\" role=\"dialog\" aria-labelledby=\"ds-dialog-title\"><h2 id=\"ds-dialog-title\">有尚未保存的更改</h2><p>继续编辑可保留当前内容。</p><div><button class=\"ds-dialog-cancel\">继续编辑</button><button class=\"ds-dialog-discard\">放弃并离开</button></div></section>",
-      "css": ".ds-dialog{width:480px;max-width:calc(100vw - 32px);border-radius:16px;padding:28px;background:var(--cds-surface-1, #fff);color:var(--cds-text-primary, #202024);font-family:system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei\", sans-serif;box-shadow:var(--cds-shadow-lg, 0 16px 64px rgb(16 16 24 / 16%))}.ds-dialog h2{margin:0 0 12px;font-size:18px;line-height:1.5;font-weight:550}.ds-dialog p{margin:0;color:var(--cds-text-secondary, #62626b);font-size:14px;line-height:1.85}.ds-dialog>div{display:flex;justify-content:flex-end;gap:12px;margin-top:28px}.ds-dialog button{border:1px solid var(--cds-border, #e6e6ea);box-sizing:border-box;border-radius:var(--control-radius, 7px);height:var(--control-height, 36px);min-height:var(--control-height, 36px);padding:0 16px;font:inherit;font-size:14px;cursor:pointer}.ds-dialog-cancel{background:var(--cds-surface-2, #fff);color:var(--cds-text-primary, #202024)}.ds-dialog-discard{background:var(--brand, #252528);color:var(--cds-gray-0, #fff)}.ds-dialog-cancel:hover{background:var(--cds-fill-ghost-hover, #f3f3f5)}.ds-dialog-discard:hover{background:var(--cds-clay-hover, #3b3b42)}.ds-dialog button:focus-visible{outline:2px solid var(--cds-clay, #45454c);outline-offset:4px}@media(max-width:520px){.ds-dialog{padding:24px}.ds-dialog>div{display:grid;grid-template-columns:minmax(0,1fr);gap:10px;margin-top:24px}}@media(max-width:850px){.ds-dialog button{height:var(--control-height, 44px);min-height:var(--control-height, 44px)}}"
+      "css": ".ds-dialog{width:480px;max-width:calc(100vw - 32px);border-radius:16px;padding:28px;background:var(--cds-surface-1, #fff);color:var(--cds-text-primary, #25272a);font-family:system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei\", sans-serif;box-shadow:var(--cds-shadow-lg, 0 16px 64px rgb(16 16 24 / 16%))}.ds-dialog h2{margin:0 0 12px;font-size:18px;line-height:1.5;font-weight:550}.ds-dialog p{margin:0;color:var(--cds-text-secondary, #61666e);font-size:14px;line-height:1.85}.ds-dialog>div{display:flex;justify-content:flex-end;gap:12px;margin-top:28px}.ds-dialog button{border:1px solid var(--cds-border, #e1e4e8);box-sizing:border-box;border-radius:var(--control-radius, 9px);height:var(--control-height, 36px);min-height:var(--control-height, 36px);padding:0 16px;font:inherit;font-size:14px;cursor:pointer}.ds-dialog-cancel{background:var(--cds-surface-2, #fff);color:var(--cds-text-primary, #25272a)}.ds-dialog-discard{background:var(--brand, #25272a);color:var(--cds-gray-0, #fff)}.ds-dialog-cancel:hover{background:var(--cds-fill-ghost-hover, #eceff2)}.ds-dialog-discard:hover{background:var(--cds-clay-hover, #34393f)}.ds-dialog button:focus-visible{outline:2px solid var(--cds-clay, #41464d);outline-offset:4px}@media(max-width:520px){.ds-dialog{padding:24px}.ds-dialog>div{display:grid;grid-template-columns:minmax(0,1fr);gap:10px;margin-top:24px}}@media(max-width:850px){.ds-dialog button{height:var(--control-height, 44px);min-height:var(--control-height, 44px)}}"
     }
   ],
   "narrative": {
-    "northStar": "紧凑中性工作台",
-    "overview": "用户选定 Linear 紧凑中性方向。白色与浅灰组织工作区，深灰承担主操作，系统字体、短标题和密集列表让项目与下一步操作成为视觉中心。Linear 是密度与克制程度的参考，营销工作台保留自身业务结构。\n\n界面按销售、管理者、管理员的任务组织；默认展开当前工作，历史、配置和辅助解释按需披露。浅深主题共享语义角色，状态颜色只表达业务含义。",
+    "northStar": "深色导航，浅灰目录，白色工作面",
+    "overview": "保留主导航图标与中文名称，用深炭灰主侧栏、浅冷灰二级目录和白色内容面板组织营销任务。系统字体、紧凑列表、完整细边框和柔和圆角保持清晰、安静的操作界面。",
     "keyCharacteristics": [
       "中性表面与细分隔线",
       "紧凑工具栏、列表和按需展开的细节",

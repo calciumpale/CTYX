@@ -1,32 +1,32 @@
 ---
 name: 营销工作台
-description: Linear 紧凑中性方向的销售与管理工作台
+description: 深炭灰导航与浅灰白分栏的紧凑销售工作台
 colors:
-  primary: "#252528"
-  primary-hover: "#3b3b42"
+  primary: "#25272a"
+  primary-hover: "#34393f"
   surface: "#fff"
-  sidebar: "#f7f7f8"
-  text: "#202024"
-  text-secondary: "#62626b"
-  text-muted: "#71717b"
-  border: "#e6e6ea"
-  border-strong: "#ccccd3"
-  hover: "#f3f3f5"
-  selected: "#eaeaec"
+  sidebar: "#242628"
+  text: "#25272a"
+  text-secondary: "#61666e"
+  text-muted: "#61666e"
+  border: "#e1e4e8"
+  border-strong: "#c8cdd4"
+  hover: "#eceff2"
+  selected: "#e4e7eb"
   danger: "#bf3545"
   success: "#287c52"
   warning: "#9a650c"
-  dark-primary: "#e8e8ed"
-  dark-primary-hover: "#d2d2da"
-  dark-surface: "#1b1b1f"
-  dark-sidebar: "#151518"
-  dark-text: "#eeeef2"
-  dark-text-secondary: "#b1b1bb"
-  dark-text-muted: "#a0a0ac"
-  dark-border: "#33333b"
-  dark-border-strong: "#4c4c57"
-  dark-hover: "#2a2a31"
-  dark-selected: "#33333b"
+  dark-primary: "#eef1f5"
+  dark-primary-hover: "#d4dce6"
+  dark-surface: "#1d2126"
+  dark-sidebar: "#171a1e"
+  dark-text: "#f0f3f7"
+  dark-text-secondary: "#bac2ce"
+  dark-text-muted: "#a3adba"
+  dark-border: "#363e48"
+  dark-border-strong: "#505b68"
+  dark-hover: "#2d343d"
+  dark-selected: "#363e48"
   dark-danger: "#f07888"
   dark-success: "#72bd94"
   dark-warning: "#d8b264"
@@ -52,13 +52,18 @@ typography:
     fontSize: 13px
     fontWeight: 500
     lineHeight: 1.3
+  code:
+    fontFamily: SFMono-Regular, Consolas, "Liberation Mono", monospace
+    fontSize: 12px
+    fontWeight: 400
+    lineHeight: 1.6
 rounded:
-  sm: 4px
-  md: 6px
-  lg: 7px
-  panel: 8px
-  xl: 10px
-  composer: 12px
+  sm: 5px
+  md: 8px
+  lg: 9px
+  panel: 14px
+  xl: 12px
+  composer: 14px
 spacing:
   xs: 4px
   sm: 8px
@@ -137,7 +142,7 @@ components:
 
 **Creative North Star: "紧凑中性工作台"**
 
-用户选定 Linear 紧凑中性方向。白色与浅灰组织工作区，深灰承担主操作，系统字体、短标题和密集列表让项目与下一步操作成为视觉中心。Linear 是密度与克制程度的参考，营销工作台保留自身业务结构。
+采用用户提供的黑白灰分栏参考。深炭灰一级导航保留图标与中文名称，浅冷灰二级目录衔接白色主工作面；灰色选中态、单色图标、细分隔线与柔和圆角构成层级。沿用系统字体、短标题和紧凑列表，让客户、项目和下一步操作成为视觉中心。
 
 界面按销售、管理者、管理员的任务组织；默认展开当前工作，历史、配置和辅助解释按需披露。浅深主题共享语义角色，状态颜色只表达业务含义。
 
@@ -159,6 +164,8 @@ components:
 ## Typography
 
 界面共用系统无衬线字体栈，包含中文回退；不加载展示字体。正文以 frontmatter 的 body 为阅读基准，长文按内容使用更宽松行距。标题常见为 headline，角色首页使用较紧凑的 22px 标题；章节与条目以 title、按钮与工具栏以 label 为基准。元数据常见 11–12px，不用其承载主要正文。手机表单输入提高到 16px。
+
+凭据、代码与诊断内容使用 frontmatter 的 code 等宽字体栈，便于核对标识符和多行数据。
 
 ## Layout
 
@@ -188,9 +195,9 @@ components:
 
 ### Shared control geometry
 
-`app/form-controls.css` 是全站控件尺寸的统一来源。单行输入（含日期、时间）与普通单选下拉共用 `--control-height: 36px`、`--control-font-size: 13px`、`--control-padding-inline: 11px` 和 `--control-radius: 7px`；850px 及以下高度为 44px、字号为 16px。控件使用 `border-box`、零垂直内边距，原生下拉末端留 32px。带完整边框的搜索框等组合控件，外框同为 36px / 44px，内部输入减去 2px 边框并清零水平内边距，避免重复留白。
+`app/form-controls.css` 是全站控件尺寸的统一来源。单行输入（含日期、时间）与普通单选下拉共用 `--control-height: 36px`、`--control-font-size: 13px`、`--control-padding-inline: 11px` 和 `--control-radius: 9px`；850px 及以下高度为 44px、字号为 16px。控件使用 `border-box`、零垂直内边距，原生下拉末端留 32px。带完整边框的搜索框等组合控件，外框同为 36px / 44px，内部输入减去 2px 边框并清零水平内边距，避免重复留白。
 
-新模块继承这一层和 `--control-*` token，不再添加页面专属的固定控件高度；模块样式继续负责宽度、颜色与状态。普通文本域共用 9px / 11px 内边距和 7px 圆角，保留行数与伸缩；composer、回复区、合同正文与凭据编辑器保留各自排版。复选框、单选框、滑块、颜色、文件、隐藏与按钮类 input、读屏专用输入及多选 / 列表式 select 不套用单行尺寸。
+新模块继承这一层和 `--control-*` token，不再添加页面专属的固定控件高度；模块样式继续负责宽度、颜色与状态。普通文本域共用 9px / 11px 内边距和 9px 圆角，保留行数与伸缩；composer、回复区、合同正文与凭据编辑器保留各自排版。复选框、单选框、滑块、颜色、文件、隐藏与按钮类 input、读屏专用输入及多选 / 列表式 select 不套用单行尺寸。
 
 ## Navigation and Naming
 
@@ -215,3 +222,14 @@ components:
 ### Schedule surface
 
 提醒及日程沿用紧凑中性 Operate 风格：日期与新建为主，类型筛选和周/月/列表切换为一组工具栏。电脑默认周视图，手机默认列表；日历网格独立横向滚动，页面不横向溢出。选中日期与事件通过背景、字重、图标和完整轮廓区分，不使用装饰性左色条。AI 日程助手按需展开，生成草稿、核对和保存保持清楚的操作边界。保留真实空态、保存失败恢复、并发冲突与草稿离开保护。
+
+
+## 2026-11-08 视觉参考更新
+
+样式调整前的功能版本已在私有GitHub仓库保存为v1.2，提交a89484d88f82ca99d679ec95296bf895cb48d6b0。
+
+用户选择保留深色一级侧栏的图标和中文名称。一级导航持续使用炭灰#242628、浅色文字#f5f7fa和灰色选中背景#41454b；二级企业目录、社交获客子栏目与辅助侧栏使用浅冷灰#f3f4f6，主内容为白色。主工作面桌面外框留8px，圆角20px；手机取消外框留白，保留抽屉和底部导航。内容面板常用12–14px圆角，输入及按钮统一9px。阴影只保留在弹层与必要的浮动内容，普通内容靠表面和完整细边框区分。
+
+主导航颜色以--nav-*独立token定义，在.sidebar内映射既有语义token，避免浅色业务组件和深色导航互相污染。全局表面仍使用--cds-*兼容现有模块；所有单行输入/下拉保持桌面36px、手机44px。深色主题继续提供，业务风险、成功、告警和用户自定义提醒颜色保留。
+
+本轮仅改变视觉与布局尺寸关系，不改变路由、权限、接口、数据或业务状态。恢复标签不使用左侧彩色强调竖条；选中项用灰底、字重与完整轮廓表达。

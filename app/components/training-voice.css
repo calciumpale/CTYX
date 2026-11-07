@@ -1,4 +1,4 @@
-/* Voice practice uses the shared warm CDS surfaces in both themes. */
+/* Voice practice shares the workbench surfaces in both themes. */
 .training-transport-switch{display:flex;gap:16px;margin:-7px 0 16px;border-bottom:1px solid var(--cds-border)}
 .training-transport-switch button{font-size:11px;color:var(--cds-text-muted);background:transparent;border:0;border-bottom:2px solid transparent;padding:7px 1px 10px}
 .training-transport-switch button[aria-pressed="true"]{color:var(--cds-clay);border-bottom-color:var(--cds-clay)}
@@ -13,10 +13,10 @@
 .training-interaction-bar>div:first-child{min-width:0}
 .training-interaction-bar strong{font-size:12px;font-weight:550;color:var(--cds-text-secondary)}
 .training-interaction-bar p{font-size:11px;color:var(--cds-text-muted);margin-top:3px}
-.training-mode-switch{display:inline-flex;align-items:center;gap:3px;padding:4px;background:var(--cds-alpha-1);border-radius:var(--cds-radius-pill);flex-shrink:0}
-.training-mode-switch>button{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:34px;padding:6px 12px;border:0;background:transparent;color:var(--cds-text-muted);border-radius:var(--cds-radius-pill);font-size:12px;white-space:nowrap}
+.training-mode-switch{display:inline-flex;align-items:center;gap:3px;padding:4px;background:var(--cds-alpha-1);border-radius:var(--cds-radius-btn-md);flex-shrink:0}
+.training-mode-switch>button{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:34px;padding:6px 12px;border:0;background:transparent;color:var(--cds-text-muted);border-radius:var(--radius-md);font-size:12px;white-space:nowrap}
 .training-mode-switch>button:hover{color:var(--cds-text-primary)}
-.training-mode-switch>button[aria-pressed="true"]{background:var(--cds-surface-1);color:var(--cds-text-primary);box-shadow:var(--cds-shadow-sm);font-weight:550}
+.training-mode-switch>button[aria-pressed="true"]{background:var(--cds-fill-ghost-selected);color:var(--cds-text-primary);font-weight:550}
 .training-mode-switch>button[aria-pressed="true"]>svg{color:var(--cds-clay)}
 .training-voice-panel{padding:20px 22px 16px;margin:0 0 24px;border:1px solid var(--cds-border);border-radius:var(--cds-card-radius,12px);background:var(--cds-surface-1);overflow:hidden;min-width:0}
 .training-voice-topline{display:flex;align-items:center;justify-content:space-between;gap:12px;color:var(--cds-text-muted);font-size:10px}

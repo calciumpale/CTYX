@@ -4,7 +4,7 @@
   --control-height: 36px;
   --control-font-size: 13px;
   --control-padding-inline: 11px;
-  --control-radius: 7px;
+  --control-radius: 9px;
 }
 
 @media (max-width: 850px) {

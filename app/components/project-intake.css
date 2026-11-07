@@ -1,21 +1,21 @@
-.project-intake { margin: 16px 0; padding: 18px; border: 1px solid var(--cds-border); border-radius: var(--cds-panel-radius); background: var(--cds-surface-1); color: var(--cds-text-primary); }
+.project-intake { margin: 16px 0; padding: 18px; border: 1px solid var(--cds-border); border-radius: 14px; background: var(--cds-surface-2); color: var(--cds-text-primary); }
 .project-intake-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin-bottom: 12px; }
 .project-intake-heading h2 { margin: 0 0 6px; font-size: 15px; line-height: 1.5; font-weight: 550; }
 .project-intake-heading p { max-width: 70ch; margin: 0; color: var(--cds-text-secondary); font-size: 13px; line-height: 1.7; }
 .project-intake-heading > svg { margin-top: 3px; flex-shrink: 0; color: var(--cds-text-secondary); }
 .project-intake-label, .project-intake-clarification label { display: block; margin-bottom: 7px; font-size: 14px; line-height: 1.7; }
-.project-intake textarea { display: block; width: 100%; min-width: 0; resize: vertical; padding: 12px 14px; border: 0; border-radius: var(--cds-radius-btn-md); background: var(--cds-alpha-1); color: var(--cds-text-primary); font-family: inherit; font-size: 15px; line-height: 1.8; caret-color: var(--cds-clay); }
+.project-intake textarea { display: block; width: 100%; min-width: 0; resize: vertical; padding: 12px 14px; border: 1px solid var(--cds-border); border-radius: var(--control-radius); background: var(--cds-surface-3); color: var(--cds-text-primary); font-family: inherit; font-size: 14px; line-height: 1.8; caret-color: var(--cds-clay); }
 .project-intake textarea::placeholder { color: var(--cds-text-secondary); opacity: 1; }
 .project-intake textarea::selection { background: var(--cds-alpha-2); color: var(--cds-text-primary); }
 .project-intake textarea:focus-visible, .project-intake button:focus-visible { outline: 2px solid var(--cds-clay); outline-offset: 3px; }
 .project-intake textarea:disabled { opacity: .8; }
 .project-intake-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 14px; margin-top: 14px; }
 .project-intake-voice-actions, .project-intake-submit { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
-.project-intake .button { min-height: 36px; font-size: 13px; }
+.project-intake .button { min-height: var(--control-height); font-size: 13px; }
 .project-intake button:disabled { cursor: not-allowed; }
 .project-intake-voice-actions > span, .project-intake-count { font-size: 12px; line-height: 1.7; color: var(--cds-text-secondary); }
 .project-intake-count { font-variant-numeric: tabular-nums; }
-.project-intake-cancel { display: inline-flex; align-items: center; gap: 5px; padding: 10px 5px; border: 0; border-radius: var(--cds-radius-btn-md); background: transparent; color: var(--cds-text-secondary); font-size: 14px; }
+.project-intake-cancel { display: inline-flex; align-items: center; gap: 5px; min-height: var(--control-height); padding: 6px 5px; border: 0; border-radius: var(--cds-radius-btn-md); background: transparent; color: var(--cds-text-secondary); font-size: 14px; }
 .project-intake-cancel:hover { color: var(--cds-text-primary); }
 .project-intake-status, .project-intake-interim { display: flex; align-items: center; gap: 8px; margin: 14px 0 0; font-size: 13px; line-height: 1.7; color: var(--cds-text-secondary); overflow-wrap: anywhere; }
 .project-intake-listening-dot { width: 7px; height: 7px; flex-shrink: 0; border-radius: 50%; background: var(--cds-clay); }
@@ -36,4 +36,4 @@
 .project-intake-duplicates li .button { flex-shrink: 0; }
 @media (max-width: 640px) { .project-intake { padding: 18px; } .project-intake-heading > svg { display: none; } .project-intake-actions, .project-intake-submit { align-items: stretch; } .project-intake-submit { width: 100%; justify-content: space-between; align-items: center; } .project-intake-duplicates li { align-items: flex-start; flex-direction: column; gap: 9px; } .project-intake-duplicates li .button { width: 100%; justify-content: center; } }
 
-@media (max-width: 700px) { .project-intake .button { min-height: 44px; } }
+@media (max-width: 700px) { .project-intake .button { min-height: var(--control-height); } }

@@ -1,4 +1,4 @@
-.prospect-chat-workspace { --prospect-handoff-bg: var(--cds-surface-0); --prospect-handoff-badge: var(--cds-fill-ghost-selected); --prospect-handoff-text: var(--cds-text-primary); --prospect-handoff-line: var(--cds-border-strong); }
+.prospect-chat-workspace { --prospect-handoff-bg: var(--cds-surface-3); --prospect-handoff-badge: var(--cds-fill-ghost-selected); --prospect-handoff-text: var(--cds-text-primary); --prospect-handoff-line: var(--cds-border-strong); }
 .prospect-chat-workspace[hidden] { display: none; }
 .prospect-chat-agent { padding: 0 0 12px; margin-bottom: 14px; border-bottom: 1px solid var(--cds-border); }
 .prospect-chat-agent-toolbar { display: flex; align-items: center; gap: 12px; justify-content: space-between; }
@@ -14,33 +14,33 @@
 .prospect-chat-badge { display: inline-flex; align-items: center; gap: 5px; width: fit-content; max-width: 100%; padding: 3px 7px; border-radius: 5px; background: var(--cds-fill-ghost-hover); color: var(--cds-text-secondary); font-size: 11px; font-weight: 500; line-height: 1.5; white-space: nowrap; }
 .prospect-chat-badge.is-online, .prospect-chat-badge.is-grade-high { background: var(--cds-fill-ghost-selected); color: var(--cds-text-primary); }
 .prospect-chat-badge.is-human { background: var(--prospect-handoff-badge); color: var(--prospect-handoff-text); font-weight: 600; }
-.prospect-chat-layout { display: grid; grid-template-columns: minmax(210px, 27%) minmax(0, 1fr); border: 1px solid var(--cds-border); border-radius: 6px; overflow: hidden; }
+.prospect-chat-layout { display: grid; grid-template-columns: minmax(210px, 27%) minmax(0, 1fr); border: 1px solid var(--cds-border); border-radius: 14px; overflow: hidden; }
 .prospect-conversation-list { background: var(--cds-surface-0); border-inline-end: 1px solid var(--cds-border); }
 .prospect-conversation-search { padding: 12px; }
 .prospect-conversation-search label { display: flex; gap: 6px; align-items: center; font-size: 12px; font-weight: 500; margin-bottom: 9px; }
 .prospect-conversation-search input { font-size: 12px; }
 .prospect-conversation-items { max-height: 660px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--cds-border-strong) transparent; }
-.prospect-conversation-item { display: block; width: calc(100% - 12px); margin: 0 6px 4px; border: 1px solid transparent; border-radius: 5px; padding: 11px 9px; text-align: left; background: transparent; color: var(--cds-text-primary); cursor: pointer; }
+.prospect-conversation-item { display: block; width: calc(100% - 12px); margin: 0 6px 4px; border: 1px solid transparent; border-radius: 10px; padding: 12px 10px; text-align: left; background: transparent; color: var(--cds-text-primary); cursor: pointer; }
 .prospect-conversation-item:hover { background: var(--cds-fill-ghost-hover); }
-.prospect-conversation-item.is-selected { border-color: var(--cds-border-strong); background: var(--cds-surface-2); }
+.prospect-conversation-item.is-selected { border-color: transparent; background: var(--cds-fill-ghost-selected); }
 .prospect-conversation-item.is-human { background: var(--cds-surface-0); }
-.prospect-conversation-item.is-human.is-selected { background: var(--prospect-handoff-bg); border-color: var(--prospect-handoff-line); }
+.prospect-conversation-item.is-human.is-selected { background: var(--cds-fill-ghost-selected); border-color: transparent; }
 .prospect-conversation-item-head { display: flex; align-items: baseline; gap: 7px; flex-wrap: wrap; }
 .prospect-conversation-item-head strong { flex: 1; font-size: 13px; font-weight: 550; overflow-wrap: anywhere; }
-.prospect-conversation-item-head time { font-size: 10px; color: var(--cds-text-secondary); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.prospect-conversation-item-head time { font-size: 11px; color: var(--cds-text-secondary); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .prospect-conversation-preview { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; color: var(--cds-text-secondary); font-size: 12px; line-height: 1.6; margin-top: 7px; }
 .prospect-conversation-item-foot { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; margin-top: 10px; font-size: 11px; color: var(--cds-text-secondary); }
 .prospect-chat-draft-label { color: var(--cds-text-primary); }
 .prospect-chat-list-empty { padding: 16px 20px 26px; color: var(--cds-text-secondary); font-size: 13px; }
 .prospect-conversation-detail { position: relative; display: flex; flex-direction: column; background: var(--cds-surface-2); min-height: 560px; }
-.prospect-conversation-header { display: flex; align-items: center; gap: 12px; padding: 13px 16px; border-bottom: 1px solid var(--cds-border); }
+.prospect-conversation-header { display: flex; align-items: center; gap: 12px; min-height: 78px; padding: 14px 18px; border-bottom: 1px solid var(--cds-border); }
 .prospect-conversation-header > div { flex: 1; }
 .prospect-conversation-header h3 { overflow-wrap: anywhere; }
 .prospect-conversation-header > .button { flex: none; }
-.prospect-conversation-detail.is-human .prospect-conversation-header { background: var(--cds-surface-0); }
+.prospect-conversation-detail.is-human .prospect-conversation-header { background: var(--cds-surface-2); }
 .prospect-conversation-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; margin-top: 6px; font-size: 11px; }
 .prospect-chat-back.button { display: none; }
-.prospect-chat-takeover { display: flex; align-items: flex-start; gap: 8px; padding: 10px 12px; margin: 12px 14px 0; border: 1px solid var(--prospect-handoff-line); border-radius: 5px; background: var(--prospect-handoff-bg); color: var(--prospect-handoff-text); font-size: 12px; }
+.prospect-chat-takeover { display: flex; align-items: flex-start; gap: 8px; padding: 10px 12px; margin: 12px 14px 0; border: 1px solid var(--prospect-handoff-line); border-radius: 10px; background: var(--prospect-handoff-bg); color: var(--prospect-handoff-text); font-size: 12px; }
 .prospect-chat-takeover > svg { flex: none; margin-top: 2px; }
 .prospect-chat-takeover strong { font-weight: 550; }
 .prospect-chat-takeover p { margin-top: 4px; color: var(--prospect-handoff-text); overflow-wrap: anywhere; }
@@ -50,7 +50,7 @@
 .prospect-chat-message.is-outbound { margin-left: auto; }
 .prospect-chat-message header { display: flex; flex-wrap: wrap; gap: 4px 10px; color: var(--cds-text-secondary); font-size: 11px; margin-bottom: 6px; }
 .prospect-chat-message.is-outbound header { justify-content: flex-end; }
-.prospect-chat-message header time { font-size: 10px; font-variant-numeric: tabular-nums; }
+.prospect-chat-message header time { font-size: 11px; font-variant-numeric: tabular-nums; }
 .prospect-chat-message > p { padding: 11px 14px; background: var(--cds-surface-0); border-radius: 12px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; line-height: 1.8; }
 .prospect-chat-message.is-agent > p { background: var(--cds-fill-ghost-hover); }
 .prospect-chat-message.is-human > p { background: var(--cds-fill-ghost-selected); }

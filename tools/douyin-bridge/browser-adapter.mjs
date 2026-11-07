@@ -95,34 +95,50 @@ export class DouyinBrowserAdapter {
     });
   }
   async ownProfileProof(page, signal, expectedId) {
+    this.ownerProofFailureReason = undefined;
+    const rejected = reason => { this.ownerProofFailureReason = reason; return null; };
     const url = new URL(page.url());
     const profile = /^\/user\/([a-zA-Z0-9_.-]{4,140})\/?$/.exec(url.pathname);
-    if (url.protocol !== 'https:' || !['www.douyin.com', 'douyin.com'].includes(url.hostname) || url.port || url.username || url.password || !profile || expectedId && profile[1] !== expectedId) return null;
+    if (url.protocol !== 'https:' || !['www.douyin.com', 'douyin.com'].includes(url.hostname) || url.port || url.username || url.password || !profile || expectedId && profile[1] !== expectedId) return rejected('owner_route_changed');
     const privateTab = page.getByRole('tab', { name: /^私密作品(?:\s*\d+)?$/ }).first();
     const ownWorks = page.getByPlaceholder('搜索你发布的作品', { exact: true })
       .or(page.getByRole('textbox', { name: '搜索你发布的作品', exact: true })).first();
+    const deadline = performance.now() + this.timeoutMs;
+    let sawControls = false, reason = 'owner_controls_timeout';
     try {
-      await privateTab.waitFor({ state: 'visible', timeout: this.timeoutMs });
-      await ownWorks.waitFor({ state: 'visible', timeout: this.timeoutMs });
-    } catch { await this.guard(page, signal); return null; }
-    // Owner controls can render before the profile handle hydrates. Wait only
-    // for missing evidence; a conflicting label or changed page fails at once.
-    const deadline = Date.now() + this.timeoutMs;
-    do {
-      await this.guard(page, signal);
-      if (!await privateTab.isVisible() || !await ownWorks.isVisible()) return null;
-      const proof = await page.evaluate(expectedPath => {
-        if (location.protocol !== 'https:' || !['www.douyin.com', 'douyin.com'].includes(location.hostname) ||
-            location.pathname !== expectedPath || location.port) return null;
-        const labels = [...document.body.innerText.matchAll(/抖音号[：:][\t \n]*([A-Za-z0-9_][A-Za-z0-9_.-]{0,63})(?![A-Za-z0-9_.-])/g)];
-        if (!labels.length) return { pending: true };
-        if (labels.length !== 1) return null;
-        return { handle: labels[0][1], name: document.querySelector('h1')?.innerText.trim().slice(0, 100) };
-      }, url.pathname);
-      if (!proof?.pending) return proof;
-      if (Date.now() < deadline) await sleep(100);
-    } while (Date.now() < deadline);
-    return null;
+      do {
+        await this.guard(page, signal);
+        if (await this.loginRequired(page)) fail('抖音页面要求重新登录，请完成登录后重新连接。', 'UNAUTHENTICATED');
+        const [tabs, inputs] = await Promise.all([privateTab.elementHandles(), ownWorks.elementHandles()]);
+        let observed;
+        try {
+          observed = await page.evaluate(({ expectedPath, tab, input }) => {
+            if (location.protocol !== 'https:' || !['www.douyin.com', 'douyin.com'].includes(location.hostname) || location.pathname !== expectedPath || location.port) return { changed: true };
+            const visible = node => node instanceof HTMLElement && node.isConnected && !!(node.offsetWidth || node.offsetHeight || node.getClientRects().length) && getComputedStyle(node).visibility !== 'hidden';
+            if (!visible(tab) || !visible(input)) return { controls: false };
+            const labels = [...document.body.innerText.matchAll(/抖音号[：:][\t \n]*([A-Za-z0-9_][A-Za-z0-9_.-]{0,63})(?![A-Za-z0-9_.-])/g)].map(match => match[1]);
+            return { controls: true, labels, name: document.querySelector('h1')?.innerText.trim().slice(0, 100) };
+          }, { expectedPath: url.pathname, tab: tabs[0] ?? null, input: inputs[0] ?? null });
+        } finally { await Promise.all([...tabs, ...inputs].map(node => node.dispose().catch(() => {}))); }
+        if (observed.changed) return rejected('owner_route_changed');
+        if (performance.now() > deadline) return rejected(reason);
+        if (!observed.controls) reason = sawControls ? 'owner_controls_replaced' : 'owner_controls_timeout';
+        else {
+          sawControls = true;
+          if (!observed.labels.length) reason = 'owner_handle_missing';
+          else if (new Set(observed.labels).size > 1) return rejected('owner_handle_conflict');
+          else if (observed.labels.length > 1) reason = 'owner_duplicate_same_handle';
+          else return { handle: observed.labels[0], name: observed.name };
+        }
+        const remaining = deadline - performance.now();
+        if (remaining > 0) await sleep(Math.min(100, remaining));
+      } while (performance.now() < deadline);
+      return rejected(reason);
+    } catch (error) {
+      checkAbort(signal);
+      if (['HUMAN_ACTION_REQUIRED', 'UNAUTHENTICATED', 'ACCOUNT_CHANGED'].includes(error?.code)) throw error;
+      return rejected('owner_read_interrupted');
+    }
   }
   async identityNavigate(url, signal) {
     checkAbort(signal);
@@ -156,7 +172,8 @@ export class DouyinBrowserAdapter {
       // proved self profile so subsequent health checks only have to read DOM.
       const page = await this.identityNavigate(SELF, signal);
       const proof = await this.ownProfileProof(page, signal);
-      if (!proof || `dy-readonly-${digest(proof.handle).slice(0, 24)}` !== fallback.accountId) return pending;
+      if (!proof) return verificationPending(this.ownerProofFailureReason || 'owner_proof_missing', missing.message);
+      if (`dy-readonly-${digest(proof.handle).slice(0, 24)}` !== fallback.accountId) return pending;
       this.passiveAccount = { account: fallback, handle: proof.handle, checkedAt: Date.now(), context: this.context, page: this.activePage, identityPage: this.identityPage };
       return fallback;
     };
@@ -174,7 +191,7 @@ export class DouyinBrowserAdapter {
       const ownPage = await this.identityNavigate(SELF, signal);
       if (await this.loginRequired(ownPage)) return { ...missing, errorCode: 'UNAUTHENTICATED' };
       const own = await this.ownProfileProof(ownPage, signal);
-      if (!own) return pending;
+      if (!own) return verificationPending(this.ownerProofFailureReason || 'owner_proof_missing', missing.message);
       if (candidateId && previous?.accountId === candidateId && previous.handle === own.handle) return pending;
       // A visible /self handle can support rediscovery, but its readonly alias
       // must never replace a device's already bound canonical sender identity.
@@ -213,7 +230,7 @@ export class DouyinBrowserAdapter {
       this.senderProof = { accountId: canonical.id, handle: own.handle, accountName: own.name || '已登录抖音账号' };
       return verified(this.senderProof);
     } catch (error) {
-      if (error?.code === 'HUMAN_ACTION_REQUIRED' || signal?.aborted) throw error;
+      if (['HUMAN_ACTION_REQUIRED', 'UNAUTHENTICATED', 'ACCOUNT_CHANGED'].includes(error?.code) || signal?.aborted) throw error;
       if (error?.code === 'NAVIGATION') return pending;
       return allowReadOnly && fallback.authenticated ? fallback : verificationPending('account_read_interrupted', missing.message);
     }
@@ -259,7 +276,7 @@ export class DouyinBrowserAdapter {
       if (identityHeader.ambiguous) return verificationPending('account_ambiguous');
       if (identityHeader.authenticated && identityHeader.accountId !== expectedId) return { authenticated: false, errorCode: 'ACCOUNT_CHANGED', message: '当前登录账号与任务账号不一致。' };
       const proof = await this.ownProfileProof(identity, signal, selfAlias ? 'self' : expectedId);
-      if (!proof) return verificationPending();
+      if (!proof) return verificationPending(this.ownerProofFailureReason || 'owner_proof_missing');
       if (proof.handle !== established.handle) return { authenticated: false, errorCode: 'ACCOUNT_CHANGED', message: '当前登录账号的本人身份已变化，请重新确认。' };
       await this.guard(page, signal);
       if (await this.loginRequired(page) || await this.loginRequired(identity)) return { authenticated: false, errorCode: 'UNAUTHENTICATED', message: '抖音页面要求重新登录，请完成登录后重新连接。' };
@@ -272,7 +289,7 @@ export class DouyinBrowserAdapter {
       return account;
     } catch (error) {
       checkAbort(signal);
-      if (error?.code === 'HUMAN_ACTION_REQUIRED') throw error;
+      if (['HUMAN_ACTION_REQUIRED', 'UNAUTHENTICATED', 'ACCOUNT_CHANGED'].includes(error?.code)) throw error;
       return verificationPending('account_read_interrupted');
     }
   }
@@ -281,7 +298,7 @@ export class DouyinBrowserAdapter {
       try { return await this.passiveAccountStatus({ signal, allowReadOnly, expectedAccountId }); }
       catch (error) {
         checkAbort(signal);
-        if (error?.code === 'HUMAN_ACTION_REQUIRED') throw error;
+        if (['HUMAN_ACTION_REQUIRED', 'UNAUTHENTICATED', 'ACCOUNT_CHANGED'].includes(error?.code)) throw error;
         return { authenticated: false, ...(this.activePage && !this.activePage.isClosed() ? { verificationPending: true } : {}), message: '暂未读取到账号状态，请等待页面恢复；本轮不领取任务。' };
       }
     }
@@ -335,7 +352,7 @@ export class DouyinBrowserAdapter {
       await this.guard(identity, signal);
       if (await this.loginRequired(identity)) return { authenticated: false, message: '抖音页面要求重新登录，请完成登录后点击“连接抖音”。' };
       const proof = await this.ownProfileProof(identity, signal, expected);
-      if (!proof) return pending('owner_proof_missing');
+      if (!proof) return pending(this.ownerProofFailureReason || 'owner_proof_missing');
       if (this.senderProof?.accountId === expected && proof.handle !== this.senderProof.handle) fail('当前登录账号的本人身份已变化，请重新确认。', 'ACCOUNT_CHANGED');
       await this.guard(page, signal);
       const latestHeader = await this.currentAccount(page);
@@ -347,7 +364,7 @@ export class DouyinBrowserAdapter {
       return account;
     } catch (error) {
       checkAbort(signal);
-      if (error?.code === 'HUMAN_ACTION_REQUIRED' || error?.code === 'ACCOUNT_CHANGED') throw error;
+      if (['HUMAN_ACTION_REQUIRED', 'UNAUTHENTICATED', 'ACCOUNT_CHANGED'].includes(error?.code)) throw error;
       return pending('account_read_interrupted');
     }
   }
@@ -387,13 +404,14 @@ export class DouyinBrowserAdapter {
     if (!candidate) {
       // Newly rendered owner controls can request a bounded recovery. This DOM
       // read stays passive; the controller owns whether another check may load.
-      const newlySignedIn = !cached && !this.senderProof && await this.ownProfileProof(identity, signal);
-      return newlySignedIn ? { ...pending, needsAccountVerification: true, verificationReason: 'owner_proof_missing' } : pending;
+      const inspectOwner = !cached && !this.senderProof;
+      const newlySignedIn = inspectOwner && await this.ownProfileProof(identity, signal);
+      return newlySignedIn ? { ...pending, needsAccountVerification: true, verificationReason: 'owner_proof_missing' } : inspectOwner && this.ownerProofFailureReason ? { ...pending, needsAccountVerification: true, verificationReason: this.ownerProofFailureReason } : pending;
     }
     if (!allowReadOnly && READ_ONLY_ACCOUNT.test(candidate.accountId)) return pending;
     const selfAlias = this.senderProof?.accountId === candidate.accountId && /^https:\/\/(?:www\.)?douyin\.com\/user\/self\/?(?:[?#]|$)/.test(identity.url());
     const proof = await this.ownProfileProof(identity, signal, READ_ONLY_ACCOUNT.test(candidate.accountId) || selfAlias ? 'self' : candidate.accountId);
-    if (!proof || proof.handle !== (matched ? cached.handle : this.senderProof?.handle)) return { ...pending, needsAccountVerification: true, verificationReason: /^\/user\/self\/?$/.test(new URL(identity.url()).pathname) ? 'identity_route_changed' : 'owner_proof_missing' };
+    if (!proof || proof.handle !== (matched ? cached.handle : this.senderProof?.handle)) return { ...pending, needsAccountVerification: true, verificationReason: !proof && this.ownerProofFailureReason ? this.ownerProofFailureReason : /^\/user\/self\/?$/.test(new URL(identity.url()).pathname) ? 'identity_route_changed' : 'owner_proof_missing' };
     this.passiveAccount = { account: candidate, handle: proof.handle, checkedAt: Date.now(), context: this.context, page, identityPage: identity };
     return { ...candidate };
   }

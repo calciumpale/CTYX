@@ -60,6 +60,24 @@
 .prospect-chat-message footer { display: flex; flex-wrap: wrap; gap: 2px 8px; margin-top: 5px; font-size: 11px; color: var(--cds-text-secondary); overflow-wrap: anywhere; }
 .prospect-chat-message.is-outbound footer { justify-content: flex-end; }
 .prospect-chat-message .needs-attention { color: var(--cds-text-primary); font-weight: 550; }
+.prospect-chat-message.is-waiting > p { background: var(--cds-surface-0); border: 1px solid var(--cds-border); }
+.prospect-chat-wait-label { display: inline-flex; align-items: center; gap: 5px; }
+.prospect-chat-wait-label > svg { flex: none; }
+.prospect-chat-message footer time { font-variant-numeric: tabular-nums; }
+.prospect-chat-verification-records { max-width: min(100%, 65ch); margin: 0 0 22px auto; font-size: 12px; color: var(--cds-text-secondary); }
+.prospect-chat-verification-records summary { display: flex; align-items: center; gap: 8px; min-height: var(--control-height); width: fit-content; max-width: 100%; padding: 6px 10px; margin-inline-start: auto; border-radius: var(--control-radius); background: var(--cds-surface-0); cursor: pointer; list-style: none; }
+.prospect-chat-verification-records summary::-webkit-details-marker { display: none; }
+.prospect-chat-verification-records summary > span { overflow-wrap: anywhere; }
+.prospect-chat-verification-records summary > svg { flex: none; }
+.prospect-chat-verification-records[open] summary > svg { transform: rotate(180deg); }
+.prospect-chat-verification-records summary:focus-visible { outline: 2px solid var(--cds-border-strong); outline-offset: 2px; }
+.prospect-chat-verification-records ol { list-style: none; margin: 6px 0 0; padding-inline: 10px; }
+.prospect-chat-verification-records li { padding-block: 10px; }
+.prospect-chat-verification-records li + li { border-top: 1px solid var(--cds-border); }
+.prospect-chat-verification-records header { display: flex; flex-wrap: wrap; gap: 4px 10px; }
+.prospect-chat-verification-records time { font-variant-numeric: tabular-nums; }
+.prospect-chat-verification-records li > p { margin: 5px 0; font-size: 13px; line-height: 1.8; color: var(--cds-text-primary); white-space: pre-wrap; overflow-wrap: anywhere; }
+.prospect-chat-verification-records li > span { overflow-wrap: anywhere; }
 .prospect-chat-no-messages { display: flex; height: 100%; min-height: 190px; flex-direction: column; align-items: center; justify-content: center; gap: 13px; color: var(--cds-text-secondary); font-size: 13px; text-align: center; }
 .prospect-chat-no-messages > p { max-width: 36ch; }
 .prospect-chat-jump.button { position: absolute; top: 50%; left: 50%; transform: translateX(-50%); background: var(--cds-surface-2); white-space: nowrap; }

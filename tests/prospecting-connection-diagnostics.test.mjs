@@ -12,6 +12,15 @@ async function fixture(t){
 }
 const event={event:'state',timestamp:'2026-11-07T01:02:03.000Z',phase:'recovering',running:true,authenticated:false,errorCode:'UNAUTHENTICATED',reasonCode:'owner_proof_missing',recoveryAttempt:1};
 
+test('owner verification stages remain fixed enum diagnostics without page content',async t=>{
+ const f=await fixture(t),diagnostics=f.createConnectionDiagnostics(f.path);
+ const reasons=['owner_route_changed','owner_controls_timeout','owner_controls_replaced','owner_handle_missing','owner_duplicate_same_handle','owner_handle_conflict','owner_read_interrupted'];
+ for(const reasonCode of reasons)diagnostics.record({...event,reasonCode,handle:'private-handle',text:'private-page-body'});
+ await diagnostics.flush();
+ assert.deepEqual((await diagnostics.read()).map(row=>row.reasonCode),reasons);
+ assert.doesNotMatch(await readFile(f.path,'utf8'),/private-handle|private-page-body/);
+});
+
 test('connection diagnostics persist only fixed safe fields in a private bounded local file',async t=>{
  const f=await fixture(t),diagnostics=f.createConnectionDiagnostics(f.path);
  diagnostics.record({...event,accountId:'secret-account',accountName:'private-name',url:'https://private.example.test',token:'secret-token',message:'private-message',error:new Error('raw-secret'),config:{key:'secret-key'},customer:{text:'secret-customer'}});

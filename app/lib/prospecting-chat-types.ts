@@ -48,7 +48,11 @@ export interface ProspectChatMessage {
   direction: ProspectChatDirection;
   text: string;
   actor: ProspectChatActor;
-  status: 'received' | 'queued' | 'sending' | 'sent' | 'failed' | 'unknown' | 'cancelled';
+  status: 'received' | 'queued' | 'waiting' | 'sending' | 'sent' | 'failed' | 'unknown' | 'cancelled';
+  /** True only when the attempt is confirmed to have stopped before dispatch. */
+  retryable?: boolean;
+  retryAt?: string;
+  retryExhausted?: boolean;
   postedAt?: string;
   createdAt: string;
   error?: string;

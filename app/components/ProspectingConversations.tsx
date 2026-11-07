@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useId, useRef, useState, type FormEvent } from 'react';
-import { ArrowDown, ArrowLeft, ChevronDown, Bot, Check, CircleAlert, ExternalLink, Loader2, MessageCircle, RefreshCw, Search, Send, UserRound, Users, X } from 'lucide-react';
+import { ArrowDown, ArrowLeft, ChevronDown, Bot, Check, CircleAlert, Clock3, ExternalLink, Loader2, MessageCircle, RefreshCw, Search, Send, UserRound, Users, X } from 'lucide-react';
 import type { ProspectChatConversation, ProspectChatGrade, ProspectChatMessage, ProspectChatPolicy, ProspectChatSnapshot } from '../lib/prospecting-chat-types';
 import { defaultChatPolicy, normalizeChatPolicy, withinChatHours } from '../lib/prospecting-chat-policy';
 import { useChatScroll } from '../lib/use-chat-scroll';
@@ -39,7 +39,8 @@ function policyError(policy: PolicyDraft) {
   return '';
 }
 const gradeLabels: Record<ProspectChatGrade, string> = { high: '高意向', medium: '一般意向', low: '待培育' };
-const messageLabels: Record<ProspectChatMessage['status'], string> = { received: '已同步', queued: '等待发送', sending: '正在发送', sent: '已提交', failed: '发送失败', unknown: '结果待核对', cancelled: '已取消' };
+const messageLabels: Record<ProspectChatMessage['status'], string> = { received: '已同步', queued: '等待发送', waiting: '等待账号核验，尚未发送', sending: '正在发送', sent: '已提交', failed: '发送失败', unknown: '结果待核对', cancelled: '已取消' };
+const isVerificationRecord = (message: ProspectChatMessage) => message.actor === 'agent' && message.status === 'failed' && message.retryable === true;
 const actorLabels: Record<ProspectChatMessage['actor'], string> = { customer: '客户', agent: 'AI 获客助手', human: '人工回复' };
 const contactLabels = { phone: '手机号', wechat: '微信', email: '邮箱' };
 const humanModeLabel = (conversation: ProspectChatConversation) => conversation.handoffReason === '已由销售接管' ? '人工接管中' : '需人工处理';
@@ -57,6 +58,15 @@ const aborted = (error: unknown) => error instanceof DOMException && error.name 
 
 function dateLabel(value?: string) {
   return value && Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }) : '时间待确认';
+}
+function VerificationRecords({ messages, onInspect }: { messages: ProspectChatMessage[]; onInspect: () => void }) {
+  return <details className="prospect-chat-verification-records" onToggle={onInspect}>
+    <summary><span>账号核验记录（{messages.length}次，均未发送）</span><ChevronDown size={13} /></summary>
+    <ol>{messages.map(message => <li key={message.id}>
+      <header><span>{actorLabels[message.actor]}</span><time dateTime={message.createdAt}>{dateLabel(message.createdAt)}</time></header>
+      <p>{message.text}</p><span>{message.error || '账号核验未完成，本次未发送。'}</span>
+    </li>)}</ol>
+  </details>;
 }
 function profileLink(value: string) {
   try { const url = new URL(value); if (url.protocol === 'https:' && (url.hostname === 'douyin.com' || url.hostname.endsWith('.douyin.com'))) return url.href; } catch { /* Only show verified Douyin URL shapes. */ }
@@ -182,6 +192,7 @@ export function ProspectingConversations({ campaignId, active, view, blocked, pa
   const conversation = snapshot?.conversations.find(item => item.id === selectedId);
   const conversations = snapshot?.conversations.filter(item => `${item.nickname} ${item.lastMessagePreview}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())) || [];
   const messages = (snapshot?.messages || []).filter(message => message.conversationId === selectedId);
+  const verificationRecords = messages.filter(isVerificationRecord);
   const latestOutbound = messages.findLast(message => message.direction === 'outbound');
   const transcriptKey = `${active && view === 'chat' ? selectedId : ''}:${messages.map(message => `${message.id}:${message.status}`).join('|')}`;
   const { containerRef, markUserInput, onScroll, showJump, jumpToLatest } = useChatScroll(transcriptKey);
@@ -284,7 +295,19 @@ export function ProspectingConversations({ campaignId, active, view, blocked, pa
               {conversation.mode === 'human' && <div className="prospect-chat-takeover" role="status"><UserRound size={16} /><div><strong>{humanModeLabel(conversation)}，AI 助手已停止回复此会话</strong><p>{handoffReason(conversation)}</p></div></div>}
             </>}
             <div className="prospect-chat-transcript" ref={containerRef} role="log" aria-label={`${conversation.nickname || '客户'}的聊天记录`} aria-live="polite" aria-relevant="additions text" onScroll={onScroll} onWheel={markUserInput} onTouchStart={markUserInput} onKeyDown={event => { if (['PageUp', 'PageDown', 'Home', 'End', 'ArrowUp', 'ArrowDown'].includes(event.key)) markUserInput(); }} tabIndex={0}>
-              {messages.length ? messages.map(message => <article key={message.id} className={`prospect-chat-message is-${message.direction} is-${message.actor}`}><header><span>{message.actor === 'customer' ? conversation.nickname || '客户' : actorLabels[message.actor]}</span><time dateTime={message.postedAt || message.createdAt}>{dateLabel(message.postedAt || message.createdAt)}</time></header><p>{message.text}</p><footer><span className={['failed', 'unknown'].includes(message.status) ? 'needs-attention' : ''}>{messageLabels[message.status]}</span>{message.error && <span>{message.error}</span>}</footer>{!readOnlyConversation && message.id === latestOutbound?.id && message.status === 'failed' && <button type="button" className="button ghost" disabled={!canReply} onClick={() => void execute('chatReply', { conversationId: conversation.id, version: conversation.version, message: message.text })}><RefreshCw size={14} />重试发送</button>}</article>) : <div className="prospect-chat-no-messages"><MessageCircle size={23} /><p>这段会话还没有同步的消息。保持助手运行，稍后刷新查看。</p></div>}
+              {messages.length ? messages.map(message => {
+                if (isVerificationRecord(message)) return message.id === verificationRecords[0]?.id ? <VerificationRecords key={`${conversation.id}-verification-records`} messages={verificationRecords} onInspect={markUserInput} /> : null;
+                const waiting = message.status === 'waiting';
+                return <article key={message.id} className={`prospect-chat-message is-${message.direction} is-${message.actor}${waiting ? ' is-waiting' : ''}`}>
+                  <header><span>{message.actor === 'customer' ? conversation.nickname || '客户' : actorLabels[message.actor]}</span><time dateTime={message.postedAt || message.createdAt}>{dateLabel(message.postedAt || message.createdAt)}</time></header>
+                  <p>{message.text}</p>
+                  <footer><span className={waiting ? 'prospect-chat-wait-label' : ['failed', 'unknown'].includes(message.status) ? 'needs-attention' : ''}>{waiting && <Clock3 size={12} />}{messageLabels[message.status]}</span>
+                    {waiting ? message.retryExhausted ? <span>{readOnlyConversation ? '请联系原任务负责人检查助手并同步' : '检查助手后点击立即同步'}</span> : message.retryAt && Number.isFinite(Date.parse(message.retryAt)) && <span>最早重试 <time dateTime={message.retryAt}>{dateLabel(message.retryAt)}</time></span> : message.error && <span>{message.error}</span>}
+                  </footer>
+                  {!readOnlyConversation && message.id === latestOutbound?.id && message.status === 'failed' && <button type="button" className="button ghost" disabled={!canReply} onClick={() => void execute('chatReply', { conversationId: conversation.id, version: conversation.version, message: message.text })}><RefreshCw size={14} />重试发送</button>}
+                </article>;
+              }) : <div className="prospect-chat-no-messages"><MessageCircle size={23} /><p>这段会话还没有同步的消息。保持助手运行，稍后刷新查看。</p></div>}
+
             </div>
             {showJump && <button className="button secondary prospect-chat-jump" onClick={jumpToLatest}><ArrowDown size={14} />查看最新消息</button>}
             {!readOnlyConversation && <form className="prospect-chat-composer" onSubmit={sendReply}><label htmlFor={`${prefix}-reply`}>{conversation.mode === 'human' ? '人工回复客户' : '接管后可手动回复'}</label><textarea ref={replyInput} id={`${prefix}-reply`} value={draft} rows={3} maxLength={1000} disabled={conversation.mode !== 'human' || mutationBlocked || conversation.status === 'closed'} onChange={event => setDrafts(current => ({ ...current, [selectedId]: event.target.value }))} onKeyDown={event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.nativeEvent.isComposing && event.keyCode !== 229) { event.preventDefault(); sendReply(); } }} placeholder={conversation.mode === 'human' ? '输入你的回复，发送前核对客户与内容' : '点击右上角“人工接管”后，可在此回复客户'} /><div className="prospect-chat-composer-foot"><p>{conversation.status === 'closed' ? '此会话已结束，消息记录保留。' : conversation.mode !== 'human' ? '接管后，AI 助手会停止回复此会话。' : paused ? '任务已暂停，恢复任务后可发送。' : !sendingAvailable ? '请先连接助手，并在助手中确认发信账号后再发送。' : '⌘ / Ctrl + Enter 发送 · 发送状态不代表对方已读'}<span>{draft.length} / 1000</span></p><button className="button primary" disabled={!canReply || !draft.trim()}>{busy === 'chatReply' ? <Loader2 size={15} className="spin" /> : <Send size={15} />}发送回复</button></div></form>}

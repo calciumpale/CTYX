@@ -114,6 +114,65 @@ browserTest('strict sender proof waits for delayed owner search hydration withou
   assert.equal(await page.locator('textarea').inputValue(), '保留的私信草稿');
 });
 
+browserTest('strict sender proof waits for duplicate identical labels to become one without another reload', async t => {
+  const { adapter, page, state } = await fixture(t);
+  await adapter.accountStatus({ expectedAccountId: 'sender-1' });
+  state.canonical = ownProfile() + `<span id="duplicate-owner">抖音号：${handle}</span><script>setTimeout(()=>document.querySelector('#duplicate-owner').remove(),1000)</script>`;
+  adapter.timeoutMs = 2500;
+  advanceIdentityNavigation(t, adapter);
+  const before = state.requests.length;
+  const account = await adapter.verifiedSender(page, 'sender-1');
+  assert.equal(account.authenticated, true);
+  assert.deepEqual(state.requests.slice(before), ['/user/sender-1']);
+});
+
+browserTest('strict sender proof waits for owner controls replaced after initial visibility', async t => {
+  const { adapter, page, state } = await fixture(t);
+  await adapter.accountStatus({ expectedAccountId: 'sender-1' });
+  state.canonical = ownProfile() + '<span id="reloaded-owner"></span>';
+  adapter.timeoutMs = 2500;
+  const guard = adapter.guard.bind(adapter); let ownerChecks = 0;
+  adapter.guard = async (current, signal) => {
+    await guard(current, signal);
+    if (current === adapter.identityPage && await current.locator('#reloaded-owner').count() && ++ownerChecks === 2) {
+      await current.getByPlaceholder('搜索你发布的作品', { exact: true }).evaluate(node => { node.hidden = true; setTimeout(() => { node.hidden = false; }, 1000); });
+    }
+  };
+  advanceIdentityNavigation(t, adapter);
+  const before = state.requests.length;
+  const account = await adapter.verifiedSender(page, 'sender-1');
+  assert.equal(account.authenticated, true);
+  assert.deepEqual(state.requests.slice(before), ['/user/sender-1']);
+});
+
+browserTest('persistent identical owner labels never authorize while conflicting handles reject immediately', async t => {
+  for (const conflicting of [false, true]) {
+    const { adapter } = await fixture(t);
+    const value = conflicting ? 'different_owner' : handle;
+    const page = await adapter.identityNavigate('https://www.douyin.com/user/sender-1');
+    await page.locator('main').evaluate((node, label) => node.insertAdjacentHTML('beforeend', `<span>抖音号：${label}</span>`), value);
+    adapter.timeoutMs = 350;
+    const guard = adapter.guard.bind(adapter); let observations = 0;
+    adapter.guard = async (...args) => { observations++; await guard(...args); };
+    assert.equal(await adapter.ownProfileProof(page, undefined, 'sender-1'), null);
+    assert.equal(adapter.ownerProofFailureReason, conflicting ? 'owner_handle_conflict' : 'owner_duplicate_same_handle');
+    if (conflicting) assert.equal(observations, 1, 'A proved conflict must not retry hydration');
+  }
+});
+
+browserTest('owner control hydration shares one overall timeout across both controls', async t => {
+  const { adapter } = await fixture(t);
+  const page = await adapter.identityNavigate('https://www.douyin.com/user/sender-1');
+  await page.locator('main').evaluate(node => {
+    node.querySelector('[role=tab]').remove(); node.querySelector('input').remove();
+    setTimeout(() => node.insertAdjacentHTML('beforeend', '<button role="tab">私密作品</button>'), 200);
+    setTimeout(() => node.insertAdjacentHTML('beforeend', '<input placeholder="搜索你发布的作品">'), 450);
+  });
+  adapter.timeoutMs = 350;
+  assert.equal(await adapter.ownProfileProof(page, undefined, 'sender-1'), null);
+  assert.equal(adapter.ownerProofFailureReason, 'owner_controls_timeout');
+});
+
 browserTest('waiting for owner hydration never accepts duplicate handles or a changed profile path', async t => {
   for (const canonical of [ownProfile() + `<span>抖音号：${handle}</span>`, ownProfile().replace(`<span>抖音号：${handle}</span>`, '<span id="pending-handle"></span>') + `<script>setTimeout(() => {history.replaceState({}, '', '/user/another-user'); document.querySelector('#pending-handle').textContent='抖音号：${handle}'}, 100)</script>`]) {
     const { adapter } = await fixture(t, { canonical });
@@ -411,7 +470,7 @@ browserTest('bounded recovery cannot authorize a session whose canonical owner p
   advanceIdentityNavigation(t, adapter);
   const recovered = await adapter.recoverAccountStatus({ expectedAccountId: 'sender-1' });
   assert.equal(recovered.authenticated, false); assert.equal(recovered.verificationPending, true);
-  assert.equal(recovered.needsAccountVerification, true); assert.equal(recovered.verificationReason, 'owner_proof_missing');
+  assert.equal(recovered.needsAccountVerification, true); assert.equal(recovered.verificationReason, 'owner_controls_timeout');
   assert.deepEqual(state.requests.slice(before), ['/user/sender-1']);
   assert.equal((await adapter.verifiedSender(page, 'sender-1')).authenticated, false);
 });
@@ -455,7 +514,7 @@ browserTest('strict dispatch verification rejects server account changes hidden 
       const account = await adapter.verifiedSender(page, 'sender-1');
       assert.equal(account.authenticated, false);
       assert.equal(account.verificationPending, true);
-      assert.equal(account.verificationReason, 'owner_proof_missing');
+      assert.equal(account.verificationReason, 'owner_controls_timeout');
     } else {
       await assert.rejects(adapter.verifiedSender(page, 'sender-1'), error => error.code === 'ACCOUNT_CHANGED');
     }
@@ -590,7 +649,7 @@ browserTest('a server account switch after draft entry blocks the final send che
     const { adapter, page, state } = await fixture(t, { conversation: true });
     await adapter.accountStatus({ expectedAccountId: 'sender-1' });
     await page.locator('[role=dialog]').evaluate(root => root.insertAdjacentHTML('beforeend', '<button>发送</button>'));
-    advanceIdentityNavigation(t, adapter);
+    adapter.lastIdentityNavigationAt = Date.now() - 61000;
     let checkpoints = 0;
     await assert.rejects(adapter.send({ ...conversationInput, message: '未授权发送的隔离测试草稿' }, {
       renewBeforeDispatch: async () => { state.canonical = owner === 'missing' ? ownProfile(handle, false) : ownProfile('another_owner'); },
@@ -628,7 +687,7 @@ browserTest('missing post-read ownership is pending and retains the established 
     assert.equal(error.code, 'ACCOUNT_VERIFICATION_PENDING');
     assert.equal(error.verificationPending, true);
     assert.equal(error.needsAccountVerification, true);
-    assert.equal(error.verificationReason, 'owner_proof_missing');
+    assert.equal(error.verificationReason, 'owner_controls_timeout');
     return true;
   });
   assert.deepEqual(adapter.senderProof, hint);
@@ -643,7 +702,7 @@ browserTest('a strict temporary canonical failure preserves pending metadata and
   const pending = await adapter.verifiedSender(page, 'sender-1');
   assert.equal(pending.authenticated, false);
   assert.equal(pending.verificationPending, true);
-  assert.equal(pending.verificationReason, 'owner_proof_missing');
+  assert.equal(pending.verificationReason, 'owner_controls_timeout');
   assert.deepEqual(adapter.senderProof, hint);
 });
 

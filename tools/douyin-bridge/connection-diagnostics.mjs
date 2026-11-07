@@ -7,7 +7,7 @@ const MAX_EVENTS=100,MAX_BYTES=65536;
 const events=new Set(['state','lifecycle','recovery','liveness','poll','bridge_error']);
 const phases=new Set(['idle','logging_in','ready','running','confirmation_required','account_mismatch','login_required','stopping','stopped','error','verifying','recovering','verification_required']);
 const errors=new Set(['INVALID_CONFIG','PRIVATE_FILE','ENOENT','JOURNAL_LOCKED','JOURNAL_FORMAT','PAIRING_CHANGED','BROWSER_MISSING','HUMAN_ACTION_REQUIRED','ACCOUNT_CHANGED','UNAUTHENTICATED','NETWORK','API_REJECTED','API_FORMAT','LEASE_LOST','RESOURCE_RELEASE','DESKTOP_ERROR','ABORTED']);
-const reasons=new Set(['owner_proof_missing','identity_route_changed','task_header_missing','account_ambiguous','account_read_interrupted','navigation_failed','heartbeat_unavailable','network_retry','recovery_requested','recovery_exhausted']);
+const reasons=new Set(['owner_proof_missing','identity_route_changed','task_header_missing','account_ambiguous','account_read_interrupted','navigation_failed','heartbeat_unavailable','network_retry','recovery_requested','recovery_exhausted','owner_route_changed','owner_controls_timeout','owner_controls_replaced','owner_handle_missing','owner_duplicate_same_handle','owner_handle_conflict','owner_read_interrupted']);
 
 // Values have closed vocabularies. A regex alone would allow an account name or
 // token disguised as a diagnostic code. Free text is never accepted here.

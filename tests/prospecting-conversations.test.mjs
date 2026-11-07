@@ -24,9 +24,7 @@ function Fixture() {
 createRoot(document.getElementById('root')).render(<Fixture />);
 `;
 
-test('conversation settings preserve drafts, save the loaded enabled state, and block closed replies on desktop and mobile', { timeout: 60000 }, async () => {
-  // Only an isolated local fixture is opened. All application API calls are mocked.
-  const { chromium } = await import(pathToFileURL(path.join(root, 'tools/douyin-bridge/node_modules/playwright/index.mjs')).href);
+async function createConversationFixture() {
   const cacheDir = await mkdtemp(path.join(tmpdir(), 'conversation-ui-vite-'));
   const server = await createServer({
     resolve: { dedupe: ['react', 'react-dom'] }, cacheDir, optimizeDeps: { include: ['react', 'react-dom/client', 'react/jsx-runtime', 'react/jsx-dev-runtime', 'lucide-react'] },
@@ -45,6 +43,13 @@ test('conversation settings preserve drafts, save the loaded enabled state, and 
   });
   await server.listen();
   const origin = server.resolvedUrls.local[0].replace(/\/$/, '');
+  return { server, origin, cacheDir };
+}
+
+test('conversation settings preserve drafts, save the loaded enabled state, and block closed replies on desktop and mobile', { timeout: 60000 }, async () => {
+  // Only an isolated local fixture is opened. All application API calls are mocked.
+  const { chromium } = await import(pathToFileURL(path.join(root, 'tools/douyin-bridge/node_modules/playwright/index.mjs')).href);
+  const { server, origin, cacheDir } = await createConversationFixture();
   const posts = [];
   const errors = [];
   let reads = 0;
@@ -233,6 +238,122 @@ test('conversation settings preserve drafts, save the loaded enabled state, and 
     await page.locator('.prospect-chat-takeover').getByText(handoffReason, { exact: true }).waitFor();
     assert.equal(await page.getByRole('button', { name: '发送回复', exact: true }).count(), 0);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    assert.deepEqual(errors, []);
+  } finally {
+    await browser?.close();
+    await server.close();
+    await rm(cacheDir, { recursive: true, force: true });
+  }
+});
+
+test('verification waits stay one reply while legacy unsent attempts remain inspectable and genuine failures stay visible', { timeout: 60000 }, async () => {
+  const { chromium } = await import(pathToFileURL(path.join(root, 'tools/douyin-bridge/node_modules/playwright/index.mjs')).href);
+  const { server, origin, cacheDir } = await createConversationFixture();
+  const posts = [], errors = [];
+  let phase = 'waiting';
+  const replyText = '您希望在哪个区域找铺？';
+  const legacy = [
+    { id: 'legacy-1', text: '较早的一次未发送内容', error: '账号主页控件暂未就绪', createdAt: '2026-11-08T17:51:00Z' },
+    { id: 'legacy-2', text: '另一次未发送内容', error: '账号核验尚未完成', createdAt: '2026-11-08T17:52:00Z' },
+  ];
+  const snapshot = () => ({
+    enabled: true, online: true, policy: defaultPolicy(), libraries: [], pool: [],
+    conversations: [{ id: 'conversation-1', campaignId: 'campaign-a', leadId: 'lead-1', recipientId: 'recipient-1', profileUrl: '', nickname: '王女士', mode: 'human', status: 'active', version: 1, lastMessageAt: '2026-11-08T18:00:00Z', lastMessagePreview: '想了解面积', lastSyncedAt: '2026-11-08T18:00:00Z', updatedAt: '2026-11-08T18:00:00Z' }],
+    messages: [
+      ...Array.from({ length: 16 }, (_, index) => ({ id: `history-${index}`, conversationId: 'conversation-1', direction: 'inbound', actor: 'customer', text: `之前的需求记录 ${index + 1}`, status: 'received', createdAt: '2026-11-08T17:50:00Z' })),
+      ...legacy.map(message => ({ ...message, conversationId: 'conversation-1', direction: 'outbound', actor: 'agent', status: 'failed', retryable: true })),
+      { id: 'genuine-failure', conversationId: 'conversation-1', direction: 'outbound', actor: 'human', text: '确实失败的回复', status: 'failed', error: '对方关闭了私信权限', createdAt: '2026-11-08T17:53:00Z' },
+      { id: 'unknown-result', conversationId: 'conversation-1', direction: 'outbound', actor: 'human', text: '需要核对是否已发出的回复', status: 'unknown', retryable: true, error: '点击后连接中断，结果待确认', createdAt: '2026-11-08T17:54:00Z' },
+      { id: 'stable-approved-reply', conversationId: 'conversation-1', direction: 'outbound', actor: 'agent', text: replyText, status: phase === 'sent' ? 'sent' : 'waiting', createdAt: '2026-11-08T18:00:00Z', ...(phase === 'sent' ? {} : { retryable: true, retryAt: '2026-11-08T18:05:00Z', retryExhausted: phase === 'exhausted', error: '账号核验尚未完成' }) },
+      ...(phase === 'human-failed' ? [{ id: 'human-approved-reply', conversationId: 'conversation-1', direction: 'outbound', actor: 'human', text: '人工确认的未发送回复', status: 'failed', retryable: true, error: '账号核验尚未完成', createdAt: '2026-11-08T18:01:00Z' }] : []),
+    ],
+  });
+  let browser;
+  try {
+    browser = await chromium.launch({ headless: true });
+    const context = await browser.newContext({ viewport: { width: 1280, height: 1000 }, timezoneId: 'Asia/Shanghai', serviceWorkers: 'block' });
+    await context.route('**/*', async route => {
+      const url = new URL(route.request().url());
+      if (url.origin !== origin) return route.abort('blockedbyclient');
+      if (url.pathname !== '/api/prospecting') return route.continue();
+      if (route.request().method() === 'GET') return route.fulfill({ json: snapshot() });
+      posts.push(route.request().postDataJSON());
+      return route.fulfill({ json: { message: '会话同步已请求。', chat: snapshot() } });
+    });
+    const page = await context.newPage();
+    page.setDefaultTimeout(5000);
+    page.on('pageerror', error => errors.push(error.message));
+    await page.clock.setFixedTime(new Date('2026-11-08T18:00:00Z'));
+    await page.goto(origin);
+    const transcript = page.getByRole('log');
+    const waiting = transcript.locator('article').filter({ has: page.getByText(replyText, { exact: true }) });
+    await waiting.getByText('等待账号核验，尚未发送', { exact: true }).waitFor();
+    assert.equal(await waiting.locator('time[datetime="2026-11-08T18:05:00Z"]').count(), 1);
+    assert.equal(await waiting.getByRole('button').count(), 0, 'A verification wait must not expose send or retry actions');
+    assert.equal(await waiting.locator('.needs-attention').count(), 0);
+    const waitingNode = await waiting.elementHandle();
+    const records = transcript.locator('details').filter({ has: page.getByText('账号核验记录（2次，均未发送）', { exact: true }) });
+    await records.locator('summary').waitFor();
+    assert.equal(await transcript.locator('article').count(), 19, 'Known unsent legacy attempts must not appear as ordinary chat bubbles');
+    assert.equal(await page.getByText(legacy[0].text, { exact: true }).isVisible(), false);
+    await records.locator('summary').click();
+    for (const item of legacy) {
+      assert.equal(await records.getByText(item.text, { exact: true }).isVisible(), true);
+      assert.equal(await records.getByText(item.error, { exact: true }).isVisible(), true);
+      assert.equal(await records.locator(`time[datetime="${item.createdAt}"]`).count(), 1);
+    }
+    await records.locator('summary').click();
+    const failed = transcript.locator('article').filter({ has: page.getByText('确实失败的回复', { exact: true }) });
+    assert.equal(await failed.getByText('发送失败', { exact: true }).isVisible(), true);
+    assert.equal(await failed.getByText('对方关闭了私信权限', { exact: true }).isVisible(), true);
+    const unknown = transcript.locator('article').filter({ has: page.getByText('需要核对是否已发出的回复', { exact: true }) });
+    assert.equal(await unknown.getByText('结果待核对', { exact: true }).isVisible(), true);
+    assert.equal(await unknown.getByRole('button').count(), 0, 'An unknown outcome cannot be retried');
+    const draft = page.getByRole('textbox', { name: '人工回复客户', exact: true });
+    await draft.fill('保留的人工草稿');
+    await transcript.evaluate(el => { el.dispatchEvent(new WheelEvent('wheel')); el.scrollTop = 0; el.dispatchEvent(new Event('scroll')); });
+    phase = 'exhausted';
+    await page.waitForResponse(response => response.url().includes('/api/prospecting?') && response.request().method() === 'GET');
+    await waiting.getByText('检查助手后点击立即同步', { exact: true }).waitFor();
+    assert.equal(posts.length, 0, 'Reaching the automatic attempt limit must not trigger a mutation');
+    assert.equal(await waiting.getByRole('button').count(), 0);
+    assert.equal(await transcript.evaluate(el => el.scrollTop), 0, 'Waiting-state refresh must preserve manual scrolling');
+    await page.getByRole('button', { name: '查看最新消息', exact: true }).click();
+    assert.ok(await transcript.evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight < 50));
+    const captureDir = process.env.PROSPECT_UI_CAPTURE_DIR;
+    if (captureDir) { await mkdir(captureDir, { recursive: true }); await page.screenshot({ path: path.join(captureDir, 'chat-waiting-desktop.png'), fullPage: true }); }
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.getByRole('button', { name: /王女士/ }).click();
+    assert.equal(await waiting.getByText('检查助手后点击立即同步', { exact: true }).isVisible(), true);
+    assert.equal(await page.getByRole('button', { name: '立即同步', exact: true }).evaluate(el => getComputedStyle(el).height), '44px');
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    if (captureDir) await page.screenshot({ path: path.join(captureDir, 'chat-waiting-mobile.png'), fullPage: true });
+    phase = 'sent';
+    await page.getByRole('button', { name: '立即同步', exact: true }).click();
+    await waiting.getByText('已提交', { exact: true }).waitFor();
+    assert.equal(await waiting.evaluate((node, previous) => node === previous, waitingNode), true, 'A successful retry updates the existing logical reply bubble');
+    assert.equal(await transcript.getByText(replyText, { exact: true }).count(), 1);
+    assert.equal(await waiting.getByText('等待账号核验，尚未发送', { exact: true }).count(), 0);
+    assert.equal(await draft.inputValue(), '保留的人工草稿');
+    assert.deepEqual(posts.map(item => item.action), ['chatSync'], 'Only the explicit sync click authorizes recovery');
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    phase = 'human-failed';
+    await page.waitForResponse(response => response.url().includes('/api/prospecting?') && response.request().method() === 'GET');
+    const humanFailure = transcript.locator('article').filter({ has: page.getByText('人工确认的未发送回复', { exact: true }) });
+    await humanFailure.getByRole('button', { name: '重试发送', exact: true }).waitFor();
+    assert.equal(await records.locator('summary').textContent(), '账号核验记录（2次，均未发送）', 'Manual failures stay outside the agent verification history');
+    assert.equal(posts.filter(item => item.action === 'chatReply').length, 0, 'A failed manual message never resends itself');
+    await Promise.all([
+      page.waitForResponse(response => response.url().endsWith('/api/prospecting') && response.request().method() === 'POST'),
+      humanFailure.getByRole('button', { name: '重试发送', exact: true }).click(),
+    ]);
+    assert.equal(posts.findLast(item => item.action === 'chatReply').message, '人工确认的未发送回复', 'An explicit manual retry keeps the original approved text');
+    phase = 'exhausted';
+    await page.evaluate(() => window.__chatFixture.setCampaign(undefined));
+    await page.getByRole('button', { name: /王女士/ }).click();
+    await page.getByText('只读会话，接管与发送由原任务负责人操作。', { exact: true }).waitFor();
+    await waiting.getByText('请联系原任务负责人检查助手并同步', { exact: true }).waitFor();
+    assert.equal(await page.getByRole('button', { name: '立即同步', exact: true }).count(), 0, 'Read-only viewers must not be directed to an unavailable mutation');
     assert.deepEqual(errors, []);
   } finally {
     await browser?.close();

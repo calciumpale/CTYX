@@ -329,7 +329,7 @@ export async function deviceStatusHeartbeat(rawConfig, { fetchImpl = fetch, sign
   return { ok: true };
 }
 
-const VERIFICATION_REASONS = new Set(['owner_proof_missing', 'identity_route_changed', 'task_header_missing', 'account_ambiguous', 'account_read_interrupted', 'navigation_failed']);
+const VERIFICATION_REASONS = new Set(['owner_proof_missing', 'identity_route_changed', 'task_header_missing', 'account_ambiguous', 'account_read_interrupted', 'navigation_failed', 'owner_route_changed', 'owner_controls_timeout', 'owner_controls_replaced', 'owner_handle_missing', 'owner_duplicate_same_handle', 'owner_handle_conflict', 'owner_read_interrupted']);
 
 export async function runOnce(rawConfig, { adapter, journal, fetchImpl = fetch, signal, heartbeatMs = 30000, jobTimeoutMs = 600000, recoverAccount = false, logger = () => {} } = {}) {
   const config = validateConfig(rawConfig);

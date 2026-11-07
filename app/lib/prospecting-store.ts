@@ -42,7 +42,7 @@ export function createProspectingStore(db:D1Database,now:()=>number=Date.now){
  }
  async function disconnect(ownerId:string,memberId:string){
   await member(ownerId,memberId);const time=stamp();
-  await db.batch([
+  await db.batch([chat.waitingCancellation(ownerId,memberId),
    db.prepare('UPDATE workbench_prospect_devices SET enabled=0,authenticated=0 WHERE owner_id=? AND member_id=?').bind(ownerId,memberId),
    db.prepare("UPDATE workbench_prospect_jobs SET status=CASE WHEN kind IN ('send','reply') THEN 'unknown' ELSE 'failed' END,error='设备已断开，执行结果待核对',active_key=NULL,updated_at=? WHERE owner_id=? AND member_id=? AND status='running'").bind(time,ownerId,memberId),
    db.prepare("UPDATE workbench_prospect_jobs SET status='cancelled',recipient_key=CASE WHEN json_type(input_json,'$.retry')='object' THEN recipient_key ELSE NULL END,active_key=NULL,error='设备已断开',updated_at=? WHERE owner_id=? AND member_id=? AND status='queued'").bind(time,ownerId,memberId),
@@ -92,7 +92,7 @@ export function createProspectingStore(db:D1Database,now:()=>number=Date.now){
  async function jobs(ownerId:string,memberId:string,campaignId:string){await campaign(ownerId,memberId,campaignId);const r=await db.prepare("SELECT * FROM workbench_prospect_jobs WHERE owner_id=? AND member_id=? AND campaign_id=? AND kind!='readConversation' ORDER BY created_at DESC,id DESC LIMIT 100").bind(ownerId,memberId,campaignId).all<ProspectJobRow>();return r.results.map(publicJob);}
  async function setPaused(ownerId:string,memberId:string,id:string,paused:boolean){
   await campaign(ownerId,memberId,id);const statements=[db.prepare('UPDATE workbench_prospect_campaigns SET status=?,updated_at=? WHERE id=? AND owner_id=? AND member_id=?').bind(paused?'paused':'active',stamp(),id,ownerId,memberId)];
-  if(paused){statements.push(db.prepare("UPDATE workbench_prospect_jobs SET status='cancelled',active_key=NULL,recipient_key=CASE WHEN json_type(input_json,'$.retry')='object' THEN recipient_key ELSE NULL END,error='任务已暂停',updated_at=? WHERE campaign_id=? AND owner_id=? AND member_id=? AND status='queued'").bind(stamp(),id,ownerId,memberId),...cancelledLeads(ownerId,memberId,stamp(),id));}
+  if(paused){statements.push(chat.waitingCancellation(ownerId,memberId,id),db.prepare("UPDATE workbench_prospect_jobs SET status='cancelled',active_key=NULL,recipient_key=CASE WHEN json_type(input_json,'$.retry')='object' THEN recipient_key ELSE NULL END,error='任务已暂停',updated_at=? WHERE campaign_id=? AND owner_id=? AND member_id=? AND status='queued'").bind(stamp(),id,ownerId,memberId),...cancelledLeads(ownerId,memberId,stamp(),id));}
   await db.batch(statements);
  }
  async function readyDevice(ownerId:string,memberId:string){const d=await currentDevice(ownerId,memberId);if(!d||!online(d))throw new DomainError('请先连接并启动本机抖音助手',503);if(!d.authenticated||!d.account_id)throw new DomainError('请在本机浏览器登录绑定的抖音账号',409);return d;}

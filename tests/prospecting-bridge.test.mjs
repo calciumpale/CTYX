@@ -274,6 +274,16 @@ test('pending verification exposes only an allowlisted reason and never forwards
   assert.ok(!JSON.stringify(result).includes('private failure'));
 });
 
+test('pending verification retains fixed owner proof stages locally without posting them to the service',async t=>{
+ const reasons=['owner_route_changed','owner_controls_timeout','owner_controls_replaced','owner_handle_missing','owner_duplicate_same_handle','owner_handle_conflict','owner_read_interrupted'];
+ for(const reason of reasons){
+  const journal=await journalFor(t);await journal.bindAccount('sender-1');let polled;
+  const result=await runOnce(config,{journal,adapter:{accountStatus:()=>({authenticated:false,verificationPending:true,needsAccountVerification:true,verificationReason:reason})},fetchImpl:async(_url,options)=>{polled=JSON.parse(options.body);return response({job:null});}});
+  assert.equal(result.verificationReason,reason);
+  assert.equal(polled.verificationReason,undefined);
+ }
+});
+
 test('a definite account change from bounded recovery stops instead of becoming temporary pending', async t => {
   const journal = await journalFor(t); await journal.bindAccount('sender-1'); let polls = 0;
   await assert.rejects(runOnce(config, { journal, recoverAccount: true, adapter: {

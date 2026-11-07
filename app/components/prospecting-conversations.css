@@ -146,7 +146,9 @@
 .prospect-chat-policy .prospect-field { min-width: 0; margin: 0; }
 .prospect-chat-policy .prospect-field > small { font-size: 11px; line-height: 1.5; margin-top: 5px; }
 .prospect-chat-policy-hours > div { display: flex; align-items: center; gap: 8px; }
-.prospect-chat-policy-hours input { width: 100%; min-width: 0; font-variant-numeric: tabular-nums; }
+.prospect-chat-policy-hours input[type="time"] { width: 100%; min-width: 0; font-variant-numeric: tabular-nums; }
+.prospect-chat-policy .prospect-chat-policy-hours > .prospect-chat-hours-toggle { display: inline-flex; align-items: center; gap: 7px; min-height: var(--control-height); margin: 0 0 6px; font-size: 13px; cursor: pointer; }
+.prospect-chat-hours-toggle input { flex: none; width: 15px; height: 15px; accent-color: var(--cds-text-primary); }
 .prospect-chat-policy-footer { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-top: 14px; }
 .prospect-chat-policy-footer > p { color: var(--cds-text-secondary); font-size: 12px; }
 .prospect-chat-policy-footer > p[role="alert"] { color: var(--cds-fill-danger); }

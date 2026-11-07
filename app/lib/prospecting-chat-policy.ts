@@ -12,7 +12,7 @@ function integer(value:unknown,fallback:number,min:number,max:number):number {
 }
 
 export function defaultChatPolicy():ProspectChatPolicy {
-  return {libraryIds:[],replyDailyLimit:30,conversationReplyLimit:12,workStart:'08:30',workEnd:'21:30'};
+  return {libraryIds:[],replyDailyLimit:30,conversationReplyLimit:12,replyHoursEnabled:false,workStart:'08:30',workEnd:'21:30'};
 }
 
 /** Defensive DB normalization; settings mutations separately reject invalid explicit inputs. */
@@ -25,6 +25,8 @@ export function normalizeChatPolicy(value:unknown):ProspectChatPolicy {
     libraryIds:Array.isArray(input.libraryIds)?[...new Set(input.libraryIds.filter((id):id is string=>typeof id==='string').map(id=>id.trim()).filter(Boolean))].slice(0,20):[],
     replyDailyLimit:integer(input.replyDailyLimit,defaults.replyDailyLimit,1,80),
     conversationReplyLimit:integer(input.conversationReplyLimit,defaults.conversationReplyLimit,1,30),
+    // Preserve deliberate legacy schedules; the old default window was never an opt-in.
+    replyHoursEnabled:typeof input.replyHoursEnabled==='boolean'?input.replyHoursEnabled:validHours&&(input.workStart!==defaults.workStart||input.workEnd!==defaults.workEnd),
     workStart:validHours?input.workStart as string:defaults.workStart,
     workEnd:validHours?input.workEnd as string:defaults.workEnd,
   };
@@ -32,10 +34,11 @@ export function normalizeChatPolicy(value:unknown):ProspectChatPolicy {
 
 const shanghaiTime=new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Shanghai',hour:'2-digit',minute:'2-digit',hourCycle:'h23'});
 
-/** Only same-day schedules are supported. Closing time is exclusive. */
+/** Replies are unrestricted unless a same-day window is enabled. Closing time is exclusive. */
 export function withinChatHours(nowMs:number,policy:ProspectChatPolicy):boolean {
   if(!Number.isFinite(nowMs)||Number.isNaN(new Date(nowMs).getTime()))return false;
   const normalized=normalizeChatPolicy(policy);
+  if(!normalized.replyHoursEnabled)return true;
   const time=shanghaiTime.format(nowMs);
   return time>=normalized.workStart&&time<normalized.workEnd;
 }

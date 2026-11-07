@@ -8,6 +8,7 @@ export interface ProspectChatPolicy {
   libraryIds: string[];
   replyDailyLimit: number;
   conversationReplyLimit: number;
+  replyHoursEnabled?: boolean;
   workStart: string;
   workEnd: string;
 }

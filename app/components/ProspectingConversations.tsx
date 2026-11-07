@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import { ArrowDown, ArrowLeft, ChevronDown, Bot, Check, CircleAlert, ExternalLink, Loader2, MessageCircle, RefreshCw, Search, Send, UserRound, Users, X } from 'lucide-react';
 import type { ProspectChatConversation, ProspectChatGrade, ProspectChatMessage, ProspectChatPolicy, ProspectChatSnapshot } from '../lib/prospecting-chat-types';
-import { defaultChatPolicy, withinChatHours } from '../lib/prospecting-chat-policy';
+import { defaultChatPolicy, normalizeChatPolicy, withinChatHours } from '../lib/prospecting-chat-policy';
 import { useChatScroll } from '../lib/use-chat-scroll';
 import './prospecting-conversations.css';
 
@@ -23,10 +23,13 @@ type Props = {
   onBusyChange: (busy: boolean) => void;
 };
 type ChatResult = { message?: string; chat: ProspectChatSnapshot };
-type PolicyDraft = Omit<ProspectChatPolicy, 'replyDailyLimit' | 'conversationReplyLimit'> & { replyDailyLimit: string; conversationReplyLimit: string };
+type PolicyDraft = Omit<ProspectChatPolicy, 'replyDailyLimit' | 'conversationReplyLimit' | 'replyHoursEnabled'> & { replyDailyLimit: string; conversationReplyLimit: string; replyHoursEnabled: boolean };
 const stageLabels = { understanding: '了解需求', qualifying: '确认条件', contact: '邀请留资', visit: '邀约到访', handoff: '人工对接', closed: '已结束' };
 const needFields = [['area', '面积'], ['category', '业态'], ['budget', '预算'], ['location', '意向位置'], ['timing', '计划时间'], ['visit', '到访安排']] as const;
-const draftFromPolicy = (policy: ProspectChatPolicy = defaultChatPolicy()): PolicyDraft => ({ ...policy, libraryIds: [...policy.libraryIds], replyDailyLimit: String(policy.replyDailyLimit), conversationReplyLimit: String(policy.conversationReplyLimit) });
+const draftFromPolicy = (policy: ProspectChatPolicy = defaultChatPolicy()): PolicyDraft => {
+  const normalized = normalizeChatPolicy(policy);
+  return { ...normalized, replyHoursEnabled: Boolean(normalized.replyHoursEnabled), libraryIds: [...normalized.libraryIds], replyDailyLimit: String(normalized.replyDailyLimit), conversationReplyLimit: String(normalized.conversationReplyLimit) };
+};
 const policySignature = (policy: PolicyDraft) => JSON.stringify({ ...policy, libraryIds: [...policy.libraryIds].sort() });
 function policyError(policy: PolicyDraft) {
   if (!/^\d+$/.test(policy.replyDailyLimit) || Number(policy.replyDailyLimit) < 1 || Number(policy.replyDailyLimit) > 80) return '每日回复上限须为 1–80 条。';
@@ -229,6 +232,11 @@ export function ProspectingConversations({ campaignId, active, view, blocked, pa
     const dirty = policySignature(next) !== savedPolicy.current;
     policyDirtyRef.current = dirty; setPolicyDirty(dirty); setPolicyDraft(next);
   }
+  function updateReplyHours(enabled: boolean) {
+    const valid = /^([01]\d|2[0-3]):[0-5]\d$/.test(policyDraft.workStart) && /^([01]\d|2[0-3]):[0-5]\d$/.test(policyDraft.workEnd) && policyDraft.workStart < policyDraft.workEnd;
+    const hours = !enabled && !valid ? normalizeChatPolicy(JSON.parse(savedPolicy.current)) : policyDraft;
+    updatePolicy({ replyHoursEnabled: enabled, workStart: hours.workStart, workEnd: hours.workEnd });
+  }
   function savePolicy(event: FormEvent) {
     event.preventDefault();
     if (!policyReady || !snapshot || settingsError || mutationBlocked || scope !== 'campaign') return;
@@ -259,7 +267,7 @@ export function ProspectingConversations({ campaignId, active, view, blocked, pa
                 <div className="prospect-chat-policy-fields">
                   <div className="prospect-field"><label htmlFor={`${prefix}-daily-limit`}>每日回复上限</label><input id={`${prefix}-daily-limit`} type="number" min={1} max={80} step={1} inputMode="numeric" value={policyDraft.replyDailyLimit} onChange={event => updatePolicy({ replyDailyLimit: event.target.value })} required /><small>1–80 条，独立于招呼配额</small></div>
                   <div className="prospect-field"><label htmlFor={`${prefix}-conversation-limit`}>单会话回复上限</label><input id={`${prefix}-conversation-limit`} type="number" min={1} max={30} step={1} inputMode="numeric" value={policyDraft.conversationReplyLimit} onChange={event => updatePolicy({ conversationReplyLimit: event.target.value })} required /><small>每个会话 24 小时内 1–30 条</small></div>
-                  <div className="prospect-field prospect-chat-policy-hours"><span id={`${prefix}-hours-label`} className="prospect-chat-policy-label">工作时间 · 北京时间</span><div role="group" aria-labelledby={`${prefix}-hours-label`}><label className="prospect-sr-only" htmlFor={`${prefix}-work-start`}>开始时间</label><input id={`${prefix}-work-start`} type="time" value={policyDraft.workStart} onChange={event => updatePolicy({ workStart: event.target.value })} required /><span aria-hidden="true">—</span><label className="prospect-sr-only" htmlFor={`${prefix}-work-end`}>结束时间</label><input id={`${prefix}-work-end`} type="time" value={policyDraft.workEnd} onChange={event => updatePolicy({ workEnd: event.target.value })} required /></div><small>仅在工作时间内自动回复</small></div>
+                  <div className="prospect-field prospect-chat-policy-hours"><span id={`${prefix}-hours-label`} className="prospect-chat-policy-label">回复时段 · 北京时间</span><label className="prospect-chat-hours-toggle"><input type="checkbox" checked={policyDraft.replyHoursEnabled} onChange={event => updateReplyHours(event.target.checked)} /><span>限定回复时段</span></label><div role="group" aria-labelledby={`${prefix}-hours-label`}><label className="prospect-sr-only" htmlFor={`${prefix}-work-start`}>开始时间</label><input id={`${prefix}-work-start`} type="time" value={policyDraft.workStart} disabled={!policyDraft.replyHoursEnabled} onChange={event => updatePolicy({ workStart: event.target.value })} required /><span aria-hidden="true">—</span><label className="prospect-sr-only" htmlFor={`${prefix}-work-end`}>结束时间</label><input id={`${prefix}-work-end`} type="time" value={policyDraft.workEnd} disabled={!policyDraft.replyHoursEnabled} onChange={event => updatePolicy({ workEnd: event.target.value })} required /></div><small>{policyDraft.replyHoursEnabled ? '仅在所选时段自动回复' : '全天回复'}</small></div>
                 </div>
               </fieldset>
               <div className="prospect-chat-policy-footer"><p id={`${prefix}-policy-status`} role={settingsError && policyDirty ? 'alert' : 'status'}>{settingsError && policyDirty ? settingsError : paused ? '任务暂停中，恢复后继续跟进。' : !modelReady ? '请联系管理员配置模型。' : !snapshot.online ? '连接并核验抖音账号后开始跟进。' : '保存后用于当前任务，人工接管的会话保持接管。'}</p><button className="button secondary" disabled={mutationBlocked || !policyReady || !policyDirty || Boolean(settingsError)} aria-describedby={`${prefix}-policy-status`}>{busy === 'chatSettings' ? <Loader2 size={14} className="spin" /> : <Check size={14} />}{busy === 'chatSettings' ? '正在保存' : '保存设置'}</button></div>

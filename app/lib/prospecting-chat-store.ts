@@ -16,12 +16,16 @@ function publicMessage(r:MessageRow):ProspectChatMessage{const status=r.job_stat
 const publicPool=(r:PoolRow):ProspectCapturedLead=>({id:r.id,conversationId:r.conversation_id,nickname:r.nickname,contactType:r.contact_type,contactValue:r.contact_value,grade:r.grade,score:r.score,reason:r.reason,assignedMemberId:r.assigned_member_id,assignedName:r.assigned_name,status:r.status,updatedAt:r.updated_at});
 const capturedContactSql="EXISTS (SELECT 1 FROM workbench_prospect_lead_pool captured WHERE captured.owner_id=c.owner_id AND captured.conversation_id=c.id) AS contact_captured";
 const lastSyncedSql="(SELECT json_extract(synced.result_json,'$.observedAt') FROM workbench_prospect_jobs synced WHERE synced.owner_id=c.owner_id AND synced.member_id=c.member_id AND synced.sender_id=c.sender_id AND synced.kind='readConversation' AND synced.status='done' AND json_extract(synced.input_json,'$.conversationId')=c.id AND json_extract(synced.result_json,'$.reliable')=1 ORDER BY json_extract(synced.result_json,'$.observedAt') DESC LIMIT 1) AS last_synced_at";
+const technicalReadReasons=['会话读取尚不可靠，已暂停自动回复','会话读取尚不可靠，已暂停自动回复；请稍后重新同步，核实消息后再继续。','会话读取失败，已转交销售','会话面板未打开或需要人工操作，未发送。','会话已恢复同步，可继续人工回复'];
+const isTechnicalReadPause=(reason:string|null)=>!!reason&&(technicalReadReasons.includes(reason)||reason.startsWith('会话同步暂时失败：'));
 const replaceableReadHandoffSql="(handoff_reason IS NULL OR handoff_reason='' OR handoff_reason IN ('会话读取尚不可靠，已暂停自动回复','会话读取尚不可靠，已暂停自动回复；请稍后重新同步，核实消息后再继续。','会话读取失败，已转交销售','会话面板未打开或需要人工操作，未发送。','会话已恢复同步，可继续人工回复') OR handoff_reason LIKE '会话同步暂时失败：%')";
+const recoverableReadPauseSql=`status='active' AND handoff_reason IS NOT NULL AND ${replaceableReadHandoffSql} AND NOT EXISTS (SELECT 1 FROM workbench_prospect_jobs uncertain WHERE uncertain.owner_id=workbench_prospect_conversations.owner_id AND uncertain.sender_id=workbench_prospect_conversations.sender_id AND uncertain.kind IN ('send','reply') AND uncertain.status='unknown' AND json_extract(uncertain.input_json,'$.recipientId')=workbench_prospect_conversations.recipient_id)`;
 const messageSelect='SELECT m.*,m.rowid AS row_order,j.status AS job_status,j.error AS job_error FROM workbench_prospect_messages m LEFT JOIN workbench_prospect_jobs j ON j.id=m.job_id';
 const sendText=(value:unknown)=>{if(typeof value!=='string'||!value.trim()||value.length>1000||/[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(value))throw new DomainError('回复内容需为1至1000个字符');return value;};
 const MANUAL_SYNC_INTERVAL_MS=8000;
 // Kept out of the eligible=1 processing queue until a reliable read confirms it.
 const UNVERIFIED_STOP=-1;
+const UNVERIFIED_AUTO_INBOUND=-2;
 export const isProspectChatJob=(kind:string)=>kind==='readConversation'||kind==='reply';
 
 /** These predicates run inside the atomic lease write, so two campaigns share one quota. */
@@ -29,9 +33,13 @@ export function prospectReplyPolicyGate(job:string,campaign:string,nowMs:number,
  const dayStart=new Date(Math.floor((nowMs+8*3600000)/86400000)*86400000-8*3600000).toISOString();
  const clock=new Date(nowMs+8*3600000).toISOString().slice(11,16);
  const started=renew?` AND counted.id!=${job}.id`:'';
+ const rawStart=`json_extract(${campaign}.data_json,'$.chatPolicy.workStart')`,rawEnd=`json_extract(${campaign}.data_json,'$.chatPolicy.workEnd')`;
+ const validHours=`COALESCE((${rawStart} GLOB '[0-2][0-9]:[0-5][0-9]' AND ${rawStart}<'24:00' AND ${rawEnd} GLOB '[0-2][0-9]:[0-5][0-9]' AND ${rawEnd}<'24:00' AND ${rawStart}<${rawEnd}),0)`;
+ const hoursEnabled=`CASE WHEN json_type(${campaign}.data_json,'$.chatPolicy.replyHoursEnabled') IN ('true','false') THEN json_extract(${campaign}.data_json,'$.chatPolicy.replyHoursEnabled') ELSE (${validHours} AND (${rawStart}!='08:30' OR ${rawEnd}!='21:30')) END`;
+ const workStart=`CASE WHEN ${validHours} THEN ${rawStart} ELSE '08:30' END`,workEnd=`CASE WHEN ${validHours} THEN ${rawEnd} ELSE '21:30' END`;
  return {sql:`(${job}.kind!='reply' OR json_extract(${job}.input_json,'$.actor')='human' OR (
   COALESCE(json_extract(${job}.input_json,'$.policyVersion'),0)=COALESCE(json_extract(${campaign}.data_json,'$.chatPolicyVersion'),0)
-  AND ?>=COALESCE(json_extract(${campaign}.data_json,'$.chatPolicy.workStart'),'08:30') AND ?<COALESCE(json_extract(${campaign}.data_json,'$.chatPolicy.workEnd'),'21:30')
+  AND (${hoursEnabled}=0 OR (?>=${workStart} AND ?<${workEnd}))
   AND (SELECT COUNT(*) FROM workbench_prospect_jobs counted WHERE counted.owner_id=${job}.owner_id AND counted.sender_id=${job}.sender_id AND counted.kind='reply' AND counted.started_at>=?${started})<COALESCE(json_extract(${campaign}.data_json,'$.chatPolicy.replyDailyLimit'),30)
   AND (SELECT COUNT(*) FROM workbench_prospect_jobs counted WHERE counted.owner_id=${job}.owner_id AND counted.sender_id=${job}.sender_id AND counted.kind='reply' AND json_extract(counted.input_json,'$.conversationId')=json_extract(${job}.input_json,'$.conversationId') AND counted.started_at>?${started})<COALESCE(json_extract(${campaign}.data_json,'$.chatPolicy.conversationReplyLimit'),12)))`,values:[clock,clock,dayStart,new Date(nowMs-86400000).toISOString()]};
 }
@@ -76,7 +84,7 @@ export function createProspectingChatStore(db:D1Database,now:()=>number=Date.now
  }
  async function settings(ownerId:string,memberId:string,campaignId:string,enabled:boolean,policyValue?:unknown){
   const previous=await campaign(ownerId,memberId,campaignId);if(typeof enabled!=='boolean')throw new DomainError('会话开关参数无效');const time=stamp();
-  if(policyValue!==undefined){const supplied=object(policyValue);if(!policyValue||typeof policyValue!=='object'||Array.isArray(policyValue)||!Array.isArray(supplied.libraryIds)||supplied.libraryIds.length>20||supplied.libraryIds.some(id=>typeof id!=='string'||!id.trim()||id.length>160)||!Number.isInteger(supplied.replyDailyLimit)||Number(supplied.replyDailyLimit)<1||Number(supplied.replyDailyLimit)>80||!Number.isInteger(supplied.conversationReplyLimit)||Number(supplied.conversationReplyLimit)<1||Number(supplied.conversationReplyLimit)>30||typeof supplied.workStart!=='string'||typeof supplied.workEnd!=='string'||!/^([01]\d|2[0-3]):[0-5]\d$/.test(supplied.workStart)||!/^([01]\d|2[0-3]):[0-5]\d$/.test(supplied.workEnd)||supplied.workStart>=supplied.workEnd)throw new DomainError('会话策略参数无效，请检查回复上限和工作时间');}
+  if(policyValue!==undefined){const supplied=object(policyValue);if(supplied.replyHoursEnabled!==undefined&&typeof supplied.replyHoursEnabled!=='boolean'||!policyValue||typeof policyValue!=='object'||Array.isArray(policyValue)||!Array.isArray(supplied.libraryIds)||supplied.libraryIds.length>20||supplied.libraryIds.some(id=>typeof id!=='string'||!id.trim()||id.length>160)||!Number.isInteger(supplied.replyDailyLimit)||Number(supplied.replyDailyLimit)<1||Number(supplied.replyDailyLimit)>80||!Number.isInteger(supplied.conversationReplyLimit)||Number(supplied.conversationReplyLimit)<1||Number(supplied.conversationReplyLimit)>30||typeof supplied.workStart!=='string'||typeof supplied.workEnd!=='string'||!/^([01]\d|2[0-3]):[0-5]\d$/.test(supplied.workStart)||!/^([01]\d|2[0-3]):[0-5]\d$/.test(supplied.workEnd)||supplied.workStart>=supplied.workEnd)throw new DomainError('会话策略参数无效，请检查回复上限和工作时间');}
   const suppliedPolicy=policyValue===undefined?undefined:normalizeChatPolicy(policyValue);
   const policy=suppliedPolicy&&JSON.stringify(suppliedPolicy)!==JSON.stringify(normalizeChatPolicy(object(JSON.parse(previous.data_json)).chatPolicy))?suppliedPolicy:undefined;
   if(policy?.libraryIds.length){const allowed=await db.prepare(`SELECT COUNT(*) AS total FROM workbench_knowledge_libraries WHERE owner_id=? AND id IN (${policy.libraryIds.map(()=>'?').join(',')})`).bind(ownerId,...policy.libraryIds).first<{total:number}>();if(allowed?.total!==policy.libraryIds.length)throw new DomainError('只能选择当前工作空间管理的知识库',403);}
@@ -191,21 +199,26 @@ export function createProspectingChatStore(db:D1Database,now:()=>number=Date.now
   if(row.kind==='reply'){
    const value=object(result);if(!error&&!['submitted','failed','unknown'].includes(String(value.outcome)))throw new DomainError('会话回复结果格式不正确');const status=error?'unknown':value.outcome==='submitted'?'done':String(value.outcome),problem=safeProspectError(error||value.error);
    const metadata=row.result_json?object(JSON.parse(row.result_json)):{};
+   const retryable=status==='failed'&&!error&&value.retryable===true&&value.errorCode==='ACCOUNT_VERIFICATION_PENDING';
+   const technicalProblem=retryable?`会话同步暂时失败：${problem||'暂未核实当前账号'}；请稍后重新同步，核实消息后再继续。`:problem||'回复未能确认，已转交销售';
    await db.batch([
+    ...(status==='done'&&input.actor==='human'?[db.prepare(`UPDATE workbench_prospect_messages SET processed=1 WHERE conversation_id=? AND direction='inbound' AND rowid<(SELECT rowid FROM workbench_prospect_messages WHERE job_id=? LIMIT 1) AND EXISTS (${guard})`).bind(c.id,row.id,...values)]:[]),
     db.prepare(`UPDATE workbench_prospect_messages SET status=?,error=? WHERE job_id=? AND EXISTS (${guard})`).bind(status==='done'?'sent':status,problem||null,row.id,...values),
-    db.prepare(`UPDATE workbench_prospect_conversations SET memory_json=CASE WHEN ?='done' OR status='closed' THEN memory_json ELSE json_set(memory_json,'$.stage','handoff') END,mode=CASE WHEN ?='done' THEN mode ELSE 'human' END,handoff_reason=CASE WHEN ?='done' THEN handoff_reason ELSE ? END,last_message_at=CASE WHEN ?='done' THEN ? ELSE last_message_at END,last_message_preview=CASE WHEN ?='done' THEN ? ELSE last_message_preview END,version=version+1,updated_at=? WHERE id=? AND EXISTS (${guard})`).bind(status,status,status,problem||'回复未能确认，已转交销售',status,time,status,text(input.message,200),time,c.id,...values),
-    db.prepare("UPDATE workbench_prospect_jobs SET status=?,result_json=?,error=?,active_key=NULL,updated_at=? WHERE id=? AND status='running' AND lease_hash=?").bind(status,JSON.stringify({...metadata,outcome:status==='done'?'submitted':status,summary:status==='done'?'会话回复已提交，未验证送达':status==='unknown'?'会话回复结果待确认':'会话回复未提交',evidence:text(value.evidence,500)}),problem||null,time,...values),
+    db.prepare(`UPDATE workbench_prospect_conversations SET memory_json=CASE WHEN ?='done' OR status='closed' THEN memory_json ELSE json_set(memory_json,'$.stage','handoff') END,mode=CASE WHEN ?='done' OR ?=1 THEN mode ELSE 'human' END,last_snapshot_id=CASE WHEN ?=1 THEN NULL ELSE last_snapshot_id END,processing_token=NULL,processing_until=NULL,handoff_reason=CASE WHEN ?='done' THEN handoff_reason WHEN ?=1 AND NOT ${replaceableReadHandoffSql} THEN handoff_reason ELSE ? END,last_message_at=CASE WHEN ?='done' THEN ? ELSE last_message_at END,last_message_preview=CASE WHEN ?='done' THEN ? ELSE last_message_preview END,version=version+1,updated_at=? WHERE id=? AND EXISTS (${guard})`).bind(status,status,retryable?1:0,retryable?1:0,status,retryable?1:0,technicalProblem,status,time,status,text(input.message,200),time,c.id,...values),
+    db.prepare("UPDATE workbench_prospect_jobs SET status=?,result_json=?,error=?,active_key=NULL,updated_at=? WHERE id=? AND status='running' AND lease_hash=?").bind(status,JSON.stringify({...metadata,...(retryable?{retryable:true,errorCode:'ACCOUNT_VERIFICATION_PENDING'}:{}),outcome:status==='done'?'submitted':status,summary:status==='done'?'会话回复已提交，未验证送达':status==='unknown'?'会话回复结果待确认':'会话回复未提交',evidence:text(value.evidence,500)}),problem||null,time,...values),
    ]);return;
   }
   const task=await campaign(row.owner_id,row.member_id,c.campaign_id);
   const automatic=task.status==='active'&&object(JSON.parse(task.data_json)).chatEnabled===true&&input.observeOnly!==true;
   if(error){await db.batch([
-   ...(automatic?[db.prepare(`UPDATE workbench_prospect_conversations SET mode='human',handoff_reason=CASE WHEN ${replaceableReadHandoffSql} THEN ? ELSE handoff_reason END,version=version+1,processing_token=NULL,processing_until=NULL,updated_at=? WHERE id=? AND EXISTS (${guard})`).bind(`会话同步暂时失败：${safeProspectError(error)||'暂未取得可核实消息'}；请稍后重新同步，核实消息后再继续。`,time,c.id,...values)]:[]),
+   ...(automatic?[...cancelQueued(c.id,guard,values),db.prepare(`UPDATE workbench_prospect_conversations SET last_snapshot_id=NULL,handoff_reason=CASE WHEN ${replaceableReadHandoffSql} THEN ? ELSE handoff_reason END,version=version+1,processing_token=NULL,processing_until=NULL,updated_at=? WHERE id=? AND EXISTS (${guard})`).bind(`会话同步暂时失败：${safeProspectError(error)||'暂未取得可核实消息'}；请稍后重新同步，核实消息后再继续。`,time,c.id,...values)]:[]),
    db.prepare("UPDATE workbench_prospect_jobs SET status='failed',error=?,active_key=NULL,updated_at=? WHERE id=? AND status='running' AND lease_hash=?").bind(safeProspectError(error),time,...values),
   ]);return;}
   const read=normalizeRead(row,result);if(c.last_read_at&&read.observedAt<c.last_read_at)throw new DomainError('会话读取结果已过期',409);
-  const existing=(await db.prepare('SELECT m.*,j.status AS job_status,j.started_at AS job_started_at FROM workbench_prospect_messages m LEFT JOIN workbench_prospect_jobs j ON j.id=m.job_id WHERE m.conversation_id=? ORDER BY m.created_at,m.rowid').bind(c.id).all<MessageRow>()).results;const bySource=new Map(existing.map(m=>[m.source_key,m]));
+  const existing=(await db.prepare('SELECT m.*,m.rowid AS row_order,j.status AS job_status,j.started_at AS job_started_at FROM workbench_prospect_messages m LEFT JOIN workbench_prospect_jobs j ON j.id=m.job_id WHERE m.conversation_id=? ORDER BY m.created_at,m.rowid').bind(c.id).all<MessageRow>()).results;const bySource=new Map(existing.map(m=>[m.source_key,m]));
   const statements:D1PreparedStatement[]=[];
+  const unresolved=!!await db.prepare("SELECT 1 FROM workbench_prospect_jobs WHERE owner_id=? AND sender_id=? AND kind IN ('send','reply') AND status='unknown' AND json_extract(input_json,'$.recipientId')=? LIMIT 1").bind(c.owner_id,c.sender_id,c.recipient_id).first();
+  const recovering=c.status==='active'&&automatic&&read.reliable&&isTechnicalReadPause(c.handoff_reason)&&!unresolved;
   const greeting=existing.find(m=>m.source_key.startsWith('greeting:'));
   const anchors=greeting?read.messages.flatMap((m,index)=>m.direction==='outbound'&&m.text===greeting.text?[index]:[]):[];
   const anchor=anchors.length===1?anchors[0]:-1;
@@ -213,25 +226,36 @@ export function createProspectingChatStore(db:D1Database,now:()=>number=Date.now
   for(const [index,m] of read.messages.entries()){if(m.direction==='outbound')precedingOutbound=m.text;const previous=bySource.get(m.id);
    if(previous&&(previous.direction!==m.direction||previous.text!==m.text))throw new DomainError('已记录消息的身份或正文发生变化，请重新同步',409);
    const stopped=isChatOptOut(m.text,precedingOutbound),postedAt=m.postedAt??previous?.posted_at;
-   const fresh=postedAt?Date.parse(postedAt)>=Date.parse(c.opened_at):anchor>=0&&index>anchor||Boolean(previous?previous.eligible===1||previous.eligible===UNVERIFIED_STOP:c.has_baseline);
+   const fresh=postedAt?Date.parse(postedAt)>=Date.parse(c.opened_at):anchor>=0&&index>anchor||Boolean(previous?previous.eligible===1||previous.eligible===UNVERIFIED_STOP||previous.eligible===UNVERIFIED_AUTO_INBOUND:c.has_baseline);
    const eligible=(automatic||stopped)&&read.reliable&&m.direction==='inbound'&&fresh;
    // A previously unreliable observation must not permanently hide a later
    // verified stop. Other existing messages keep their original replay gates.
    if(eligible&&stopped)stopObserved=true;
-   if(previous)continue;
+   if(previous){
+    if(eligible&&previous.eligible===UNVERIFIED_AUTO_INBOUND)statements.push(db.prepare(`UPDATE workbench_prospect_messages SET eligible=1 WHERE id=? AND eligible=? AND processed=0 AND EXISTS (${guard})`).bind(previous.id,UNVERIFIED_AUTO_INBOUND,...values));
+    continue;
+   }
    const localMatches=m.direction==='outbound'?existing.filter(local=>local.direction==='outbound'&&local.text===m.text&&(local.source_key.startsWith('reply:')||local.source_key.startsWith('greeting:'))&&((local.status==='sent'||local.job_status==='done')&&(!m.postedAt||Math.abs(Date.parse(m.postedAt)-Date.parse(local.created_at))<300000)||local.job_status==='unknown'&&m.postedAt&&local.job_started_at&&Date.parse(m.postedAt)>=Date.parse(local.job_started_at))):[];
    if(localMatches.length===1&&read.messages.filter(other=>other.direction==='outbound'&&other.text===m.text).length===1){const local=localMatches[0];statements.push(db.prepare(`UPDATE workbench_prospect_messages SET source_key=?,posted_at=COALESCE(?,posted_at),status='sent' WHERE id=? AND EXISTS (${guard})`).bind(m.id,m.postedAt??null,local.id,...values));continue;}
    const id=`pcm-${(await prospectHash(`${c.id}\0${m.id}`)).slice(0,32)}`;
-   const eligibility=eligible?1:stopped&&!read.reliable&&m.direction==='inbound'&&fresh?UNVERIFIED_STOP:0;
+   const eligibility=eligible?1:!read.reliable&&m.direction==='inbound'&&fresh?(stopped?UNVERIFIED_STOP:automatic?UNVERIFIED_AUTO_INBOUND:0):0;
    statements.push(db.prepare(`INSERT INTO workbench_prospect_messages(id,conversation_id,owner_id,member_id,source_key,direction,actor,text,status,posted_at,created_at,eligible) SELECT ?,?,?,?,?,?,?,?,'received',?,?,? WHERE EXISTS (${guard}) ON CONFLICT(conversation_id,source_key) DO NOTHING`).bind(id,c.id,c.owner_id,c.member_id,m.id,m.direction,m.direction==='inbound'?'customer':'human',m.text,m.postedAt??null,read.observedAt,eligibility,...values));
   }
   const changed=read.snapshotId!==c.last_snapshot_id;const last=read.messages.at(-1);
-  if(changed)statements.push(...cancelQueued(c.id,guard,values));
+  if(changed||!read.reliable)statements.push(...cancelQueued(c.id,guard,values));
   // Matching outgoing evidence resolves an ambiguous reply without another send.
   if(read.reliable)for(const m of read.messages.filter(m=>m.direction==='outbound'&&!bySource.has(m.id)&&m.postedAt)){
    statements.push(db.prepare(`UPDATE workbench_prospect_jobs SET status='done',result_json=json_set(COALESCE(result_json,'{}'),'$.outcome','submitted','$.summary','后续会话同步已观察到相同外发消息'),error=NULL,active_key=NULL,updated_at=? WHERE kind='reply' AND status='unknown' AND json_extract(input_json,'$.conversationId')=? AND json_extract(input_json,'$.message')=? AND started_at<=? AND EXISTS (${guard})`).bind(time,c.id,m.text,m.postedAt!,...values));
   }
-  statements.push(db.prepare(`UPDATE workbench_prospect_conversations SET last_read_at=CASE WHEN ?=1 THEN ? ELSE last_read_at END,last_snapshot_id=?,has_baseline=CASE WHEN ?=1 THEN 1 ELSE has_baseline END,last_message_at=?,last_message_preview=?,mode=CASE WHEN ?=1 THEN 'human' ELSE mode END,handoff_reason=CASE WHEN ?=1 AND ${replaceableReadHandoffSql} THEN '会话读取尚不可靠，已暂停自动回复；请稍后重新同步，核实消息后再继续。' WHEN ?=1 AND ${replaceableReadHandoffSql} AND handoff_reason IS NOT NULL THEN '会话已恢复同步，可继续人工回复' ELSE handoff_reason END,version=version+?,processing_token=CASE WHEN ?=1 THEN NULL ELSE processing_token END,processing_until=CASE WHEN ?=1 THEN NULL ELSE processing_until END,updated_at=? WHERE id=? AND EXISTS (${guard})`).bind(read.reliable?1:0,read.observedAt,read.reliable||read.covered===true?read.snapshotId:null,read.reliable?1:0,last?.postedAt??(last?read.observedAt:c.last_message_at),last?text(last.text,200):c.last_message_preview,automatic&&!read.reliable?1:0,automatic&&!read.reliable?1:0,read.reliable?1:0,changed?1:0,changed?1:0,changed?1:0,time,c.id,...values));
+  if(recovering){
+   const latest=existing.filter(m=>m.direction==='inbound'&&m.eligible===1).at(-1);
+   const confirmedOut=existing.filter(m=>m.direction==='outbound'&&(m.status==='sent'||m.job_status==='done'||!m.job_id&&m.status==='received'&&c.last_read_at&&m.created_at<=c.last_read_at)).at(-1);
+   const index=latest?read.messages.findIndex(m=>m.id===latest.source_key):-1;
+   const newerOutgoingInRead=index>=0&&read.messages.slice(index+1).some(m=>m.direction==='outbound');
+   const unanswered=index>=0&&latest&&latest.processed===1&&(!confirmedOut||(latest.row_order??0)>(confirmedOut.row_order??0))&&!newerOutgoingInRead;
+   if(unanswered)statements.push(db.prepare(`UPDATE workbench_prospect_messages SET processed=0 WHERE id=? AND EXISTS (${guard}) AND EXISTS (SELECT 1 FROM workbench_prospect_conversations WHERE id=? AND version=? AND ${recoverableReadPauseSql})`).bind(latest.id,...values,c.id,c.version));
+  }
+  statements.push(db.prepare(`UPDATE workbench_prospect_conversations SET last_read_at=CASE WHEN ?=1 THEN ? ELSE last_read_at END,last_snapshot_id=?,has_baseline=CASE WHEN ?=1 THEN 1 ELSE has_baseline END,last_message_at=?,last_message_preview=?,mode=CASE WHEN ?=1 AND ${recoverableReadPauseSql} THEN 'agent' ELSE mode END,handoff_reason=CASE WHEN ?=1 AND ${replaceableReadHandoffSql} THEN '会话读取尚不可靠，已暂停自动回复；请稍后重新同步，核实消息后再继续。' WHEN ?=1 AND ${recoverableReadPauseSql} THEN NULL ELSE handoff_reason END,version=version+?,processing_token=CASE WHEN ?=1 THEN NULL ELSE processing_token END,processing_until=CASE WHEN ?=1 THEN NULL ELSE processing_until END,updated_at=? WHERE id=? AND EXISTS (${guard})`).bind(read.reliable?1:0,read.observedAt,read.reliable||read.covered===true?read.snapshotId:null,read.reliable?1:0,last?.postedAt??(last?read.observedAt:c.last_message_at),last?text(last.text,200):c.last_message_preview,recovering?1:0,automatic&&!read.reliable?1:0,recovering?1:0,changed||!read.reliable?1:0,changed||!read.reliable?1:0,changed||!read.reliable?1:0,time,c.id,...values));
   if(stopObserved){const memory=normalizeChatMemory(c.memory_json),reason='客户明确要求停止联系';
    statements.push(...closeStatements(c,reason,memory,guard,values));
    statements.push(db.prepare(`UPDATE workbench_prospect_conversations SET status='closed',close_reason=?,memory_json=?,processing_token=NULL,processing_until=NULL,version=version+1,updated_at=? WHERE id=? AND EXISTS (${guard})`).bind(reason,JSON.stringify(memory),time,c.id,...values));
@@ -276,6 +300,7 @@ export function createProspectingChatStore(db:D1Database,now:()=>number=Date.now
   for(const candidate of candidates){
    const stop=(JSON.parse(candidate.pending_json) as string[]).some(value=>isChatOptOut(value,candidate.last_outbound??'')),data=object(JSON.parse(candidate.campaign_json)),policy=normalizeChatPolicy(data.chatPolicy);
    if(!stop&&stopOnly)continue;
+   if(!stop&&(!candidate.last_snapshot_id||isTechnicalReadPause(candidate.handoff_reason)))continue;
    if(!stop&&(candidate.campaign_status!=='active'||data.chatEnabled!==true||candidate.has_reply||!withinChatHours(now(),policy)||candidate.day_count>=policy.replyDailyLimit||candidate.conversation_count>=policy.conversationReplyLimit))continue;
    c=await db.prepare("UPDATE workbench_prospect_conversations SET processing_token=?,processing_until=? WHERE id=? AND version=? AND status='active' AND (processing_token IS NULL OR processing_until<=?) RETURNING *").bind(token,new Date(now()+60000).toISOString(),candidate.id,candidate.version,time).first<ConversationRow>();
    if(c){c.contact_captured=candidate.contact_captured;stopRequested=stop;break;}
@@ -293,7 +318,7 @@ export function createProspectingChatStore(db:D1Database,now:()=>number=Date.now
   const captured=await captureStatement(c,pending,decision,guard,values);if(captured)statements.push(captured);
   let replyJobId:string|undefined;
   if(!decision.close&&!unresolved&&decision.action==='reply'&&c.mode==='agent'&&task.status==='active'&&campaignData.chatEnabled===true&&c.last_snapshot_id){try{const d=await ready(c);const queued=replyStatements(c,d,decision.reply!,'agent',guard,values,{evidenceIds:decision.evidenceIds?.filter(id=>typeof id==='string').slice(0,20),decisionReason:text(decision.reason,500)},Number(campaignData.chatPolicyVersion)||0);replyJobId=queued.jobId;statements.push(...queued.statements);}catch(error){decision={...decision,action:'handoff',reason:error instanceof DomainError?error.message:'回复未能可靠排队，请核对助手连接与原会话后人工跟进。'};}}
-  statements.push(db.prepare(`UPDATE workbench_prospect_messages SET processed=1 WHERE conversation_id=? AND direction='inbound' AND eligible=1 AND processed=0 AND rowid<=? AND EXISTS (${guard})`).bind(c.id,inbound.row_order,...values));
+  if(c.mode==='agent'||decision.close)statements.push(db.prepare(`UPDATE workbench_prospect_messages SET processed=1 WHERE conversation_id=? AND direction='inbound' AND eligible=1 AND processed=0 AND rowid<=? AND EXISTS (${guard})`).bind(c.id,inbound.row_order,...values));
   const memory=normalizeChatMemory(decision.memory??JSON.parse(c.memory_json||'{}'));
   if(decision.close)statements.push(...closeStatements(c,text(safeProspectError(decision.reason),500)||'客户要求停止联系',memory,guard,values));
   const handoff=decision.action==='handoff'||unresolved;if(handoff&&!decision.close)memory.stage='handoff';if(captured||c.contact_captured)memory.contactCaptured=true;if(unresolved)decision.reason='上一条回复结果待确认，已保留人工接管';

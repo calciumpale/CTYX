@@ -433,7 +433,9 @@ export async function runOnce(rawConfig, { adapter, journal, fetchImpl = fetch, 
     };
     else if (error?.code === 'UNAUTHENTICATED') accountFailure = { authenticated: false };
     else if (error?.code === 'ACCOUNT_CHANGED') changedAccountError = error;
-    await journal.finish(job.id, outbound(job.kind) ? { result: { outcome: entry.dispatchedAt ? 'unknown' : 'failed', error: entry.dispatchedAt ? '发送动作已开始，但结果无法确认。请核对原会话；不会重发。' : safeError(error) } } : { error: safeError(error) });
+    const retryableReply = job.kind === 'reply' && !entry.dispatchedAt && error?.code === 'ACCOUNT_VERIFICATION_PENDING';
+    await journal.finish(job.id, outbound(job.kind) ? { result: { outcome: entry.dispatchedAt ? 'unknown' : 'failed', error: entry.dispatchedAt ? '发送动作已开始，但结果无法确认。请核对原会话；不会重发。' : safeError(error),
+      ...(retryableReply ? { retryable: true, errorCode: 'ACCOUNT_VERIFICATION_PENDING' } : {}) } } : { error: safeError(error) });
   } finally {
     clearInterval(heartbeat); clearTimeout(timer); signal?.removeEventListener('abort', abort); if (heartbeatInFlight) await heartbeatInFlight;
   }

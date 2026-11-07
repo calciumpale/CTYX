@@ -11,6 +11,68 @@ const input=(text:string):ProspectChatAgentInput=>({
 });
 const source={id:'approved-1',title:'预约看铺',content:'可预约工作日下午看铺，具体时间由专员确认。'};
 
+test('area questions without exact inventory facts clarify the required area instead of handing off',async()=>{
+  const cases=[
+    {},
+    {generate:async()=>' {"action":"handoff","reasonCode":"missing_knowledge"} '},
+    {generate:async()=>' {"action":"handoff","reasonCode":"human_confirmation"} '},
+    {generate:async()=>' {"action":"handoff"} '},
+    {generate:async()=>' {"action":"reply","reply":"现在有100到300平的空铺。","evidenceIds":[]} '},
+    {retrieve:async()=>{throw new Error('private retrieval error');},generate:async()=>'{}'},
+  ];
+  for(const tools of cases){
+    const result=await chooseProspectChatAction(input('你们有多大面积的铺位？'),tools);
+    assert.equal(result.action,'reply');
+    assert.match(result.reply??'',/您.*(?:需要|想要).*面积/);
+    assert.doesNotMatch(result.reply??'',/\d|空铺|人工|专员|内部|private/);
+    assert.deepEqual(result.evidenceIds,[]);
+    assert.notEqual(result.memory?.stage,'handoff');
+  }
+});
+
+test('an 80 to 100 square metre availability question records the need and continues discovery',async()=>{
+  for(const reasonCode of ['missing_knowledge','human_confirmation',undefined]){
+  const result=await chooseProspectChatAction(input('80-100平的空铺有吗？'),{
+    generate:async()=>JSON.stringify({action:'handoff',reasonCode}),
+  });
+  assert.equal(result.action,'reply');
+  assert.equal(result.memory?.needs.area,'80-100平');
+  assert.match(result.reply??'',/您.*(?:经营|业态)/);
+  assert.doesNotMatch(result.reply??'',/有空铺|还有空铺|可租|随时|人工|专员/);
+  assert.deepEqual(result.evidenceIds,[]);
+  }
+});
+
+test('ordinary clarification does not override identity or privacy handoffs',async()=>{
+  for(const question of ['能否修改账号实名认证信息？','在哪里删除个人隐私信息？']){
+    for(const reasonCode of ['human_confirmation','missing_knowledge']){
+      const result=await chooseProspectChatAction(input(question),{generate:async()=>JSON.stringify({action:'handoff',reasonCode})});
+      assert.equal(result.action,'handoff');
+      assert.match(result.reason??'',/隐私|账号|身份/);
+    }
+  }
+});
+
+test('an approved area fact can be followed by one qualifying question',async()=>{
+  const result=await chooseProspectChatAction(input('你们有哪些面积？'),{
+    retrieve:async()=>[{id:'area',title:'可租面积',content:'可租面积为100至300平，具体空置情况需确认。'}],
+    generate:async()=>' {"action":"reply","reply":"可租面积为100至300平，具体空置情况需确认。您大概需要多大面积？","evidenceIds":["area"]} ',
+  });
+  assert.equal(result.action,'reply');
+  assert.match(result.reply??'',/100至300平，具体空置情况需确认/);
+  assert.match(result.reply??'',/您大概需要多大面积/);
+  assert.deepEqual(result.evidenceIds,['area']);
+});
+
+test('a model can greet and ask one safe area question without factual evidence',async()=>{
+  const result=await chooseProspectChatAction(input('你好'),{
+    generate:async()=>' {"action":"reply","reply":"您好，您大概需要多大面积？","evidenceIds":[]} ',
+  });
+  assert.equal(result.action,'reply');
+  assert.match(result.reply??'',/您大概需要多大面积/);
+  assert.deepEqual(result.evidenceIds,[]);
+});
+
 test('retrieves approved material and retains evidence IDs for a factual response',async()=>{
   const result=await chooseProspectChatAction(input('什么时间可以看铺？'),{
     retrieve:async query=>{assert.match(query,/什么时间可以看铺/);return [source];},
@@ -51,16 +113,18 @@ test('handoffs explain the customer issue and a concrete next step without expos
   }
 });
 
-test('factual handoffs distinguish unavailable services from insufficient published material',async()=>{
-  const cases:[Parameters<typeof chooseProspectChatAction>[1],RegExp][]=[
-    [{generate:async()=>{throw new Error('provider secret');}},/AI.*暂.*请.*人工/],
-    [{retrieve:async()=>{throw new Error('retrieval secret');},generate:async()=>'{"action":"handoff"}'},/资料检索.*暂.*请.*核实/],
-    [{retrieve:async()=>[],generate:async()=>'{"action":"reply","reply":"地址待确认","evidenceIds":[]}'},/现有资料.*无法确认.*请.*核实/],
+test('ordinary factual questions keep qualifying when services or published material are unavailable',async()=>{
+  const cases:Parameters<typeof chooseProspectChatAction>[1][]=[
+    {generate:async()=>{throw new Error('provider secret');}},
+    {retrieve:async()=>{throw new Error('retrieval secret');},generate:async()=>'{"action":"handoff"}'},
+    {retrieve:async()=>[],generate:async()=>'{"action":"reply","reply":"地址待确认","evidenceIds":[]}'},
   ];
-  for(const [tools,why] of cases){
+  for(const tools of cases){
     const result=await chooseProspectChatAction(input('具体地址在哪里？'),tools);
-    assert.equal(result.action,'handoff');
-    assert.match(result.reason??'',why);
+    assert.equal(result.action,'reply');
+    assert.match(result.reply??'',/您希望在哪个城市或区域/);
+    assert.notEqual(result.memory?.stage,'handoff');
+    assert.deepEqual(result.evidenceIds,[]);
     assert.doesNotMatch(result.reason??'',/secret|provider/);
   }
 });
@@ -94,14 +158,14 @@ test('captures only customer-provided contact details and excludes opt-outs',asy
   assert.equal((await chooseProspectChatAction(input('这个单号 13812345678'),{})).lead,undefined);
 });
 
-test('hands unsupported facts and invalid citations to a human while contact acknowledgements degrade safely',async()=>{
+test('discards unsupported facts and invalid citations while keeping ordinary reception active',async()=>{
   assert.equal((await chooseProspectChatAction(input('店面在哪里？'),{
     generate:async()=>'{"action":"reply","reply":"就在海盐大道 100 号。","evidenceIds":[]}',
-  })).action,'handoff');
+  })).action,'reply');
   assert.equal((await chooseProspectChatAction(input('店面在哪里？'),{
     retrieve:async()=>[source],
     generate:async()=>'{"action":"reply","reply":"就在海盐大道 100 号。","evidenceIds":["fake"]}',
-  })).action,'handoff');
+  })).action,'reply');
   const result=await chooseProspectChatAction(input('本人电话 138-1234-5678'),{
     generate:async()=>{throw new Error('provider internals');},
   });
@@ -131,12 +195,14 @@ test('human takeover captures a contact without asking retrieval or model provid
   assert.equal(result.lead?.grade,'high');
 });
 
-test('rejects numerical claims when the cited source does not contain the number',async()=>{
+test('replaces unsupported numerical claims with a safe need question',async()=>{
   const result=await chooseProspectChatAction(input('什么时间可以看铺？'),{
     retrieve:async()=>[source],
     generate:async()=>'{"action":"reply","reply":"可以在 19:30 看铺。","evidenceIds":["approved-1"]}',
   });
-  assert.equal(result.action,'handoff');
+  assert.equal(result.action,'reply');
+  assert.doesNotMatch(result.reply??'',/19:30/);
+  assert.deepEqual(result.evidenceIds,[]);
 });
 
 test('a valid source ID does not authorize invented inventory or removal of a negation',async()=>{
@@ -145,7 +211,9 @@ test('a valid source ID does not authorize invented inventory or removal of a ne
       retrieve:async()=>[{id:'inventory',title:'当前库存',content:'目前没有空铺。预计到店看铺需提前预约。'}],
       generate:async()=>JSON.stringify({action:'reply',reply,evidenceIds:['inventory']}),
     });
-    assert.equal(result.action,'handoff');
+    assert.equal(result.action,'reply');
+    assert.doesNotMatch(result.reply??'',/有空铺|多间|全部临街|独立卫生间/);
+    assert.deepEqual(result.evidenceIds,[]);
   }
 });
 
@@ -248,8 +316,10 @@ test('overlong factual replies are rejected intact rather than dropping source q
   const content='可预约工作日下午看铺，需由专员先确认具体日期和现场接待安排，且仅限客户提前完成登记并收到有效确认通知的情况，临时到访无法保证接待。';
   assert.ok(content.length>60);
   const result=await chooseProspectChatAction(input('什么时间可以看铺？'),{retrieve:async()=>[{id:'long',title:'看场',content}],generate:async()=>JSON.stringify({action:'reply',reply:content,evidenceIds:['long']})});
-  assert.equal(result.action,'handoff');
-  assert.equal(result.reply,undefined);
+  assert.equal(result.action,'reply');
+  assert.ok((result.reply?.length??999)<=60);
+  assert.doesNotMatch(result.reply??'',/工作日下午|临时到访|保证接待/);
+  assert.deepEqual(result.evidenceIds,[]);
 });
 
 test('human mode persists explicit needs but never sends automated questions',async()=>{
@@ -261,10 +331,11 @@ test('human mode persists explicit needs but never sends automated questions',as
   assert.equal(result.memory?.needs.area,'80平');
 });
 
-test('unsupported factual questions still transfer when the same turn supplies a contact',async()=>{
+test('ordinary factual questions continue reception when the same turn supplies a contact',async()=>{
   const result=await chooseProspectChatAction(input('店面地址在哪里？本人电话13812345678'),{});
-  assert.equal(result.action,'handoff');
-  assert.equal(result.memory?.stage,'handoff');
+  assert.equal(result.action,'reply');
+  assert.notEqual(result.memory?.stage,'handoff');
+  assert.match(result.reply??'',/城市或区域/);
   assert.equal(result.lead?.contactValue,'13812345678');
 });
 

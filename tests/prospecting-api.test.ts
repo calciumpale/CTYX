@@ -245,7 +245,7 @@ test('chat API opt-in, capability, transcript and manual reply share the authent
 test('chat settings API validates and persists an owner-scoped reply policy independently of greeting limits',async t=>{
  const f=fixture();t.after(()=>f.sqlite.close());const campaignId=await create(f);
  f.sqlite.prepare('INSERT INTO workbench_knowledge_libraries(id,owner_id,name,created_at) VALUES (?,?,?,?),(?,?,?,?)').run('api-library','owner-a','招商资料','2026-11-07','api-private','owner-b','其他租户','2026-11-07');
- const policy={libraryIds:['api-library'],replyDailyLimit:7,conversationReplyLimit:3,workStart:'09:15',workEnd:'20:45'};
+ const policy={libraryIds:['api-library'],replyDailyLimit:7,conversationReplyLimit:3,workStart:'09:15',workEnd:'20:45',replyHoursEnabled:true};
  await body(await f.business(actors.sales,{action:'chatSettings',campaignId,enabled:true,policy}));
  const snapshot=await body<{policy:typeof policy;libraries:{id:string;name:string}[]}>(await f.chat(actors.sales,campaignId));assert.deepEqual(snapshot.policy,policy);assert.deepEqual(snapshot.libraries,[{id:'api-library',name:'招商资料'}]);
  const campaign=await body<ProspectSnapshot>(await f.business(actors.sales,undefined,campaignId));assert.equal(campaign.campaign?.dailyLimit,10);

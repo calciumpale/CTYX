@@ -8,7 +8,7 @@ import { createServer } from 'vite';
 import react from '@vitejs/plugin-react';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
-const defaultPolicy = () => ({ libraryIds: [], replyDailyLimit: 30, conversationReplyLimit: 12, workStart: '08:30', workEnd: '21:30' });
+const defaultPolicy = () => ({ libraryIds: [], replyDailyLimit: 30, conversationReplyLimit: 12, replyHoursEnabled: false, workStart: '08:30', workEnd: '21:30' });
 const fixture = `
 import React, { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
@@ -85,7 +85,7 @@ test('conversation settings preserve drafts, save the loaded enabled state, and 
       return route.fulfill({ json: { message: '会话设置已保存。', chat: snapshot(payload.campaignId) } });
     });
     const page = await context.newPage();
-    await page.clock.setFixedTime(new Date('2026-11-07T08:00:00Z'));
+    await page.clock.setFixedTime(new Date('2026-11-07T18:00:00Z')); // 02:00 in Shanghai.
     page.on('pageerror', error => errors.push(error.message));
     await page.goto(origin);
     await page.getByRole('button', { name: '开启 AI 跟进', exact: true }).waitFor();
@@ -101,12 +101,25 @@ test('conversation settings preserve drafts, save the loaded enabled state, and 
     assert.equal(await page.getByLabel('每日回复上限', { exact: true }).inputValue(), '30');
     assert.equal(await page.getByLabel('单会话回复上限', { exact: true }).inputValue(), '12');
     assert.equal(await page.getByLabel('开始时间', { exact: true }).inputValue(), '08:30');
+    const replyHours = page.getByRole('checkbox', { name: '限定回复时段', exact: true });
+    assert.equal(await replyHours.isChecked(), false);
+    await page.getByText('全天回复', { exact: true }).waitFor();
+    assert.equal(await page.getByLabel('开始时间', { exact: true }).isDisabled(), true);
+    assert.equal(await page.getByLabel('结束时间', { exact: true }).isDisabled(), true);
+    await replyHours.check();
+    await page.getByLabel('开始时间', { exact: true }).fill('09:00');
+    await page.getByLabel('结束时间', { exact: true }).fill('18:00');
     await page.getByLabel('每日回复上限', { exact: true }).fill('17');
     await page.getByRole('checkbox', { name: '已审核招商资料' }).check();
     await page.waitForFunction(() => window.__chatDirty === true);
     const priorReads = reads;
     await page.waitForResponse(response => response.url().includes('/api/prospecting?') && response.request().method() === 'GET');
     assert.equal(await page.getByLabel('每日回复上限', { exact: true }).inputValue(), '17', 'Periodic refresh preserves unsaved settings');
+    assert.equal(await replyHours.isChecked(), true, 'Periodic refresh preserves the unsaved hours switch');
+    assert.equal(await page.getByLabel('开始时间', { exact: true }).inputValue(), '09:00');
+    await replyHours.uncheck();
+    assert.equal(await page.getByLabel('开始时间', { exact: true }).isDisabled(), true);
+    assert.equal(await page.getByLabel('开始时间', { exact: true }).inputValue(), '09:00', 'Turning off limits preserves the edited window');
     await page.getByRole('button', { name: '立即同步', exact: true }).click();
     await syncDetails.getByText('同步失败：会话面板尚未就绪，请在抖音打开此会话后重新同步。', { exact: true }).waitFor();
     assert.equal(syncStatus, 'done', 'A completed task with an error must still show a sync failure');
@@ -119,6 +132,7 @@ test('conversation settings preserve drafts, save the loaded enabled state, and 
     syncError = undefined;
     await page.getByRole('button', { name: '开启 AI 跟进', exact: true }).click();
     await page.getByRole('button', { name: '关闭 AI 跟进', exact: true }).waitFor();
+    await page.getByText('AI 助手在线', { exact: true }).waitFor();
     await syncDetails.getByText('同步已停滞', { exact: true }).waitFor();
     assert.equal(await page.getByLabel('每日回复上限', { exact: true }).inputValue(), '17', 'Enabled-only responses preserve pending settings');
     assert.equal(posts.find(item => item.action === 'chatSettings').policy, undefined);
@@ -132,14 +146,34 @@ test('conversation settings preserve drafts, save the loaded enabled state, and 
     await page.waitForFunction(() => window.__chatDirty === false);
     const saved = posts.findLast(item => item.policy);
     assert.equal(saved.enabled, true, 'Saving settings uses the loaded enabled state');
-    assert.deepEqual(saved.policy, { ...defaultPolicy(), libraryIds: ['public-info'], replyDailyLimit: 17 });
+    assert.deepEqual(saved.policy, { ...defaultPolicy(), libraryIds: ['public-info'], replyDailyLimit: 17, workStart: '09:00', workEnd: '18:00' });
     assert.ok(reads > priorReads, 'Mutation completion refreshed the server snapshot');
+    await replyHours.check();
+    await page.waitForFunction(() => window.__chatDirty === true);
+    await page.getByRole('button', { name: '保存设置', exact: true }).click();
+    await page.waitForFunction(() => window.__chatDirty === false);
+    assert.equal(posts.findLast(item => item.policy).policy.replyHoursEnabled, true, 'The switch alone is a saved policy change');
+    await page.getByText('等待回复时段', { exact: true }).waitFor();
     await page.getByLabel('开始时间', { exact: true }).fill('22:00');
     assert.equal(await page.getByRole('button', { name: '保存设置', exact: true }).isDisabled(), true);
     await page.getByText('请选择有效的工作时间，开始时间须早于结束时间。').waitFor();
-    await page.getByLabel('开始时间', { exact: true }).fill('08:30');
+    await replyHours.uncheck();
+    assert.equal(await page.getByRole('button', { name: '保存设置', exact: true }).isDisabled(), false, 'Turning off hours must clear an invalid disabled window');
+    assert.equal(await page.getByLabel('开始时间', { exact: true }).inputValue(), '09:00');
+    assert.equal(await page.getByLabel('结束时间', { exact: true }).inputValue(), '18:00');
+    await replyHours.check();
+    await page.getByLabel('开始时间', { exact: true }).fill('09:00');
     const replyInput = page.getByRole('textbox', { name: '人工回复客户', exact: true });
     await replyInput.fill('仅用于测试的未发送草稿');
+    await replyHours.uncheck();
+    await page.getByRole('button', { name: '保存设置', exact: true }).click();
+    await page.getByRole('button', { name: '保存设置', exact: true }).waitFor({ state: 'visible' });
+    await page.waitForFunction(() => document.querySelector('.prospect-chat-unsaved') === null);
+    assert.equal(posts.findLast(item => item.policy).policy.replyHoursEnabled, false);
+    assert.equal(await replyInput.inputValue(), '仅用于测试的未发送草稿', 'Saving the hours switch preserves the manual reply draft');
+    assert.equal(await page.getByLabel('开始时间', { exact: true }).inputValue(), '09:00');
+    assert.equal(await page.getByLabel('结束时间', { exact: true }).inputValue(), '18:00');
+    await page.getByText('AI 助手在线', { exact: true }).waitFor();
     const composingKeys = await replyInput.evaluate(el => {
       el.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true, data: '中文' }));
       const results = [

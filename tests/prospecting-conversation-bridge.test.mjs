@@ -9,6 +9,18 @@ const config = { origin: 'https://workbench.example', deviceId: 'device-1', devi
 const identity = { senderAccountId: 'sender-1', recipientId: 'recipient-1', profileUrl: 'https://www.douyin.com/user/recipient-1', conversationId: 'conversation-1' };
 const job = (id, kind, extra = {}) => ({ id, campaignId: 'campaign-1', leaseToken: 'lease-1', kind, input: { ...identity, ...extra } });
 const reply = (id, replyId = id) => job(id, 'reply', { message: '可以，明天下午方便吗？', replyId, expectedSnapshotId: 'snapshot-1', actor: 'agent' });
+
+for (const dispatched of [false, true]) test(`temporary reply verification failure is retryable only before dispatch (${dispatched})`, async t => {
+  const journal = await journalFor(t);
+  const { completed } = await execute(journal, reply('temporary-proof'), { reply: async (_input, { beforeDispatch }) => {
+    if (dispatched) await beforeDispatch();
+    throw new BridgeError('暂未核实当前账号，请等待页面恢复。', 'ACCOUNT_VERIFICATION_PENDING');
+  } });
+  assert.equal(completed.result.outcome, dispatched ? 'unknown' : 'failed');
+  assert.equal(completed.result.retryable === true, !dispatched);
+  if (!dispatched) assert.equal(completed.result.errorCode, 'ACCOUNT_VERIFICATION_PENDING');
+  assert.equal(Boolean(journal.get('temporary-proof').dispatchedAt), dispatched);
+});
 async function journalFor(t) {
   const dir = await mkdtemp(join(tmpdir(), 'prospect-conversation-'));
   const journal = await Journal.open(join(dir, 'journal.json'));

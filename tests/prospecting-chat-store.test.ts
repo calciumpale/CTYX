@@ -205,13 +205,13 @@ test('a wrong-identity or unreliable conversation read never authorizes an autom
  await f.chat.schedule(x.device.deviceId);const job=(await f.store.claim(x.device.deviceId,false,true))!;
  await assert.rejects(f.store.complete(x.device.deviceId,job.id,job.leaseToken,{senderAccountId:'another-sender',recipientId:'MS4wRecipient001',observedAt:f.now(),snapshotId:'wrong',reliable:true,messages:[{id:'inbound',direction:'inbound',text:'你好',postedAt:f.now()}]}),/身份|账号/);
  await f.store.complete(x.device.deviceId,job.id,job.leaseToken,{senderAccountId:'MS4wSender001',recipientId:'MS4wRecipient001',observedAt:f.now(),snapshotId:'unreliable',reliable:false,messages:[{id:'inbound',direction:'inbound',text:'你好',postedAt:f.now()}]});
- const snapshot=await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id);assert.equal(snapshot.conversations[0].mode,'human');
+ const snapshot=await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id);assert.equal(snapshot.conversations[0].mode,'agent');
  let called=0;await f.chat.processOne('owner-a','member-a','https://example.test',async()=>{called++;return{action:'reply',reply:'不应发送'};});assert.equal(called,0);
  f.advance(61000);await f.store.seen(x.device.deviceId,{authenticated:true,accountId:'MS4wSender001'});
  await readConversation(f,x,[],'recovered');
  const recovered=await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id);
- assert.equal(recovered.conversations[0].mode,'human');
- assert.equal(recovered.conversations[0].handoffReason,'会话已恢复同步，可继续人工回复');
+ assert.equal(recovered.conversations[0].mode,'agent');
+ assert.equal(recovered.conversations[0].handoffReason,undefined);
 });
 
 test('a covered recent window permits an exact manual reply while unreliable messages remain ineligible for automation',async t=>{
@@ -219,7 +219,7 @@ test('a covered recent window permits an exact manual reply while unreliable mes
  await f.store.seen(x.device.deviceId,{authenticated:true,accountId:'MS4wSender001'});await f.chat.schedule(x.device.deviceId);const read=(await f.store.claim(x.device.deviceId,false,true))!;
  await f.store.complete(x.device.deviceId,read.id,read.leaseToken,{senderAccountId:'MS4wSender001',recipientId:'MS4wRecipient001',observedAt:f.now(),snapshotId:'covered-unreliable',reliable:false,covered:true,messages:[{id:'visible-inbound',direction:'inbound',text:'我想找一个店面',postedAt:f.now()}]});
  let decisions=0;assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',async()=>{decisions++;return{action:'reply',reply:'不能自动发送'};}),false);assert.equal(decisions,0);
- const snapshot=await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id,x.conversation.id);assert.equal(snapshot.conversations[0].mode,'human');assert.ok(snapshot.messages.some(message=>message.text==='我想找一个店面'));
+ const snapshot=await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id,x.conversation.id);assert.equal(snapshot.conversations[0].mode,'agent');assert.ok(snapshot.messages.some(message=>message.text==='我想找一个店面'));
  await f.chat.reply('owner-a','member-a',x.conversation.id,snapshot.conversations[0].version,'人工核对后的回复');
  const reply=(await f.store.claim(x.device.deviceId,false,true))!;assert.equal(reply.kind,'reply');assert.equal(reply.input.actor,'human');assert.equal(reply.input.message,'人工核对后的回复');assert.equal(reply.input.expectedSnapshotId,'covered-unreliable');
 });
@@ -234,14 +234,13 @@ test('an unreliable read without explicit coverage invalidates an earlier manual
  }
 });
 
-test('a temporary read failure keeps a verified snapshot usable for an exact manual reply',async t=>{
+test('a temporary read failure revokes an earlier reply snapshot until fresh synchronization',async t=>{
  const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.chat.settings('owner-a','member-a',x.campaign.id,true);
  await readConversation(f,x,[],'verified-before-read-error');f.advance(61000);await f.store.seen(x.device.deviceId,{authenticated:true,accountId:'MS4wSender001'});
  await f.chat.schedule(x.device.deviceId);const read=(await f.store.claim(x.device.deviceId,false,true))!;
  await f.store.complete(x.device.deviceId,read.id,read.leaseToken,undefined,'会话面板未打开或需要人工操作，未发送。');
- const snapshot=await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id,x.conversation.id);assert.equal(snapshot.conversations[0].mode,'human');
- await f.chat.reply('owner-a','member-a',x.conversation.id,snapshot.conversations[0].version,'继续人工核对回复');
- const reply=(await f.store.claim(x.device.deviceId,false,true))!;assert.equal(reply.kind,'reply');assert.equal(reply.input.actor,'human');assert.equal(reply.input.expectedSnapshotId,'verified-before-read-error');assert.equal(reply.input.message,'继续人工核对回复');
+ const snapshot=await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id,x.conversation.id);assert.equal(snapshot.conversations[0].mode,'agent');
+ await assert.rejects(f.chat.reply('owner-a','member-a',x.conversation.id,snapshot.conversations[0].version,'继续人工核对回复'),/同步/);
  assert.match(snapshot.conversations[0].handoffReason??'',/^会话同步暂时失败：/);
  assert.equal(f.sqlite.prepare('SELECT status FROM workbench_prospect_jobs WHERE id=?').get(read.id)?.status,'failed');
 });
@@ -253,9 +252,9 @@ test('a temporary read failure never invents a manual reply snapshot',async t=>{
  await assert.rejects(f.chat.reply('owner-a','member-a',x.conversation.id,snapshot.conversations[0].version,'没有已核实快照不能回复'),/同步/);
 });
 
-test('a reliable read clears only known stale read failures while preserving human control',async t=>{
- const recovered='会话已恢复同步，可继续人工回复';
- const cases=[
+test('a reliable read restores known technical pauses while preserving explicit human control',async t=>{
+ const recovered=undefined;
+ const cases:[string,string|undefined][]=[
   ['会话同步暂时失败：连接超时',recovered],
   ['会话面板未打开或需要人工操作，未发送。',recovered],
   ['会话读取失败，已转交销售',recovered],
@@ -268,7 +267,7 @@ test('a reliable read clears only known stale read failures while preserving hum
   const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.chat.settings('owner-a','member-a',x.campaign.id,true);
   f.sqlite.prepare("UPDATE workbench_prospect_conversations SET mode='human',handoff_reason=? WHERE id=?").run(reason,x.conversation.id);
   await readConversation(f,x,[],'recovered-reliable');const snapshot=await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id,x.conversation.id);
-  assert.equal(snapshot.conversations[0].mode,'human');assert.equal(snapshot.conversations[0].handoffReason,expected);
+  assert.equal(snapshot.conversations[0].mode,expected===undefined?'agent':'human');assert.equal(snapshot.conversations[0].handoffReason,expected);
  }
 });
 
@@ -353,7 +352,7 @@ test('additional contact methods keep the same enabled assignee and assigned sal
 test('reply policy validates owned libraries and persists memory across store instances',async t=>{
  const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);
  f.sqlite.prepare("INSERT INTO workbench_knowledge_libraries(id,owner_id,name,created_at) VALUES ('mine','owner-a','招商资料',?),('foreign','owner-z','私有资料',?)").run(f.now(),f.now());
- const policy={libraryIds:['mine'],replyDailyLimit:2,conversationReplyLimit:2,workStart:'08:30',workEnd:'21:30'};
+ const policy={libraryIds:['mine'],replyDailyLimit:2,conversationReplyLimit:2,replyHoursEnabled:false,workStart:'08:30',workEnd:'21:30'};
  await assert.rejects(f.chat.settings('owner-a','member-a',x.campaign.id,true,{...policy,libraryIds:['foreign']}),/知识库/);
  await f.chat.settings('owner-a','member-a',x.campaign.id,true,policy);
  await readConversation(f,x,[{id:'needs',direction:'inbound',text:'想找海盐60平米餐饮店',postedAt:f.now()}]);
@@ -455,7 +454,7 @@ test('stop closes queued jobs across campaigns without rewriting completed histo
 });
 
 test('the last outbound question disambiguates a visit refusal from a global stop before workhours gating',async t=>{
- const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.chat.settings('owner-a','member-a',x.campaign.id,true);f.advance(61000);await readConversation(f,x,[]);
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.chat.settings('owner-a','member-a',x.campaign.id,true,{libraryIds:[],replyDailyLimit:30,conversationReplyLimit:12,replyHoursEnabled:true,workStart:'08:30',workEnd:'21:30'});f.advance(61000);await readConversation(f,x,[]);
  let snapshot=await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id,x.conversation.id);await f.chat.reply('owner-a','member-a',x.conversation.id,snapshot.conversations[0].version,'是否需要实地看场？');const reply=(await f.store.claim(x.device.deviceId,false,true))!;await f.store.complete(x.device.deviceId,reply.id,reply.leaseToken,{outcome:'submitted'});
  f.advance(61000);await readConversation(f,x,[{id:'no-visit',direction:'inbound',text:'不需要',postedAt:f.now()}],'no-visit');f.advance(12*3600000);
  assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',async()=>{assert.fail('outside hours must preserve inbound');}),false);
@@ -526,5 +525,134 @@ test('untimed baseline stops stay historical while a new untimed stop after base
   f.advance(61000);await readConversation(f,x,[stop],historical?'initial-baseline':'reliable-after-baseline');
   assert.equal((await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations[0].status,historical?'active':'closed');
   assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM workbench_prospect_contact_optouts').get()?.n,historical?0:1);
+ }
+});
+
+
+for(const outcome of ['failed','unreliable'] as const)test(`${outcome} automatic reads pause without consuming inbound and recover after a reliable same-account read`,async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.chat.settings('owner-a','member-a',x.campaign.id,true);f.advance(61000);
+ const inbound={id:'recoverable-inbound',direction:'inbound' as const,text:'我想找80到100平的空铺',postedAt:f.now()};
+ await readConversation(f,x,[inbound],'before-pause');
+ f.advance(31000);await f.store.seen(x.device.deviceId,{authenticated:true,accountId:'MS4wSender001'});await f.chat.schedule(x.device.deviceId);const read=(await f.store.claim(x.device.deviceId,false,true))!;
+ if(outcome==='failed')await f.store.complete(x.device.deviceId,read.id,read.leaseToken,undefined,'暂未核实当前账号，请等待页面恢复。');
+ else await f.store.complete(x.device.deviceId,read.id,read.leaseToken,{senderAccountId:'MS4wSender001',recipientId:'MS4wRecipient001',observedAt:f.now(),snapshotId:'pause-unreliable',reliable:false,covered:true,messages:[inbound]});
+ assert.equal((await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations[0].mode,'agent');
+ let calls=0;const decide=async()=>{calls++;return{action:'reply' as const,reply:'您希望在哪个区域找铺？'};};
+ assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',decide),false);assert.equal(calls,0);
+ assert.equal(f.sqlite.prepare("SELECT processed FROM workbench_prospect_messages WHERE source_key='recoverable-inbound'").get()?.processed,0);
+ f.advance(15000);await readConversation(f,x,[inbound],'recovered-pause');
+ assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',decide),true);const reply=(await f.store.claim(x.device.deviceId,false,true))!;assert.equal(reply.kind,'reply');assert.equal(reply.input.actor,'agent');
+ assert.equal(calls,1);assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',decide),false);
+});
+
+test('a reliable retry admits fresh automatically observed unreliable messages once without replaying old or observe-only messages',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.chat.settings('owner-a','member-a',x.campaign.id,true);f.advance(61000);
+ const old={id:'old-unreliable',direction:'inbound' as const,text:'以前的问题',postedAt:'2026-11-05T04:00:00.000Z'},fresh={id:'fresh-unreliable',direction:'inbound' as const,text:'想找80到100平的空铺',postedAt:f.now()};
+ await f.chat.schedule(x.device.deviceId);const job=(await f.store.claim(x.device.deviceId,false,true))!;
+ await f.store.complete(x.device.deviceId,job.id,job.leaseToken,{senderAccountId:'MS4wSender001',recipientId:'MS4wRecipient001',observedAt:f.now(),snapshotId:'unverified-fresh',reliable:false,messages:[old,fresh]});
+ f.advance(15000);await readConversation(f,x,[old,fresh],'verified-fresh');
+ let inputIds:string[]=[];await f.chat.processOne('owner-a','member-a','https://example.test',async(_o,_r,input)=>{inputIds=input.pending!.map(m=>m.text);return{action:'reply',reply:'您希望在哪个区域找铺？'};});
+ assert.deepEqual(inputIds,['想找80到100平的空铺']);assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM workbench_prospect_jobs WHERE kind='reply'").get()?.n,1);
+ assert.equal(f.sqlite.prepare("SELECT eligible FROM workbench_prospect_messages WHERE source_key='old-unreliable'").get()?.eligible,0);
+ const f2=fixture();t.after(()=>f2.sqlite.close());const y=await prepared(f2);await f2.chat.sync('owner-a','member-a',y.campaign.id,y.conversation.id);const observed=(await f2.store.claim(y.device.deviceId,false,true))!;
+ await f2.store.complete(y.device.deviceId,observed.id,observed.leaseToken,{senderAccountId:'MS4wSender001',recipientId:'MS4wRecipient001',observedAt:f2.now(),snapshotId:'observe-unreliable',reliable:false,messages:[{...fresh,postedAt:f2.now()}]});
+ await f2.chat.settings('owner-a','member-a',y.campaign.id,true);f2.advance(15000);await readConversation(f2,y,[{...fresh,postedAt:f2.now()}],'observe-reliable');
+ assert.equal(await f2.chat.processOne('owner-a','member-a','https://example.test',async()=>{assert.fail('observe-only history cannot become automatic');}),false);
+});
+
+test('technical recovery restores only the latest unanswered legacy question without replaying answered history',async t=>{
+ for(const answered of [false,true,'external'] as const){
+  const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.chat.settings('owner-a','member-a',x.campaign.id,true);f.advance(61000);
+  const first={id:'legacy-earlier',direction:'inbound' as const,text:'您好',postedAt:f.now()};await readConversation(f,x,[first]);f.advance(1000);
+  const latest={id:'legacy-latest',direction:'inbound' as const,text:'80到100平空铺有吗',postedAt:f.now()};
+  f.advance(30000);await readConversation(f,x,[first,latest],'legacy-before-failure');
+  f.sqlite.prepare("UPDATE workbench_prospect_messages SET processed=1 WHERE direction='inbound'").run();
+  if(answered==='external'){f.advance(31000);await readConversation(f,x,[first,latest,{id:'external-human-answer',direction:'outbound',text:'销售在抖音中已回复',postedAt:f.now()}],'external-answer');}
+  else if(answered){f.advance(61000);let c=(await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations[0];await f.chat.reply('owner-a','member-a',c.id,c.version,'销售已回复');const reply=(await f.store.claim(x.device.deviceId,false,true))!;await f.store.complete(x.device.deviceId,reply.id,reply.leaseToken,{outcome:'submitted'});}
+  f.sqlite.prepare("UPDATE workbench_prospect_conversations SET mode='human',handoff_reason='会话同步暂时失败：暂未核实当前账号，请等待页面恢复。；请稍后重新同步，核实消息后再继续。' WHERE id=?").run(x.conversation.id);
+  f.advance(31000);await readConversation(f,x,[first,latest],'legacy-recovered');
+  assert.equal((await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations[0].mode,'agent');
+  const seen:string[]=[];const worked=await f.chat.processOne('owner-a','member-a','https://example.test',async(_o,_r,input)=>{seen.push(...input.pending!.map(m=>m.text));return{action:'reply',reply:'您希望在哪个区域找铺？'};});
+  assert.equal(worked,!answered);assert.deepEqual(seen,answered?[]:['80到100平空铺有吗']);
+  assert.equal(f.sqlite.prepare("SELECT processed FROM workbench_prospect_messages WHERE source_key='legacy-earlier'").get()?.processed,1);
+ }
+});
+
+test('manual takeover and business handoff keep unanswered questions pending through technical reads',async t=>{
+ for(const reason of ['已由销售接管','客户主动要求人工沟通，请直接跟进。','会话策略已更新，原回复已停止，请销售人工继续跟进','上一条回复结果待确认，正在等待可靠的外发消息记录']){
+  const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.chat.settings('owner-a','member-a',x.campaign.id,true);f.advance(61000);
+  await readConversation(f,x,[{id:'manual-pending',direction:'inbound',text:'希望80到100平',postedAt:f.now()}]);f.sqlite.prepare("UPDATE workbench_prospect_conversations SET mode='human',handoff_reason=? WHERE id=?").run(reason,x.conversation.id);
+  await f.chat.processOne('owner-a','member-a','https://example.test',(_o,_r,input)=>chooseProspectChatAction(input,{}));
+  assert.equal(f.sqlite.prepare("SELECT processed FROM workbench_prospect_messages WHERE source_key='manual-pending'").get()?.processed,0);
+  f.advance(31000);await readConversation(f,x,[],'manual-preserved');const c=(await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations[0];assert.equal(c.mode,'human');assert.equal(c.handoffReason,reason);
+ }
+});
+
+test('a read failure invalidates a queued reply and an in-flight decision before either can send',async t=>{
+ for(const queued of [false,true]){
+  const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.chat.settings('owner-a','member-a',x.campaign.id,true);f.advance(61000);
+  await readConversation(f,x,[{id:'pause-race',direction:'inbound',text:'想找80平',postedAt:f.now()}]);
+  let release!:(value:{action:'reply';reply:string})=>void,entered!:()=>void;const started=new Promise<void>(resolve=>{entered=resolve;});
+  const processing=f.chat.processOne('owner-a','member-a','https://example.test',async()=>{entered();if(queued)return{action:'reply',reply:'旧回复'};return new Promise(resolve=>{release=resolve;});});await started;if(queued)await processing;
+  f.advance(31000);await f.store.seen(x.device.deviceId,{authenticated:true,accountId:'MS4wSender001'});await f.chat.sync('owner-a','member-a',x.campaign.id,x.conversation.id);const read=(await f.store.claim(x.device.deviceId,false,true))!;assert.equal(read.kind,'readConversation');
+  await f.store.complete(x.device.deviceId,read.id,read.leaseToken,undefined,'暂未核实当前账号');if(!queued){release({action:'reply',reply:'旧回复'});await processing;}
+  assert.equal(await f.store.claim(x.device.deviceId,false,true),null);
+  if(!queued)assert.equal(f.sqlite.prepare("SELECT processed FROM workbench_prospect_messages WHERE source_key='pause-race'").get()?.processed,0);
+  f.advance(15000);await readConversation(f,x,[{id:'pause-race',direction:'inbound',text:'想找80平',postedAt:'2026-11-06T04:01:01.000Z'}],'race-recovered');
+  assert.equal(f.sqlite.prepare("SELECT processed FROM workbench_prospect_messages WHERE source_key='pause-race'").get()?.processed,0);
+ }
+});
+
+for(const hours of [{replyHoursEnabled:false,workStart:'08:30',workEnd:'21:30',allowed:true},{replyHoursEnabled:true,workStart:'08:30',workEnd:'21:30',allowed:false},{workStart:'08:30',workEnd:'21:30',allowed:true},{workStart:'09:00',workEnd:'18:00',allowed:false},{workStart:'25:00',workEnd:'21:30',allowed:true},{workStart:'09:00',allowed:true}])test(`reply lease honors optional hour switch ${JSON.stringify(hours)}`,async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.chat.settings('owner-a','member-a',x.campaign.id,true);f.advance(61000);await readConversation(f,x,[]);
+ f.sqlite.prepare("UPDATE workbench_prospect_conversations SET last_snapshot_id='hours-snapshot'").run();
+ f.sqlite.prepare("UPDATE workbench_prospect_campaigns SET data_json=json_set(data_json,'$.chatPolicy',json(?))").run(JSON.stringify({libraryIds:[],replyDailyLimit:30,conversationReplyLimit:12,...hours}));
+ f.sqlite.prepare("INSERT INTO workbench_prospect_jobs(id,owner_id,member_id,device_id,campaign_id,lead_id,kind,status,input_json,active_key,sender_id,created_at,updated_at) VALUES ('hours-job','owner-a','member-a',?,?,?,'reply','queued',?,'hours-job','MS4wSender001',?,?)").run(x.device.deviceId,x.campaign.id,x.lead.id,JSON.stringify({senderAccountId:'MS4wSender001',recipientId:'MS4wRecipient001',profileUrl:x.conversation.profileUrl,conversationId:x.conversation.id,actor:'agent',message:'您好',replyId:'hours-reply',expectedSnapshotId:'hours-snapshot',policyVersion:0}),f.now(),f.now());
+ f.advance(13*3600000);await f.store.seen(x.device.deviceId,{authenticated:true,accountId:'MS4wSender001'});
+ assert.equal(Boolean(await f.store.claim(x.device.deviceId,false,true)),hours.allowed);
+});
+
+
+test('a verified pre-dispatch account interruption retries the unanswered turn only after fresh reliable synchronization',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.chat.settings('owner-a','member-a',x.campaign.id,true);f.advance(61000);
+ const inbound={id:'pre-dispatch-inbound',direction:'inbound' as const,text:'想找80到100平空铺',postedAt:f.now()};await readConversation(f,x,[inbound]);
+ const decide=async()=>({action:'reply' as const,reply:'您希望在哪个区域找铺？'});await f.chat.processOne('owner-a','member-a','https://example.test',decide);const first=(await f.store.claim(x.device.deviceId,false,true))!;
+ await f.store.complete(x.device.deviceId,first.id,first.leaseToken,{outcome:'failed',retryable:true,errorCode:'ACCOUNT_VERIFICATION_PENDING',error:'暂未核实当前账号，请等待页面恢复。'});
+ assert.equal(f.sqlite.prepare('SELECT status FROM workbench_prospect_jobs WHERE id=?').get(first.id)?.status,'failed');
+ assert.equal((await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations[0].mode,'agent');
+ assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',decide),false);assert.equal(await f.store.claim(x.device.deviceId,false,true),null);
+ f.advance(61000);await readConversation(f,x,[inbound],'pre-dispatch-recovered');assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',decide),true);
+ const second=(await f.store.claim(x.device.deviceId,false,true))!;assert.equal(second.kind,'reply');assert.notEqual(second.id,first.id);await f.store.complete(x.device.deviceId,second.id,second.leaseToken,{outcome:'submitted'});
+ assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',decide),false);
+});
+
+
+test('a takeover committed while a technical recovery is saving keeps manual control',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.chat.settings('owner-a','member-a',x.campaign.id,true);
+ f.sqlite.prepare("UPDATE workbench_prospect_conversations SET mode='human',handoff_reason='会话同步暂时失败：连接超时' WHERE id=?").run(x.conversation.id);
+ await f.chat.schedule(x.device.deviceId);const read=(await f.store.claim(x.device.deviceId,false,true))!;
+ f.interceptNextBatch(()=>f.sqlite.prepare("UPDATE workbench_prospect_conversations SET mode='human',handoff_reason='已由销售接管',version=version+1 WHERE id=?").run(x.conversation.id));
+ await f.store.complete(x.device.deviceId,read.id,read.leaseToken,{senderAccountId:'MS4wSender001',recipientId:'MS4wRecipient001',observedAt:f.now(),snapshotId:'racing-recovery',reliable:true,messages:[]});
+ const c=(await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations[0];assert.equal(c.mode,'human');assert.equal(c.handoffReason,'已由销售接管');
+});
+
+test('a successful manual reply handles only earlier pending questions before automation is resumed',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.chat.settings('owner-a','member-a',x.campaign.id,true);f.advance(61000);
+ await f.chat.takeover('owner-a','member-a',x.conversation.id,x.conversation.version);
+ await readConversation(f,x,[{id:'human-answered',direction:'inbound',text:'80平有吗',postedAt:f.now()}]);
+ let c=(await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations[0];await f.chat.reply('owner-a','member-a',c.id,c.version,'销售已答复您的问题');const job=(await f.store.claim(x.device.deviceId,false,true))!;
+ await f.store.complete(x.device.deviceId,job.id,job.leaseToken,{outcome:'submitted'});c=(await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations[0];await f.chat.resume('owner-a','member-a',c.id,c.version);
+ assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',async()=>{assert.fail('manual answer must not replay');}),false);
+});
+
+
+test('technical synchronization never resumes a closed or unresolved conversation',async t=>{
+ for(const blocked of ['closed','unknown'] as const){
+  const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.chat.settings('owner-a','member-a',x.campaign.id,true);
+  await f.chat.schedule(x.device.deviceId);const read=(await f.store.claim(x.device.deviceId,false,true))!;
+  f.sqlite.prepare("UPDATE workbench_prospect_conversations SET mode='human',handoff_reason='会话同步暂时失败：连接超时',status=? WHERE id=?").run(blocked==='closed'?'closed':'active',x.conversation.id);
+  if(blocked==='unknown')f.sqlite.prepare("INSERT INTO workbench_prospect_jobs(id,owner_id,member_id,device_id,campaign_id,lead_id,kind,status,input_json,sender_id,created_at,updated_at) VALUES ('unknown-before-recovery','owner-a','member-a',?,?,?,'reply','unknown',?,'MS4wSender001',?,?)").run(x.device.deviceId,x.campaign.id,x.lead.id,JSON.stringify({conversationId:x.conversation.id,recipientId:'MS4wRecipient001'}),f.now(),f.now());
+  await f.store.complete(x.device.deviceId,read.id,read.leaseToken,{senderAccountId:'MS4wSender001',recipientId:'MS4wRecipient001',observedAt:f.now(),snapshotId:`blocked-${blocked}`,reliable:true,messages:[]});
+  const c=(await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations[0];assert.equal(c.mode,'human');assert.equal(c.status,blocked==='closed'?'closed':'active');
  }
 });

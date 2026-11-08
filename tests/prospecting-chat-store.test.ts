@@ -569,7 +569,7 @@ test('technical recovery restores only the latest unanswered legacy question wit
   f.advance(30000);await readConversation(f,x,[first,latest],'legacy-before-failure');
   f.sqlite.prepare("UPDATE workbench_prospect_messages SET processed=1 WHERE direction='inbound'").run();
   if(answered==='external'){f.advance(31000);await readConversation(f,x,[first,latest,{id:'external-human-answer',direction:'outbound',text:'销售在抖音中已回复',postedAt:f.now()}],'external-answer');}
-  else if(answered){f.advance(61000);let c=(await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations[0];await f.chat.reply('owner-a','member-a',c.id,c.version,'销售已回复');const reply=(await f.store.claim(x.device.deviceId,false,true))!;await f.store.complete(x.device.deviceId,reply.id,reply.leaseToken,{outcome:'submitted'});}
+  else if(answered){f.advance(61000);const c=(await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations[0];await f.chat.reply('owner-a','member-a',c.id,c.version,'销售已回复');const reply=(await f.store.claim(x.device.deviceId,false,true))!;await f.store.complete(x.device.deviceId,reply.id,reply.leaseToken,{outcome:'submitted'});}
   f.sqlite.prepare("UPDATE workbench_prospect_conversations SET mode='human',handoff_reason='会话同步暂时失败：暂未核实当前账号，请等待页面恢复。；请稍后重新同步，核实消息后再继续。' WHERE id=?").run(x.conversation.id);
   f.advance(31000);await readConversation(f,x,[first,latest],'legacy-recovered');
   assert.equal((await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations[0].mode,'agent');
@@ -661,7 +661,7 @@ test('technical synchronization never resumes a closed or unresolved conversatio
 
 test('human mode never enters a normal automatic decision and keeps the question pending',async t=>{
  const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.chat.settings('owner-a','member-a',x.campaign.id,true);await readConversation(f,x,[{id:'human-no-decision',direction:'inbound',text:'想找80平空铺',postedAt:f.now()}]);
- let c=(await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations[0];await f.chat.takeover('owner-a','member-a',c.id,c.version);
+ const c=(await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations[0];await f.chat.takeover('owner-a','member-a',c.id,c.version);
  let calls=0;assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',async()=>{calls++;return{action:'reply',reply:'不应判断'};}),false);assert.equal(calls,0);
  assert.equal(f.sqlite.prepare("SELECT processed FROM workbench_prospect_messages WHERE source_key='human-no-decision'").get()?.processed,0);
 });
@@ -711,7 +711,7 @@ for(const blocked of ['history','answered','unknown','running','takeover','read-
 test('an account change while a resume read is running cannot authorize the old sender question',async t=>{
  const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);f.advance(61000);const inbound={id:'resume-account-check',direction:'inbound' as const,text:'想找80平空铺',postedAt:f.now()};
  await f.chat.sync('owner-a','member-a',x.campaign.id,x.conversation.id);const first=(await f.store.claim(x.device.deviceId,false,true))!;await f.store.complete(x.device.deviceId,first.id,first.leaseToken,{senderAccountId:'MS4wSender001',recipientId:'MS4wRecipient001',observedAt:f.now(),snapshotId:'resume-old-sender',reliable:true,messages:[inbound]});
- await f.chat.settings('owner-a','member-a',x.campaign.id,true);let c=(await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations[0];await f.chat.resume('owner-a','member-a',c.id,c.version);f.advance(31000);await f.chat.schedule(x.device.deviceId);const read=(await f.store.claim(x.device.deviceId,false,true))!;
+ await f.chat.settings('owner-a','member-a',x.campaign.id,true);const c=(await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations[0];await f.chat.resume('owner-a','member-a',c.id,c.version);f.advance(31000);await f.chat.schedule(x.device.deviceId);const read=(await f.store.claim(x.device.deviceId,false,true))!;
  f.sqlite.prepare("UPDATE workbench_prospect_devices SET account_id='MS4wDifferentSender' WHERE id=?").run(x.device.deviceId);
  await f.store.complete(x.device.deviceId,read.id,read.leaseToken,{senderAccountId:'MS4wSender001',recipientId:'MS4wRecipient001',observedAt:f.now(),snapshotId:'resume-account-changed',reliable:true,messages:[inbound]});
  assert.equal(f.sqlite.prepare("SELECT eligible FROM workbench_prospect_messages WHERE source_key='resume-account-check'").get()?.eligible,0);assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',async()=>{assert.fail('old sender must remain paused');}),false);
@@ -852,7 +852,7 @@ test('a reliably observed stop cancels a waiting draft and can never authorize a
 
 test('a failed manual reply stays an auditable failure without automatic retry enrollment',async t=>{
  const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.chat.settings('owner-a','member-a',x.campaign.id,true);f.advance(61000);await readConversation(f,x,[],'manual-retry-proof');const c=(await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations[0];await f.chat.reply('owner-a','member-a',c.id,c.version,'人工明确回复');const job=(await f.store.claim(x.device.deviceId,false,true))!;
- await f.store.complete(x.device.deviceId,job.id,job.leaseToken,{outcome:'failed',retryable:true,errorCode:'ACCOUNT_VERIFICATION_PENDING',error:'暂未核实账号'});let m=(await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id,x.conversation.id)).messages.find(m=>m.id===job.input.replyId)!;assert.equal(m.status,'failed');assert.equal(m.retryable,true);
+ await f.store.complete(x.device.deviceId,job.id,job.leaseToken,{outcome:'failed',retryable:true,errorCode:'ACCOUNT_VERIFICATION_PENDING',error:'暂未核实账号'});const m=(await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id,x.conversation.id)).messages.find(m=>m.id===job.input.replyId)!;assert.equal(m.status,'failed');assert.equal(m.retryable,true);
  f.advance(61000);await readConversation(f,x,[],'manual-retry-proof');assert.equal(await f.store.claim(x.device.deviceId,false,true),null);
 });
 

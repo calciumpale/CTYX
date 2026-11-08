@@ -755,3 +755,91 @@ browserTest('strict sender DOM interruptions stay pending without erasing the es
   assert.equal(pending.verificationReason, 'account_read_interrupted');
   assert.deepEqual(adapter.senderProof, hint);
 });
+
+// All fixture requests stay inside the isolated, route-fulfilled browser context.
+async function targetDispatchFixture(t, secondTarget = 'recipient-2') {
+  const data = await fixture(t, { conversation: true });
+  const { adapter, state } = data;
+  await adapter.accountStatus({ expectedAccountId: conversationInput.senderAccountId });
+  adapter.confirmationMs = 2000;
+  for (const recipient of ['recipient-1', 'recipient-2']) {
+    const proofTarget = recipient === 'recipient-2' ? secondTarget : recipient;
+    state.profiles[`/user/${recipient}`] = `<main><section role="dialog" data-stack-layer="chat">
+      <div class="StackLayoutStackChatHeaderuser"><div data-apm-action="个人页卡片" onclick="window.open('/user/${proofTarget}')">客户 ${recipient}</div></div>
+      <div data-e2e="message-list"><div data-e2e="message-item" data-message-id="inbound-${recipient}" data-message-direction="incoming"><span data-e2e="message-text">想了解面积 ${recipient}</span></div></div>
+      <div data-e2e="msg-input"><div contenteditable="true" oninput="window.__draftChanges++">保留的私信草稿</div><button class="e2e-send-msg-btn" onclick="sendFixtureMessage(this)">发送</button></div>
+    </section></main><script>
+      window.__sentMessages = []; window.__draftChanges = 0;
+      function sendFixtureMessage(button) {
+        const root = button.closest('section'), text = root.querySelector('[contenteditable]').innerText;
+        window.__sentMessages.push(text);
+        const row = document.createElement('div'); row.dataset.e2e = 'message-item';
+        row.dataset.messageId = 'sent-' + window.__sentMessages.length; row.dataset.messageDirection = 'outgoing';
+        const body = document.createElement('span'); body.dataset.e2e = 'message-text'; body.textContent = text;
+        row.append(body); root.querySelector('[data-e2e="message-list"]').append(row);
+      }
+    </script>`;
+  }
+  const realNow = Date.now.bind(Date); let offset = 61000;
+  t.mock.method(Date, 'now', () => realNow() + offset);
+  const { readConversationTranscript } = await import('../tools/douyin-bridge/conversation-transcript.mjs');
+  const prepare = async recipient => {
+    const input = { ...conversationInput, recipientId: recipient, profileUrl: `https://www.douyin.com/user/${recipient}`, conversationId: `conversation-${recipient}`, actor: 'agent', message: `仅隔离测试 ${recipient}` };
+    await adapter.navigate(input.profileUrl);
+    // Set up the previously approved snapshot without spending a participant-proof budget.
+    const observed = await readConversationTranscript(data.page.locator('[data-stack-layer="chat"]'), { ...input, timeoutMs: 1000 });
+    assert.equal(observed.reliable, true);
+    return { ...input, expectedSnapshotId: observed.snapshotId };
+  };
+  return { ...data, prepare, advance: ms => { offset += ms; } };
+}
+
+for (const method of ['send', 'reply']) for (const recentRead of [false, true]) {
+  browserTest(`dispatch preflight: consecutive ${method} to two customers survives ${recentRead ? 'a just-completed A health proof' : 'the 61-second send interval'}`, async t => {
+    const { adapter, page, state, prepare, advance } = await targetDispatchFixture(t);
+    const first = await prepare('recipient-1'), checkpoints = [];
+    const firstStartedAt = Date.now();
+    const sentA = await adapter[method](first, { beforeDispatch: async () => { checkpoints.push(first.recipientId); } });
+    assert.equal(sentA.outcome, 'submitted');
+    assert.deepEqual(await page.evaluate(() => window.__sentMessages), [first.message]);
+    advance(61000);
+    assert.ok(Date.now() - firstStartedAt >= 61000, 'The next task has passed the server send interval');
+    if (recentRead) {
+      assert.equal((await adapter.readConversation(first)).reliable, true);
+      assert.ok(Date.now() - adapter.lastTargetProofAttemptAt < 60000, 'A recent health proof must not block an eligible B dispatch');
+    }
+    const second = await prepare('recipient-2'), before = state.requests.length;
+    const sentB = await adapter[method](second, { beforeDispatch: async () => { checkpoints.push(second.recipientId); } });
+    assert.equal(sentB.outcome, 'submitted');
+    assert.deepEqual(checkpoints, ['recipient-1', 'recipient-2']);
+    assert.deepEqual(await page.evaluate(() => window.__sentMessages), [second.message]);
+    assert.deepEqual(state.requests.slice(before), ['/user/recipient-2', '/user/sender-1', '/user/recipient-2'], 'B is proved before draft entry and again at strict dispatch, with one fresh owner check');
+  });
+}
+
+for (const method of ['send', 'reply']) {
+  browserTest(`dispatch preflight: ${method} reuses the current participant cache and retains strict verification`, async t => {
+    const { adapter, page, state, prepare } = await targetDispatchFixture(t);
+    const input = await prepare('recipient-1');
+    assert.equal((await adapter.readConversation(input)).reliable, true);
+    const before = state.requests.length; let checkpoints = 0;
+    const result = await adapter[method](input, { beforeDispatch: async () => { checkpoints++; } });
+    assert.equal(result.outcome, 'submitted');
+    assert.equal(checkpoints, 1);
+    assert.deepEqual(await page.evaluate(() => window.__sentMessages), [input.message]);
+    assert.deepEqual(state.requests.slice(before), ['/user/sender-1', '/user/recipient-1'], 'A cache hit skips only the early participant popup');
+  });
+
+  browserTest(`dispatch preflight: a mismatched new ${method} target is checked before editing the draft`, async t => {
+    const { adapter, page, state, prepare } = await targetDispatchFixture(t, 'someone-else');
+    const first = await prepare('recipient-1');
+    assert.equal((await adapter.readConversation(first)).reliable, true);
+    const second = await prepare('recipient-2'), before = state.requests.length; let checkpoints = 0;
+    await assert.rejects(adapter[method](second, { beforeDispatch: async () => { checkpoints++; } }), error => error.code === 'RECIPIENT_UNVERIFIED');
+    assert.deepEqual(state.requests.slice(before), ['/user/someone-else'], 'Reject the actual wrong profile, rather than short-circuiting on a read cooldown');
+    assert.equal(await page.locator('[contenteditable="true"]').innerText(), '保留的私信草稿');
+    assert.equal(await page.evaluate(() => window.__draftChanges), 0);
+    assert.deepEqual(await page.evaluate(() => window.__sentMessages), []);
+    assert.equal(checkpoints, 0);
+  });
+}

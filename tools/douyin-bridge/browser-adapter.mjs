@@ -656,7 +656,7 @@ export class DouyinBrowserAdapter {
     if (visible.length !== 1) fail(message, 'CONTROL_UNVERIFIED');
     return visible[0];
   }
-  async verifyTarget(page, root, target, stackChat, { passive = false, snapshotId } = {}) {
+  async verifyTarget(page, root, target, stackChat, { passive = false, snapshotId, preparingDispatch = false } = {}) {
     const message = '无法核对目标会话的用户主页，未发送。请打开该用户会话后检查页面结构。';
     if (stackChat) {
       const profileCard = await this.uniqueVisible(root.locator('.StackLayoutStackChatHeaderuser [data-apm-action="个人页卡片"]'), message);
@@ -677,10 +677,12 @@ export class DouyinBrowserAdapter {
           (snapshotId === undefined || binding.snapshotId === snapshotId) &&
           Date.now() - binding.checkedAt >= 0 && Date.now() - binding.checkedAt < TARGET_READ_PROOF_INTERVAL_MS &&
           await profileCard.evaluate((node, prior) => node === prior, binding.card).catch(() => false)) return;
-      // Read-only health proofs have a shared five-minute budget, including
-      // failed popups. Final dispatch always proves the current target anew.
+      // Read-only health proofs share a budget, including failed popups. An
+      // approved send may reuse a valid proof but must not fail on a read's
+      // cooldown; the server already gates send attempts by sender and lease.
+      // Final dispatch always proves the current target anew.
       const interval = snapshotId !== undefined && binding?.snapshotId !== snapshotId ? IDENTITY_NAVIGATION_INTERVAL_MS : TARGET_READ_PROOF_INTERVAL_MS;
-      if (passive && this.lastTargetProofAttemptAt !== undefined && Date.now() - this.lastTargetProofAttemptAt < interval) fail(message, 'RECIPIENT_UNVERIFIED');
+      if (passive && !preparingDispatch && this.lastTargetProofAttemptAt !== undefined && Date.now() - this.lastTargetProofAttemptAt < interval) fail(message, 'RECIPIENT_UNVERIFIED');
       this.lastTargetProofAttemptAt = Date.now();
       this.readTargetBinding = undefined;
       await binding?.card.dispose().catch(() => {});
@@ -748,7 +750,7 @@ export class DouyinBrowserAdapter {
     }
     if (!root) fail('无法核对目标会话面板，未发送。', 'CHAT_UNAVAILABLE');
     const stackChat = await root.getAttribute('data-stack-layer') === 'chat';
-    if (!deferTargetProof) await this.verifyTarget(page, root, target, stackChat, { passive: true });
+    if (!deferTargetProof) await this.verifyTarget(page, root, target, stackChat, { passive: true, preparingDispatch: writable });
     return { page, root, target, stackChat };
   }
   async readConversation(input, { signal } = {}) {

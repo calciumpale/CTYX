@@ -55,6 +55,7 @@ export class DouyinBrowserAdapter {
   }
   async navigate(url, signal) {
     checkAbort(signal); const page = await this.page();
+    this.conversationSelection = undefined;
     try { await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 }); } catch { fail('页面打开失败，请检查网络和浏览器。', 'NAVIGATION'); }
     if (!['www.douyin.com', 'douyin.com'].includes(new URL(page.url()).hostname)) fail('页面跳转到非抖音域名，已停止。', 'UNEXPECTED_ORIGIN');
     await this.guard(page, signal); return page;
@@ -658,8 +659,11 @@ export class DouyinBrowserAdapter {
   }
   async verifyTarget(page, root, target, stackChat, { passive = false, snapshotId, preparingDispatch = false } = {}) {
     const message = '无法核对目标会话的用户主页，未发送。请打开该用户会话后检查页面结构。';
+    const rejectTarget = () => { this.conversationSelection = undefined; fail(message, 'RECIPIENT_UNVERIFIED'); };
     if (stackChat) {
-      const profileCard = await this.uniqueVisible(root.locator('.StackLayoutStackChatHeaderuser [data-apm-action="个人页卡片"]'), message);
+      let profileCard;
+      try { profileCard = await this.uniqueVisible(root.locator('.StackLayoutStackChatHeaderuser [data-apm-action="个人页卡片"]'), message); }
+      catch (error) { this.conversationSelection = undefined; throw error; }
       const signature = () => profileCard.evaluate(node => {
         const header = node.closest('.StackLayoutStackChatHeaderuser');
         const visible = element => element instanceof HTMLElement && !!(element.offsetWidth || element.offsetHeight || element.getClientRects().length) && getComputedStyle(element).visibility !== 'hidden';
@@ -671,19 +675,28 @@ export class DouyinBrowserAdapter {
       });
       let onTarget = false;
       try { onTarget = profileIdentity(page.url()).url === target.url; } catch { /* A changed route cannot reuse a participant proof. */ }
-      if (!onTarget) fail(message, 'RECIPIENT_UNVERIFIED');
+      if (!onTarget) rejectTarget();
       const current = await signature(), binding = this.readTargetBinding;
+      const sameCard = binding?.page === page && binding.context === this.context &&
+        await profileCard.evaluate((node, prior) => node === prior, binding.card).catch(() => false);
       if (passive && current && binding?.page === page && binding.context === this.context && binding.targetId === target.id && binding.signature === current &&
           (snapshotId === undefined || binding.snapshotId === snapshotId) &&
           Date.now() - binding.checkedAt >= 0 && Date.now() - binding.checkedAt < TARGET_READ_PROOF_INTERVAL_MS &&
-          await profileCard.evaluate((node, prior) => node === prior, binding.card).catch(() => false)) return;
-      // Read-only health proofs share a budget, including failed popups. An
-      // approved send may reuse a valid proof but must not fail on a read's
-      // cooldown; the server already gates send attempts by sender and lease.
-      // Final dispatch always proves the current target anew.
-      const interval = snapshotId !== undefined && binding?.snapshotId !== snapshotId ? IDENTITY_NAVIGATION_INTERVAL_MS : TARGET_READ_PROOF_INTERVAL_MS;
-      if (passive && !preparingDispatch && this.lastTargetProofAttemptAt !== undefined && Date.now() - this.lastTargetProofAttemptAt < interval) fail(message, 'RECIPIENT_UNVERIFIED');
-      this.lastTargetProofAttemptAt = Date.now();
+          sameCard) return;
+      // Each recipient owns its read budget. A successful proof from a previous
+      // document must be renewed after switching away and back; a failed proof
+      // remains throttled for that recipient even while other chats are read.
+      // Dispatch still proves the current participant independently.
+      const attempts = this.targetProofAttempts ??= new Map();
+      const previous = attempts.get(target.id);
+      const attempt = previous?.context === this.context ? previous : undefined;
+      const changedView = attempt?.successful && (binding?.targetId !== target.id || !sameCard);
+      const interval = snapshotId !== undefined && attempt?.snapshotId !== snapshotId ? IDENTITY_NAVIGATION_INTERVAL_MS : TARGET_READ_PROOF_INTERVAL_MS;
+      if (passive && !preparingDispatch && !changedView && attempt && Date.now() - attempt.checkedAt < interval) rejectTarget();
+      const proofAttempt = { context: this.context, checkedAt: Date.now(), snapshotId, successful: false };
+      attempts.delete(target.id); attempts.set(target.id, proofAttempt);
+      if (attempts.size > 100) attempts.delete(attempts.keys().next().value);
+      this.lastTargetProofAttemptAt = proofAttempt.checkedAt;
       this.readTargetBinding = undefined;
       await binding?.card.dispose().catch(() => {});
       let profilePage;
@@ -695,15 +708,16 @@ export class DouyinBrowserAdapter {
         await profilePage.waitForURL(url => url.href !== 'about:blank', { waitUntil: 'domcontentloaded', timeout: this.timeoutMs });
         if (profileIdentity(profilePage.url()).id === target.id && current && await signature() === current && profileIdentity(page.url()).url === target.url) {
           this.readTargetBinding = { page, context: this.context, targetId: target.id, signature: current, card: await profileCard.elementHandle(), checkedAt: Date.now() };
+          proofAttempt.successful = true;
           return;
         }
       } catch { /* An unavailable, invalid, or different profile cannot authorize a send. */ }
       finally { await profilePage?.close().catch(() => {}); }
-      fail(message, 'RECIPIENT_UNVERIFIED');
+      rejectTarget();
     }
     const profiles = await root.locator('a[href*="/user/"]').evaluateAll(elements => elements.filter(node => node instanceof HTMLElement && !!(node.offsetWidth || node.offsetHeight || node.getClientRects().length)).map(node => new URL(node.getAttribute('href'), location.origin).href));
     const ids = new Set(); for (const url of profiles) { try { ids.add(profileIdentity(url).id); } catch { /* not a usable identity */ } }
-    if (ids.size !== 1 || !ids.has(target.id)) fail(message, 'RECIPIENT_UNVERIFIED');
+    if (ids.size !== 1 || !ids.has(target.id)) rejectTarget();
   }
   async openConversation(input, { signal, writable = true, deferTargetProof = false } = {}) {
     if (READ_ONLY_ACCOUNT.test(input.senderAccountId)) fail('当前账号只完成了搜索身份核验，未验证可发送的主页身份。', 'SENDER_UNVERIFIED');
@@ -721,9 +735,17 @@ export class DouyinBrowserAdapter {
     const panel = roots.filter({ has: page.locator(required), visible: true }).first();
     const entry = page.getByRole('button', { name: /^(私信|发消息|发送私信)$/ });
     const entryError = '未找到唯一的私信入口，目标可能未开放私信。';
-    if (!await panel.isVisible()) {
+    const panelVisible = await panel.isVisible();
+    const selected = this.conversationSelection;
+    const selectionMatches = selected?.page === page && selected.context === this.context && selected.targetId === target.id;
+    if (!panelVisible) {
       try { await entry.filter({ visible: true }).first().waitFor({ state: 'visible', timeout: this.timeoutMs }); }
       catch { await this.guard(page, signal); fail(entryError, 'CONTROL_UNVERIFIED'); }
+      const button = await this.uniqueVisible(entry, entryError);
+      await button.click(); await this.guard(page, signal);
+    } else if (!selectionMatches && await entry.filter({ visible: true }).count() === 1) {
+      // Douyin can retain B's visible inbox on A's profile. Select A through
+      // A's native private-message entry before reading or editing anything.
       const button = await this.uniqueVisible(entry, entryError);
       await button.click(); await this.guard(page, signal);
     }
@@ -749,6 +771,9 @@ export class DouyinBrowserAdapter {
       }
     }
     if (!root) fail('无法核对目标会话面板，未发送。', 'CHAT_UNAVAILABLE');
+    // Selection only avoids repeated entry clicks; verifyTarget is still the
+    // authority for participant identity, including immediately before send.
+    this.conversationSelection = { page, context: this.context, targetId: target.id };
     const stackChat = await root.getAttribute('data-stack-layer') === 'chat';
     if (!deferTargetProof) await this.verifyTarget(page, root, target, stackChat, { passive: true, preparingDispatch: writable });
     return { page, root, target, stackChat };

@@ -37,6 +37,112 @@ async function readConversation(f:ReturnType<typeof fixture>,x:Awaited<ReturnTyp
 
 const current=async(f:ReturnType<typeof fixture>,x:Awaited<ReturnType<typeof prepared>>,campaignId=x.campaign.id)=>(await f.chat.snapshot('owner-a','member-a','sales',campaignId,x.conversation.id)).conversations.find(c=>c.id===x.conversation.id)!;
 
+async function observeDisabledGreeting(f:ReturnType<typeof fixture>,x:Awaited<ReturnType<typeof prepared>>){
+ f.advance(61000);
+ const greeting=f.sqlite.prepare("SELECT text,job_id FROM workbench_prospect_messages WHERE conversation_id=? AND source_key LIKE 'greeting:%'").get(x.conversation.id)!;
+ const messages=[{id:'observed-greeting',direction:'outbound' as const,text:String(greeting.text)},{id:'observed-earlier',direction:'inbound' as const,text:'您好'},{id:'observed-latest',direction:'inbound' as const,text:'可以介绍一下吗'}];
+ await f.chat.sync('owner-a','member-a',x.campaign.id,x.conversation.id);const read=(await f.store.claim(x.device.deviceId,false,true))!;assert.equal(read.input.observeOnly,true);
+ await f.store.complete(x.device.deviceId,read.id,read.leaseToken,{senderAccountId:'MS4wSender001',recipientId:'MS4wRecipient001',observedAt:f.now(),snapshotId:'observed-snapshot',reliable:true,messages});
+ assert.equal(f.sqlite.prepare('SELECT source_key FROM workbench_prospect_messages WHERE job_id=?').get(greeting.job_id as string)?.source_key,'observed-greeting');
+ assert.equal(f.sqlite.prepare("SELECT eligible FROM workbench_prospect_messages WHERE source_key='observed-latest'").get()?.eligible,0);
+ return{messages,jobId:String(greeting.job_id)};
+}
+
+for(const state of ['queued','running'] as const)test(`enabling during a ${state} observe-only read retains intent until a fresh automatic proof`,async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);f.advance(61000);
+ const greeting=f.sqlite.prepare("SELECT text FROM workbench_prospect_messages WHERE conversation_id=? AND source_key LIKE 'greeting:%'").get(x.conversation.id)!;
+ const messages=[{id:'inflight-greeting',direction:'outbound' as const,text:String(greeting.text)},{id:'inflight-earlier',direction:'inbound' as const,text:'您好'},{id:'inflight-latest',direction:'inbound' as const,text:'可以介绍一下吗'}];
+ await f.chat.sync('owner-a','member-a',x.campaign.id,x.conversation.id);let read=state==='running'?(await f.store.claim(x.device.deviceId,false,true))!:undefined;
+ await f.chat.settings('owner-a','member-a',x.campaign.id,true);assert.equal((await current(f,x)).handoffReason,'已恢复AI，等待同步核实最新未回复消息');
+ read??=(await f.store.claim(x.device.deviceId,false,true))!;assert.equal(read.input.observeOnly,true);
+ await f.store.complete(x.device.deviceId,read.id,read.leaseToken,{senderAccountId:'MS4wSender001',recipientId:'MS4wRecipient001',observedAt:f.now(),snapshotId:'inflight-snapshot',reliable:true,messages});
+ assert.equal(f.sqlite.prepare("SELECT eligible FROM workbench_prospect_messages WHERE source_key='inflight-latest'").get()?.eligible,0);assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',async()=>{assert.fail('the old observe-only result cannot authorize a reply');}),false);
+ f.advance(31000);await readConversation(f,x,messages,'inflight-snapshot');await f.chat.rememberOne('owner-a','member-a','https://example.test');let calls=0;
+ assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',async(_o,_r,input)=>{calls++;assert.equal(input.pending!.length,1);return{action:'reply',reply:'您想了解哪个区域？'};}),true);assert.equal(calls,1);assert.equal(f.sqlite.prepare("SELECT eligible FROM workbench_prospect_messages WHERE source_key='inflight-earlier'").get()?.eligible,0);
+});
+
+for(const state of ['queued','running'] as const)for(const invalid of ['owner','member','campaign','lead','sender','input-sender','recipient','profile','thread','session','binding','device','stale','failed','done','not-observe-only','not-manual'] as const)test(`enabling ignores ${state} observe-only intent with ${invalid} source`,async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);f.advance(61000);await f.chat.sync('owner-a','member-a',x.campaign.id,x.conversation.id);
+ const read=state==='running'?(await f.store.claim(x.device.deviceId,false,true))!:undefined;const row=f.sqlite.prepare("SELECT id,input_json FROM workbench_prospect_jobs WHERE kind='readConversation' AND status=?").get(state)!;const id=String(row.id);
+ if(['input-sender','recipient','profile','thread','session','binding','not-observe-only','not-manual'].includes(invalid)){
+  const input=JSON.parse(String(row.input_json));const keys:Record<string,string>={'input-sender':'senderAccountId',recipient:'recipientId',profile:'profileUrl',thread:'conversationId',session:'sessionId',binding:'bindingVersion','not-observe-only':'observeOnly','not-manual':'manualSync'};input[keys[invalid]]=invalid==='binding'?input.bindingVersion+1:invalid.startsWith('not-')?false:'foreign-source';f.sqlite.prepare('UPDATE workbench_prospect_jobs SET input_json=? WHERE id=?').run(JSON.stringify(input),id);
+ }else if(invalid==='stale')f.sqlite.prepare(state==='queued'?'UPDATE workbench_prospect_jobs SET created_at=? WHERE id=?':'UPDATE workbench_prospect_jobs SET lease_until=? WHERE id=?').run(state==='queued'?new Date(Date.parse(f.now())-25*3600000).toISOString():f.now(),id);
+ else{const columns:Record<string,string>={owner:'owner_id',member:'member_id',campaign:'campaign_id',lead:'lead_id',sender:'sender_id',device:'device_id',failed:'status',done:'status'};f.sqlite.prepare(`UPDATE workbench_prospect_jobs SET ${columns[invalid]}=? WHERE id=?`).run(['failed','done'].includes(invalid)?invalid:'foreign-source',id);}
+ const before=await current(f,x);await f.chat.settings('owner-a','member-a',x.campaign.id,true);const after=await current(f,x);assert.equal(after.handoffReason,undefined);assert.equal(after.version,before.version);assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM workbench_prospect_messages WHERE direction='inbound'").get()?.n,0);if(read)assert.equal(read.input.observeOnly,true);
+});
+
+test('enabling without observations or an observe-only read preserves ordinary first-enable behavior',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);const before=await current(f,x);await f.chat.settings('owner-a','member-a',x.campaign.id,true);const after=await current(f,x);assert.equal(after.handoffReason,undefined);assert.equal(after.version,before.version);
+});
+
+test('an observe-only read error after enabling retains the wait until a new reliable observation',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.chat.sync('owner-a','member-a',x.campaign.id,x.conversation.id);const read=(await f.store.claim(x.device.deviceId,false,true))!;await f.chat.settings('owner-a','member-a',x.campaign.id,true);
+ await f.store.complete(x.device.deviceId,read.id,read.leaseToken,undefined,'合成读取错误');assert.equal((await current(f,x)).handoffReason,'已恢复AI，等待同步核实最新未回复消息');assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',async()=>{assert.fail('a read error cannot authorize a reply');}),false);
+});
+
+for(const explicitResume of [false,true])test(`enabling observed chat recovers only the latest unanswered untimed question through its completed greeting (explicitResume=${explicitResume})`,async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);const {messages}=await observeDisabledGreeting(f,x);
+ const initialVersion=(await current(f,x)).version;await Promise.all([f.chat.settings('owner-a','member-a',x.campaign.id,true),f.chat.settings('owner-a','member-a',x.campaign.id,true)]);assert.equal((await current(f,x)).version,initialVersion+1);
+ if(explicitResume){const c=await current(f,x);await f.chat.resume('owner-a','member-a',c.id,c.version);}
+ assert.equal((await current(f,x)).handoffReason,'已恢复AI，等待同步核实最新未回复消息');
+ f.advance(31000);await readConversation(f,x,messages,'observed-snapshot');await f.chat.rememberOne('owner-a','member-a','https://example.test');
+ const seen:string[]=[];const decide=async(_o:string,_r:string,input:Parameters<typeof chooseProspectChatAction>[0])=>{seen.push(...input.pending!.map(m=>m.id));return{action:'reply' as const,reply:'您想了解哪个区域？'};};
+ assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',decide),true);
+ assert.equal(seen.length,1);assert.equal(f.sqlite.prepare('SELECT source_key FROM workbench_prospect_messages WHERE id=?').get(seen[0])?.source_key,'observed-latest');
+ assert.equal(f.sqlite.prepare("SELECT eligible FROM workbench_prospect_messages WHERE source_key='observed-earlier'").get()?.eligible,0);
+ const reply=(await f.store.claim(x.device.deviceId,false,true))!;assert.equal(reply.kind,'reply');await f.store.complete(x.device.deviceId,reply.id,reply.leaseToken,{outcome:'submitted'});
+ const version=(await current(f,x)).version;await Promise.all([f.chat.settings('owner-a','member-a',x.campaign.id,true),f.chat.settings('owner-a','member-a',x.campaign.id,true)]);assert.equal((await current(f,x)).version,version);
+ f.advance(31000);await readConversation(f,x,messages,'observed-snapshot');assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',decide),false);assert.equal(seen.length,1);
+});
+
+for(const invalid of ['owner','member','campaign','lead','sender','input-sender','recipient','profile','message','kind','failed','queued','running','unknown','unlinked','different-source'] as const)test(`an observed same-text greeting cannot authorize resume with ${invalid} proof`,async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);const {messages,jobId}=await observeDisabledGreeting(f,x);
+ await f.chat.settings('owner-a','member-a',x.campaign.id,true);const c=await current(f,x);await f.chat.resume('owner-a','member-a',c.id,c.version);
+ f.advance(31000);await f.store.seen(x.device.deviceId,{authenticated:true,accountId:'MS4wSender001'});await f.chat.schedule(x.device.deviceId);const read=(await f.store.claim(x.device.deviceId,false,true))!;assert.equal(read.kind,'readConversation');
+ const original=f.sqlite.prepare('SELECT * FROM workbench_prospect_jobs WHERE id=?').get(jobId)!;
+ if(invalid==='unlinked')f.sqlite.prepare('UPDATE workbench_prospect_messages SET job_id=NULL WHERE job_id=?').run(jobId);
+ else if(invalid==='different-source')messages[0]={...messages[0],id:'different-same-text-outbound'};
+ else if(['input-sender','recipient','profile','message'].includes(invalid)){
+  const input=JSON.parse(String(f.sqlite.prepare('SELECT input_json FROM workbench_prospect_jobs WHERE id=?').get(jobId)?.input_json));
+  const key=invalid==='input-sender'?'senderAccountId':invalid==='recipient'?'recipientId':invalid==='profile'?'profileUrl':'message';input[key]='different-approved-value';f.sqlite.prepare('UPDATE workbench_prospect_jobs SET input_json=? WHERE id=?').run(JSON.stringify(input),jobId);
+ }else{
+  const columns:Record<string,string>={owner:'owner_id',member:'member_id',campaign:'campaign_id',lead:'lead_id',sender:'sender_id',kind:'kind',failed:'status',queued:'status',running:'status',unknown:'status'};const column=columns[invalid];
+  f.sqlite.prepare(`UPDATE workbench_prospect_jobs SET ${column}=? WHERE id=?`).run(['failed','queued','running','unknown'].includes(invalid)?invalid:invalid==='kind'?'collect':'different-proof-owner',jobId);
+ }
+ await f.store.complete(x.device.deviceId,read.id,read.leaseToken,{senderAccountId:'MS4wSender001',recipientId:'MS4wRecipient001',observedAt:f.now(),snapshotId:'observed-snapshot',reliable:true,messages});
+ assert.equal(f.sqlite.prepare("SELECT eligible FROM workbench_prospect_messages WHERE source_key='observed-latest'").get()?.eligible,0);
+ // Restore the adversarial proof after validation, before unrelated legacy materialization.
+ f.sqlite.prepare(`UPDATE workbench_prospect_jobs SET ${Object.keys(original).map(key=>`${key}=?`).join(',')} WHERE id=?`).run(...Object.values(original) as never[],jobId);if(invalid==='unlinked')f.sqlite.prepare("UPDATE workbench_prospect_messages SET job_id=? WHERE source_key='observed-greeting'").run(jobId);
+ await f.chat.rememberOne('owner-a','member-a','https://example.test');
+ assert.equal((await current(f,x)).handoffReason,'已恢复AI，等待同步核实最新未回复消息');assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',async()=>{assert.fail('an unproved greeting cannot authorize a reply');}),false);
+});
+
+test('returning to a previous task cannot reuse its old greeting to promote observe-only history',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);const {messages}=await observeDisabledGreeting(f,x);
+ const b=await f.store.createCampaign('owner-a','member-a',normalizeCampaignInput({requirements:'另一个独立商铺任务',keywords:['商铺']}));let c=await current(f,x);f.advance(1000);
+ await f.chat.switchTask('owner-a','member-a',c.id,b.id,c.version,c.taskMemory!.bindingVersion);c=await current(f,x,b.id);f.advance(1000);await f.chat.switchTask('owner-a','member-a',c.id,x.campaign.id,c.version,c.taskMemory!.bindingVersion);
+ await f.chat.settings('owner-a','member-a',x.campaign.id,true);c=await current(f,x);await f.chat.resume('owner-a','member-a',c.id,c.version);
+ f.advance(31000);await readConversation(f,x,messages,'observed-snapshot');assert.equal(f.sqlite.prepare("SELECT eligible FROM workbench_prospect_messages WHERE source_key='observed-latest'").get()?.eligible,0);assert.equal((await current(f,x)).handoffReason,'已恢复AI，等待同步核实最新未回复消息');
+});
+
+for(const held of ['human','closed','answered'] as const)test(`enabling observed chat preserves the ${held} boundary`,async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);const {messages}=await observeDisabledGreeting(f,x);
+ if(held==='human'){const c=await current(f,x);await f.chat.takeover('owner-a','member-a',c.id,c.version);}
+ if(held==='closed')f.sqlite.prepare("UPDATE workbench_prospect_conversations SET status='closed',close_reason='客户已停止联系' WHERE id=?").run(x.conversation.id);
+ await f.chat.settings('owner-a','member-a',x.campaign.id,true);
+ if(held==='human')assert.equal((await current(f,x)).handoffReason,'已由销售接管');
+ if(held==='closed'){assert.equal((await current(f,x)).status,'closed');return;}
+ f.advance(31000);await readConversation(f,x,held==='answered'?[...messages,{id:'already-answered',direction:'outbound',text:'销售已经在抖音回答'}]:messages,'observed-snapshot');assert.equal(f.sqlite.prepare("SELECT eligible FROM workbench_prospect_messages WHERE source_key='observed-latest'").get()?.eligible,0);assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',async()=>{assert.fail('a held conversation cannot auto-reply');}),false);
+});
+
+test('enabling observed chat never promotes unanchored baseline history across repeated snapshots',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);const history=[{id:'disabled-history',direction:'inbound' as const,text:'旧咨询'}];
+ await f.chat.sync('owner-a','member-a',x.campaign.id,x.conversation.id);const read=(await f.store.claim(x.device.deviceId,false,true))!;await f.store.complete(x.device.deviceId,read.id,read.leaseToken,{senderAccountId:'MS4wSender001',recipientId:'MS4wRecipient001',observedAt:f.now(),snapshotId:'disabled-history',reliable:true,messages:history});
+ await f.chat.settings('owner-a','member-a',x.campaign.id,true);
+ for(let pass=0;pass<3;pass++){f.advance(31000);history.push({id:`unproven-history-${pass}`,direction:'inbound',text:'其他历史咨询'});await readConversation(f,x,history,`unproven-${pass}`);}
+ assert.deepEqual(f.sqlite.prepare("SELECT eligible FROM workbench_prospect_messages WHERE direction='inbound' ORDER BY rowid").all().map(m=>m.eligible),[0,0,0,0]);assert.equal((await current(f,x)).handoffReason,'已恢复AI，等待同步核实最新未回复消息');assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',async()=>{assert.fail('old baseline rows cannot become freshness anchors');}),false);
+});
+
 test('a verified image round-trips its type, queues one safe clarification and permits a subsequent text turn',async t=>{
  const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.chat.settings('owner-a','member-a',x.campaign.id,true);await readConversation(f,x,[]);f.advance(61000);
  const question={id:'question-before-image',direction:'inbound' as const,text:'有什么房源？',postedAt:f.now()};const image={id:'real-image-shape',direction:'inbound' as const,text:'[图片消息，内容未识别]',contentType:'image' as const,postedAt:f.now()};await readConversation(f,x,[question,image],'opaque-image');await f.chat.rememberOne('owner-a','member-a','https://example.test');

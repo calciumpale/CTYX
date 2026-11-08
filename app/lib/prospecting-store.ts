@@ -2,7 +2,8 @@ import {DomainError} from './domain.ts';
 import {canAutoApprove,greetingText,normalizeCandidates,normalizeComments,normalizeCampaignInput,object,prospectHash,prospectToken,safeProspectError,scoreComment,scoreCommentIntent,text,MAX_PROSPECT_COMMENTS,PROSPECT_LEASE_MS,PROSPECT_SEND_INTERVAL_MS} from './prospecting-domain.ts';
 import type {AnalyzedComment,CampaignInput} from './prospecting-domain.ts';
 import type {ProspectBridgeJob,ProspectCampaign,ProspectDeviceView,ProspectJobView,ProspectLead} from './prospecting-types.ts';
-import {createProspectingChatStore,isProspectChatJob,prospectReplyPolicyGate,prospectContactAllowedSql} from './prospecting-chat-store.ts';
+import {createProspectingChatStore,isProspectChatJob,prospectReplyPolicyGate,prospectContactAllowedSql,prospectReplyCountsSql} from './prospecting-chat-store.ts';
+import {normalizeChatPolicy,redactChatText} from './prospecting-chat-policy.ts';
 
 interface DeviceRow {id:string;owner_id:string;member_id:string;label:string;token_hash:string;enabled:number;authenticated:number;account_id:string|null;account_name:string|null;message:string|null;last_seen_at:string|null}
 interface CampaignRow {id:string;owner_id:string;member_id:string;status:'active'|'paused';data_json:string;created_at:string;updated_at:string}
@@ -39,6 +40,55 @@ export function createProspectingStore(db:D1Database,now:()=>number=Date.now){
  async function touchDevice(id:string){
   const result=await db.prepare("UPDATE workbench_prospect_devices SET last_seen_at=? WHERE id=? AND enabled=1 AND EXISTS (SELECT 1 FROM workbench_member_accounts a WHERE a.owner_id=workbench_prospect_devices.owner_id AND a.account_id=workbench_prospect_devices.member_id AND a.enabled=1 AND a.role IN ('sales','manager'))").bind(stamp(),id).run();
   if(!result.meta.changes)throw new DomainError('设备凭证无效或已停用',401);
+ }
+ // Diagnostics deliberately bypass device()/chat.snapshot(): those views expire
+ // leases or materialize conversations. Every query here is scoped and read-only.
+ async function diagnostics(ownerId:string,memberId:string){
+  await member(ownerId,memberId);
+  const d=await currentDevice(ownerId,memberId);
+  const safeText=(value:string|null,accountIds:string[]=[])=>{
+   if(!value)return null;
+   let safe=redactChatText(safeProspectError(value)).replace(/["']?\b(?:api[_-]?key|token|cookie|session(?:id)?|secret|password|authorization|senderAccountId|recipientId|accountId)["']?\s*[=:]\s*(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi,'[凭证已隐藏]');
+   for(const id of [ownerId,memberId,d?.account_id,...accountIds])if(id)safe=safe.replaceAll(id,'[账号]');
+   return safe;
+  };
+  const tasks=await db.prepare("SELECT id,status,json_extract(data_json,'$.chatEnabled') AS chat_enabled,json_extract(data_json,'$.chatPolicy') AS policy_json FROM workbench_prospect_campaigns WHERE owner_id=? AND member_id=? ORDER BY created_at DESC,id DESC LIMIT 20").bind(ownerId,memberId).all<{id:string;status:string;chat_enabled:number|null;policy_json:string|null}>();
+  const campaigns=tasks.results.map(c=>({campaignId:c.id,status:c.status,chatEnabled:c.chat_enabled===1,policy:normalizeChatPolicy(c.policy_json?JSON.parse(c.policy_json):undefined)}));
+  const campaignIds=JSON.stringify(campaigns.map(c=>c.campaignId));
+  const dayStart=new Date(Math.floor((now()+8*3600000)/86400000)*86400000-8*3600000).toISOString(),since=new Date(now()-86400000).toISOString();
+  type ConversationDiagnostics={conversationId:string;campaignId:string;sender_id:string;recipient_id:string;mode:string;status:string;handoff_reason:string|null;version:number;last_read_at:string|null;has_last_snapshot_id:number;has_baseline:number;opened_at:string;processing_until:string|null;last_checked_at:string|null;pendingEligible:number;totalInbound:number;latestInbound:string|null;latestOutbound:string|null;dayReplyCount:number;conversationReplyCount:number};
+  const threads=await db.prepare(`SELECT c.id AS conversationId,c.campaign_id AS campaignId,c.sender_id,c.recipient_id,c.mode,c.status,c.handoff_reason,c.version,c.last_read_at,
+   (c.last_snapshot_id IS NOT NULL AND c.last_snapshot_id!='') AS has_last_snapshot_id,c.has_baseline,c.opened_at,c.processing_until,c.last_checked_at,
+   (SELECT COUNT(*) FROM workbench_prospect_messages m WHERE m.owner_id=c.owner_id AND m.member_id=c.member_id AND m.conversation_id=c.id AND m.direction='inbound' AND m.eligible=1 AND m.processed=0) AS pendingEligible,
+   (SELECT COUNT(*) FROM workbench_prospect_messages m WHERE m.owner_id=c.owner_id AND m.member_id=c.member_id AND m.conversation_id=c.id AND m.direction='inbound') AS totalInbound,
+   (SELECT m.created_at FROM workbench_prospect_messages m WHERE m.owner_id=c.owner_id AND m.member_id=c.member_id AND m.conversation_id=c.id AND m.direction='inbound' ORDER BY m.created_at DESC,m.rowid DESC LIMIT 1) AS latestInbound,
+   (SELECT m.created_at FROM workbench_prospect_messages m WHERE m.owner_id=c.owner_id AND m.member_id=c.member_id AND m.conversation_id=c.id AND m.direction='outbound' ORDER BY m.created_at DESC,m.rowid DESC LIMIT 1) AS latestOutbound,
+   (SELECT COUNT(*) FROM workbench_prospect_jobs j WHERE j.owner_id=c.owner_id AND j.member_id=c.member_id AND j.sender_id=c.sender_id AND j.kind='reply' AND ${prospectReplyCountsSql('j')} AND j.started_at>=?) AS dayReplyCount,
+   (SELECT COUNT(*) FROM workbench_prospect_jobs j WHERE j.owner_id=c.owner_id AND j.member_id=c.member_id AND j.sender_id=c.sender_id AND j.kind='reply' AND ${prospectReplyCountsSql('j')} AND json_extract(j.input_json,'$.conversationId')=c.id AND j.started_at>?) AS conversationReplyCount
+   FROM workbench_prospect_conversations c JOIN workbench_prospect_campaigns p ON p.id=c.campaign_id AND p.owner_id=c.owner_id AND p.member_id=c.member_id
+   WHERE c.owner_id=? AND c.member_id=? AND c.campaign_id IN (SELECT value FROM json_each(?)) ORDER BY c.updated_at DESC,c.id DESC LIMIT 100`).bind(dayStart,since,ownerId,memberId,campaignIds).all<ConversationDiagnostics>();
+  const conversationIds=JSON.stringify(threads.results.map(c=>c.conversationId));
+  type MessageDiagnostics={conversation_id:string;id:string;direction:string;actor:string;status:string;eligible:number;processed:number;posted_at:string|null;created_at:string};
+  const messages=await db.prepare(`SELECT conversation_id,id,direction,actor,status,eligible,processed,posted_at,created_at FROM (
+   SELECT m.conversation_id,m.id,m.direction,m.actor,m.status,m.eligible,m.processed,m.posted_at,m.created_at,
+    ROW_NUMBER() OVER (PARTITION BY m.conversation_id ORDER BY m.created_at DESC,m.rowid DESC) AS position
+   FROM workbench_prospect_messages m WHERE m.owner_id=? AND m.member_id=? AND m.conversation_id IN (SELECT value FROM json_each(?)))
+   WHERE position<=10 ORDER BY conversation_id,position`).bind(ownerId,memberId,conversationIds).all<MessageDiagnostics>();
+  type JobDiagnostics={conversation_id:string;kind:string;status:string;started_at:string|null;error:string|null;errorCode:string|null;retryable:number|null};
+  const jobs=await db.prepare(`SELECT conversation_id,kind,status,started_at,error,errorCode,retryable FROM (
+   SELECT c.id AS conversation_id,j.kind,j.status,j.started_at,j.error,
+    json_extract(CASE WHEN json_valid(j.result_json) THEN j.result_json ELSE '{}' END,'$.errorCode') AS errorCode,
+    json_extract(CASE WHEN json_valid(j.result_json) THEN j.result_json ELSE '{}' END,'$.retryable') AS retryable,
+    ROW_NUMBER() OVER (PARTITION BY c.id ORDER BY j.created_at DESC,j.id DESC) AS position
+   FROM workbench_prospect_jobs j JOIN workbench_prospect_conversations c ON c.id=json_extract(j.input_json,'$.conversationId') AND c.owner_id=j.owner_id AND c.member_id=j.member_id AND c.campaign_id=j.campaign_id
+   WHERE j.owner_id=? AND j.member_id=? AND c.id IN (SELECT value FROM json_each(?)))
+   WHERE position<=5 ORDER BY conversation_id,position`).bind(ownerId,memberId,conversationIds).all<JobDiagnostics>();
+  const conversations=threads.results.map(c=>({conversationId:c.conversationId,campaignId:c.campaignId,mode:c.mode,status:c.status,handoff_reason:safeText(c.handoff_reason,[c.sender_id,c.recipient_id]),version:c.version,last_read_at:c.last_read_at,has_last_snapshot_id:!!c.has_last_snapshot_id,has_baseline:!!c.has_baseline,opened_at:c.opened_at,processing_until:c.processing_until,last_checked_at:c.last_checked_at,
+   counts:{pendingEligible:c.pendingEligible,totalInbound:c.totalInbound,latestInbound:c.latestInbound,latestOutbound:c.latestOutbound,dayReplyCount:c.dayReplyCount,conversationReplyCount:c.conversationReplyCount},
+   messages:messages.results.filter(m=>m.conversation_id===c.conversationId).map(m=>({id:m.id,direction:m.direction,actor:m.actor,status:m.status,eligible:m.eligible,processed:m.processed,posted_at:m.posted_at,created_at:m.created_at})),
+   jobs:jobs.results.filter(j=>j.conversation_id===c.conversationId).map(j=>({kind:j.kind,status:j.status,started_at:j.started_at,error:safeText(j.error,[c.sender_id,c.recipient_id]),errorCode:typeof j.errorCode==='string'&&/^[A-Z][A-Z0-9_]{0,79}$/.test(j.errorCode)?j.errorCode:null,retryable:j.retryable===1})),
+  }));
+  return{device:{online:d?online(d):false,authenticated:!!d?.authenticated},campaigns,conversations};
  }
  async function disconnect(ownerId:string,memberId:string){
   await member(ownerId,memberId);const time=stamp();
@@ -273,5 +323,5 @@ export function createProspectingStore(db:D1Database,now:()=>number=Date.now){
    catch(error){if(!(error instanceof DomainError))throw error;const terminal=/已安排|已触达|停止联系/.test(error.message);await db.prepare("UPDATE workbench_prospect_leads SET data_json=json_set(data_json,'$.error',?,'$.autoSuppressed',?),updated_at=? WHERE campaign_id=? AND id=? AND job_id IS NULL AND version=?").bind(error.message,terminal?1:0,stamp(),c.id,lead.id,lead.version).run();}
   }
  }
- return{chat,enqueueAutomatic,connect,disconnect,authenticate,touchDevice,device,seen,createCampaign,campaigns,campaign,leads,jobs,setPaused,createJob,insertComments,review,retrySend,claim,leased,renew,complete,pendingAnalysis,saveAnalysis,retryAnalysis};
+ return{chat,enqueueAutomatic,connect,disconnect,authenticate,touchDevice,diagnostics,device,seen,createCampaign,campaigns,campaign,leads,jobs,setPaused,createJob,insertComments,review,retrySend,claim,leased,renew,complete,pendingAnalysis,saveAnalysis,retryAnalysis};
 }

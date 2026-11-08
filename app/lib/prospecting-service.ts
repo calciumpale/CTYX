@@ -83,7 +83,8 @@ export function createProspectingService(deps:Dependencies){
    if(request.method!=='POST')throw new DomainError('只允许POST请求',405);
    if(request.headers.has('origin')||request.headers.get('sec-fetch-site')==='cross-site')throw new DomainError('设备接口不接受浏览器跨站请求',403);
    const input=await readMeetingBody(request,16000),deviceId=prospectId(input.deviceId);
-   await store.authenticate(deviceId,request.headers.get('authorization')?.replace(/^Bearer /,'')??'');
+   const device=await store.authenticate(deviceId,request.headers.get('authorization')?.replace(/^Bearer /,'')??'');
+   if(input.diagnostics===true)return json({ok:true,diagnostics:{...await store.diagnostics(device.owner_id,device.member_id),modelReady:!!await getModel(device.owner_id,new URL(request.url).origin)}});
    await store.touchDevice(deviceId);
    return json({ok:true});
   }catch(error){return failure(error);}

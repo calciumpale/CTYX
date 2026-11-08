@@ -1,0 +1,1 @@
+ALTER TABLE `workbench_prospect_memory_bindings` ADD `legacy_verified_at` text;

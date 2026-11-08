@@ -200,3 +200,18 @@
   .prospect-pool-table td { padding: 0; }
   .prospect-pool-table caption.prospect-sr-only { display: none; }
 }
+
+/* Long conversations scroll separately; short screens can scroll the surrounding work pane. */
+.main-content .prospect-chat-layout { height: clamp(460px, calc(100dvh - 340px), 760px); }
+.main-content .prospect-conversation-list { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+.main-content .prospect-conversation-search { flex: none; }
+.main-content .prospect-conversation-items { flex: 1; min-height: 0; max-height: none; overscroll-behavior-y: contain; }
+.main-content .prospect-conversation-detail { min-height: 0; overflow-y: auto; }
+.main-content .prospect-conversation-detail > :not(.prospect-chat-transcript) { flex-shrink: 0; }
+.main-content .prospect-chat-transcript { flex: 1 1 0; height: auto; min-height: 100px; max-height: none; overscroll-behavior-y: contain; }
+@media (max-width: 700px) {
+  .main-content .prospect-chat-layout { height: 580px; }
+  .main-content .prospect-conversation-list,
+  .main-content .prospect-conversation-detail { height: 100%; }
+  .main-content .prospect-chat-layout.is-detail .prospect-conversation-list { display: none; }
+}

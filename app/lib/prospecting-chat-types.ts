@@ -1,3 +1,4 @@
+import type {TaskMemoryState,TaskMemoryView} from './prospecting-memory-types.ts';
 export type ProspectChatActor = 'customer' | 'agent' | 'human';
 export type ProspectChatMode = 'agent' | 'human';
 export type ProspectChatDirection = 'inbound' | 'outbound';
@@ -38,6 +39,8 @@ export interface ProspectChatConversation {
   lastSyncedAt?: string;
   handoffReason?: string;
   memory?: ProspectChatMemory;
+  taskMemory?: TaskMemoryView;
+  memoryEditable?: boolean;
   closeReason?: string;
   updatedAt: string;
 }
@@ -81,15 +84,17 @@ export interface ProspectChatSnapshot {
   pool: ProspectCapturedLead[];
   policy?: ProspectChatPolicy;
   libraries?: { id: string; name: string }[];
+  memoryTasks?: { id: string; name: string }[];
   sync?: { conversationId: string; status: ProspectJobStatus; updatedAt: string; error?: string };
 }
 
 export interface ProspectChatAgentInput {
   campaign: { name: string; requirements: string; minIntentScore: number };
-  conversation: Pick<ProspectChatConversation, 'nickname'> & Partial<Pick<ProspectChatConversation, 'mode' | 'memory'>>;
+  conversation: Pick<ProspectChatConversation, 'nickname'> & Partial<Pick<ProspectChatConversation, 'mode' | 'memory' | 'taskMemory'>>;
   policy?: ProspectChatPolicy;
   messages: ProspectChatMessage[];
   inbound: Pick<ProspectChatMessage, 'id' | 'text'>;
+  now?: string;
   pending?: Pick<ProspectChatMessage, 'id' | 'text'>[];
 }
 
@@ -99,6 +104,9 @@ export interface ProspectChatDecision {
   reason?: string;
   evidenceIds?: string[];
   memory?: ProspectChatMemory;
+  taskMemoryState?: TaskMemoryState;
+  answeredMessageIds?: string[];
+  route?: 'direct' | 'retrieve' | 'fallback' | 'handoff';
   close?: boolean;
   lead?: {
     contactType: ProspectContactType;

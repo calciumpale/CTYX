@@ -152,3 +152,23 @@ export const workbenchSchedules = sqliteTable('workbench_schedules', {
 export const workbenchProspectDiscoveryRuns=sqliteTable('workbench_prospect_discovery_runs',{
  id:text('id').primaryKey(),ownerId:text('owner_id').notNull(),memberId:text('member_id').notNull(),campaignId:text('campaign_id').notNull(),dailyKey:text('daily_key'),scheduledFor:text('scheduled_for').notNull(),status:text('status').notNull(),dataJson:text('data_json').notNull(),createdAt:text('created_at').notNull(),updatedAt:text('updated_at').notNull(),
 },table=>[uniqueIndex('workbench_prospect_discovery_daily').on(table.campaignId,table.dailyKey),index('workbench_prospect_discovery_member').on(table.ownerId,table.memberId,table.campaignId,table.createdAt)]);
+
+/** Per-task reception, deliberately separate from the stable platform conversation. */
+export const workbenchProspectMemorySessions=sqliteTable('workbench_prospect_memory_sessions',{
+ id:text('id').primaryKey(),threadId:text('thread_id').notNull(),campaignId:text('campaign_id').notNull(),ownerId:text('owner_id').notNull(),memberId:text('member_id').notNull(),version:integer('version').notNull().default(1),sourceWatermark:integer('source_watermark').notNull().default(0),sourceVersion:integer('source_version').notNull().default(0),stateJson:text('state_json').notNull(),writeToken:text('write_token'),createdAt:text('created_at').notNull(),updatedAt:text('updated_at').notNull(),
+},t=>[uniqueIndex('workbench_prospect_memory_task').on(t.threadId,t.campaignId),index('workbench_prospect_memory_member').on(t.ownerId,t.memberId,t.campaignId)]);
+export const workbenchProspectMemoryBindings=sqliteTable('workbench_prospect_memory_bindings',{
+ threadId:text('thread_id').primaryKey(),activeSessionId:text('active_session_id').notNull(),originalSessionId:text('original_session_id').notNull(),version:integer('version').notNull().default(1),legacyWatermark:integer('legacy_watermark').notNull().default(0),legacyVerifiedAt:text('legacy_verified_at'),switchedWatermark:integer('switched_watermark').notNull().default(0),updatedAt:text('updated_at').notNull(),
+});
+export const workbenchProspectMemorySources=sqliteTable('workbench_prospect_memory_sources',{
+ messageId:text('message_id').primaryKey(),sessionId:text('session_id').notNull(),bindingVersion:integer('binding_version').notNull(),rowOrder:integer('row_order').notNull(),processedStatus:text('processed_status'),createdAt:text('created_at').notNull(),
+},t=>[index('workbench_prospect_memory_source_session').on(t.sessionId,t.rowOrder)]);
+export const workbenchProspectMemoryFacts=sqliteTable('workbench_prospect_memory_facts',{
+ sessionId:text('session_id').notNull(),id:text('id').notNull(),sourceMessageId:text('source_message_id').notNull(),status:text('status').notNull(),dataJson:text('data_json').notNull(),
+},t=>[primaryKey({columns:[t.sessionId,t.id]}),index('workbench_prospect_memory_fact_source').on(t.sessionId,t.sourceMessageId)]);
+export const workbenchProspectMemoryEvents=sqliteTable('workbench_prospect_memory_events',{
+ sessionId:text('session_id').notNull(),id:text('id').notNull(),sourceMessageId:text('source_message_id').notNull(),createdAt:text('created_at').notNull(),dataJson:text('data_json').notNull(),
+},t=>[primaryKey({columns:[t.sessionId,t.id]}),index('workbench_prospect_memory_event_time').on(t.sessionId,t.createdAt)]);
+export const workbenchProspectMemoryCaptures=sqliteTable('workbench_prospect_memory_captures',{
+ sessionId:text('session_id').notNull(),captureId:text('capture_id').notNull(),
+},t=>[primaryKey({columns:[t.sessionId,t.captureId]})]);

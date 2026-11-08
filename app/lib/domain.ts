@@ -1,3 +1,4 @@
+import type {KnowledgeAgentRequest,KnowledgePreparedContext,KnowledgeAgentEvidence} from './knowledge-agent.ts';
 import {validateIntakeExtraction} from './project-intake.ts';
 import type {IntakeExtraction} from './project-intake-types.ts';
 import type {ProjectApprovalContext} from './approval-agent-context.ts';
@@ -16,12 +17,12 @@ export class DomainError extends Error {
   constructor(message:string,status=400) { super(message); this.name='DomainError'; this.status=status; }
 }
 /** Internal visibility metadata stays in D1 and is stripped from API projections. */
-interface WorkflowFrame {knowledgeIds:string[];answerIds:string[];targets?:string[];}
+interface WorkflowFrame {knowledgeIds:string[];answerIds:string[];targets?:string[];knowledgeRoute?:KnowledgePreparedContext['route'];}
 interface WorkflowCheckpoint {workflow:Workflow;role:Role;deal?:Deal;deals:Deal[];knowledge:Record<string,Knowledge>;answers:Record<string,string>;frames:Record<string,WorkflowFrame>;order:string[];cursor:number;}
 type StoredState=WorkbenchState & {_access?:Record<string,string>;_workflowRuns?:Record<string,WorkflowCheckpoint>};
 export interface GenerationInput {query:string;agentId:AgentId;projectApprovals?:ProjectApprovalContext[];deal?:Deal;deals:Deal[];knowledge:Knowledge[];instruction?:string;previous?:string;history?:{query:string;answer:string}[];contractReviews?:{title:string;reviewedAt?:string;analysis:ContractAnalysis}[];purpose?:'chat'|'workflow';}
 export interface GenerationOutput {answer:string;mode:'demo'|'live';}
-export interface ActionContext {actorName?:string;extractIntake?:(text:string)=>Promise<IntakeExtraction>;now?:string;generate?:(input:GenerationInput)=>Promise<GenerationOutput>;trainingGenerate?:(input:TrainingGenerationInput)=>Promise<GenerationOutput>;enrichCompany?:(deal:Deal)=>Promise<CompanyProfile>;trustedRecording?:FollowupRecording;reviewContract?:(document:ContractDocument,deal:Deal)=>Promise<ContractAnalysis>;contractModelName?:string;approveTalkTrack?:(track:TalkTrack)=>Promise<void>;retrieveTalkTracks?:(query:string)=>Promise<TalkTrack[]>;retrieveManagedKnowledge?:(query:string)=>Promise<Knowledge[]>;}
+export interface ActionContext {prepareKnowledge?:(request:KnowledgeAgentRequest,scope?:{knowledgeIds:string[];knowledge:Knowledge[]})=>Promise<KnowledgePreparedContext>;actorName?:string;extractIntake?:(text:string)=>Promise<IntakeExtraction>;now?:string;generate?:(input:GenerationInput)=>Promise<GenerationOutput>;trainingGenerate?:(input:TrainingGenerationInput)=>Promise<GenerationOutput>;enrichCompany?:(deal:Deal)=>Promise<CompanyProfile>;trustedRecording?:FollowupRecording;reviewContract?:(document:ContractDocument,deal:Deal)=>Promise<ContractAnalysis>;contractModelName?:string;approveTalkTrack?:(track:TalkTrack)=>Promise<void>;retrieveTalkTracks?:(query:string)=>Promise<TalkTrack[]>;retrieveManagedKnowledge?:(query:string)=>Promise<Knowledge[]>;}
 const agentIds=new Set(AGENTS.map(item=>item.id));
 const nodeTypes=new Set(['start','intent','knowledge','agent','review','output']);
 const managerActions=new Set(['skill_review','knowledge_add','workflow_save','workflow_publish','workflow_review']);
@@ -333,6 +334,54 @@ export function demoGenerate(input:GenerationInput):GenerationOutput {
   if(knowledge.length) answer+=`\n\n参考资料：${knowledge.map(item=>item.title).join('、')}。资料的适用行业与授权范围须另行核对。`;
   return {answer:`本地生成 · 未调用外部模型\n\n${answer}`,mode:'demo'};
 }
+const knowledgeBoundary=(route:KnowledgePreparedContext['route']):string=>({direct:'本次可直接沟通，无需补充业务事实。',retrieved:'仅按本次已授权资料回答业务事实，保留适用条件；客户预算不是产品报价。',conflict:'资料存在冲突，请人工核实后再确认业务条件。',failed:'资料暂时不可用，请稍后核实；当前无法确认业务事实。',no_evidence:'现有资料不足，尚无法确认业务事实，请补充资料或人工核实。'})[route];
+const customerAdvice=(query:string,deals:Deal[])=>deals.length>0&&/建议|策略|方案|推进|分析|风险|跟进|商机|漏斗|健康/.test(query);
+const outputSentences=(value:string)=>value.split(/(?<=[。！？!?；;])|\n/).map(s=>s.replace(/^\s*(?:#{1,6}\s+|[-*]\s+|\d+[.)、]\s*)/,'').trim()).filter(Boolean);
+/** Customer statements can ground their own attributed requirements, never vendor facts. */
+function customerFactSupported(clause:string,input:GenerationInput):boolean {
+  const normalize=(value:string)=>value.replace(/[。！!？?；;\s]/g,'');
+  const deals=input.deal?[input.deal]:input.deals;
+  const claim=normalize(clause);
+  return deals.some(deal=>{
+    const subjects=[deal.name,`客户${deal.name}`,`${deal.name}客户`,...(input.deal||deals.length===1?['客户','该客户']:[])];
+    const profile=deal.customerProfile;
+    const fields:[string[],string[]][]=[
+      [['预算','租金预算'],[profile?.budget??'']],
+      [['计划时间','时间'],[profile?.timeline??'']],
+      [['目标'],[profile?.goals??'']],
+      [['顾虑'],[profile?.concerns??'']],
+      [['决策链'],[profile?.decisionChain??'']],
+      [['需求','需要','希望'],deal.needs],
+    ];
+    return fields.some(([labels,values])=>values.filter(value=>value.trim()).some(value=>subjects.some(subject=>
+      labels.some(label=>['','为','是','：',':'].some(join=>claim===normalize(`${subject}${label}${join}${value}`)))||
+      // A need may already carry its own field label (e.g. “需要80平米”).
+      /^(?:需要|希望|预算|面积|区域)/.test(value)&&claim===normalize(`${subject}${value}`)
+    )));
+  });
+}
+function groundedSpecialist(answer:string,input:GenerationInput,strictBusiness:boolean):boolean {
+  const factual=/租金|月租|价格|单价|库存|空铺|房源|地址|营业|开门|政策|制度|审批|收费|转让费|支持|预约成功|保证|已(?:预约|确认|安排)|(?:有|剩|可租).{0,8}(?:商铺|房|铺)|报价|折扣|优惠|押金|免租|现货|有货|每月|预算.{0,12}(?:元|万|千|百|块)|\d/;
+  const normalized=(s:string)=>s.replace(/[。！!？?；;\s]/g,'');
+  return outputSentences(answer).every(sentence=>{
+    if(/^(?:已核对|资料不足|尚待核实|请补充资料|需要人工确认)[。！!]*$/.test(sentence))return true;
+    const sources=input.knowledge.filter(k=>outputSentences(k.content).some(part=>normalized(part)===normalized(sentence)));
+    // A price sentence cannot be detached from its source's applicability clauses.
+    if(sources.some(k=>outputSentences(k.content).filter(part=>/仅|适用|前提|须|必须|条件|如果|限于/.test(part)).every(part=>answer.includes(part))))return true;
+    if(strictBusiness)return false;
+    // Check every clause so an owned budget cannot launder a following inventory/price claim.
+    return sentence.split(/[，,]/).filter(Boolean).every(clause=>!factual.test(clause)||customerFactSupported(clause,input));
+  });
+}
+async function boundedSpecialist(input:GenerationInput,context:ActionContext,route?:KnowledgePreparedContext['route'],directAnswer?:string):Promise<GenerationOutput>{
+  if(!route)return context.generate?context.generate(input):demoGenerate(input);
+  const boundary=knowledgeBoundary(route);
+  if(route==='conflict'||(route!=='retrieved'&&!customerAdvice(input.query,input.deals)))return {answer:route==='direct'?(directAnswer??'您好，有什么想了解的？'):boundary,mode:'demo'};
+  const request={...input,instruction:[input.instruction,boundary,'客户记录只用于客户需求与跟进建议；不得用预算推断报价，不得补写资料缺失的价格、库存、制度或执行结果。'].filter(Boolean).join('\n')};
+  const output=context.generate?await context.generate(request):demoGenerate(request);
+  return groundedSpecialist(output.answer,input,!customerAdvice(input.query,input.deals))?output:{answer:route==='retrieved'?'回答中的业务事实缺少完整资料依据，请核实后回复。':boundary,mode:'demo'};
+}
+const asKnowledge=(item:KnowledgeAgentEvidence):Knowledge=>({...item,category:'共享知识库',source:'已授权知识库',status:'published',updatedAt:''});
 async function buildRun(state:StoredState,role:Role,query:string,context:ActionContext,now:string,options:{agentId?:unknown;dealId?:unknown;conversationRunIds?:unknown;talkTrackIds?:unknown}={}):Promise<Run> {
   const started=Date.now();const steps:TraceStep[]=[];const citations:Run['citations']=[];const usedAgents:AgentId[]=[];let mode:Run['mode']='demo';const answers:string[]=[];
   const priorRuns=conversationRuns(state,role,options.conversationRunIds);const history=boundedConversation(priorRuns);const latest=priorRuns.at(-1);
@@ -347,13 +396,13 @@ async function buildRun(state:StoredState,role:Role,query:string,context:ActionC
   const visibleDeals=role==='sales'?state.deals.filter(item=>item.ownerId==='sales-1'):state.deals;
   const scopedDeals=deal?[deal]:portfolio?visibleDeals:[];
   const explicitTracks=approvedTracks(state,options.talkTrackIds);
-  const semanticTracks=context.retrieveTalkTracks&&!explicitTracks.length&&routed.includes('strategy')?await context.retrieveTalkTracks(retrievalQuery):[];
+  const semanticTracks=!context.prepareKnowledge&&context.retrieveTalkTracks&&!explicitTracks.length&&routed.includes('strategy')?await context.retrieveTalkTracks(retrievalQuery):[];
   const tracks=[...new Map([...explicitTracks,...semanticTracks].map(t=>[t.id,t])).values()].slice(0,5);
   let knowledge:Knowledge[]=[];
   const step=(title:string,detail:string,status:TraceStep['status']='success',agent?:AgentId,duration=0)=>steps.push({id:uid('step'),title,detail,status,agent,duration});
   const generate=async (agentId:AgentId,instruction?:string,previous=answers.join('\n\n'))=> {
     const tick=Date.now();const input:GenerationInput={query,agentId,deal,deals:scopedDeals,knowledge,instruction:[instruction,explicitTracks.length?'用户指定采用以下已审核话术的结构和表达方式：'+explicitTracks.map(t=>t.title).join('、')+'。根据当前客户资料改写占位符，不照搬来源项目事实。':undefined].filter(Boolean).join('\n'),previous,history,...(agentId==='risk'&&deal?{contractReviews:(state.contracts??[]).filter(c=>c.dealId===deal.id&&c.analysis).slice(0,5).map(c=>({title:c.title,reviewedAt:c.reviewedAt,analysis:c.analysis!}))}:{}),purpose:'chat'};
-    const output=context.generate?await context.generate(input):demoGenerate(input);
+    const output=await boundedSpecialist(input,context,prepared?.route,prepared?.answer);
     if(output.mode==='live')mode='live';usedAgents.push(agentId);answers.push(`${agentName(agentId)}\n${output.answer}`);
     step(`${agentName(agentId)}生成`,`${output.mode==='demo'?'本地规则演示，未请求外部模型':'服务端外部模型返回'}；使用${knowledge.length}条生效资料${deal?`；客户：${deal.name}`:''}${instruction?`；节点指令：${instruction}`:''}`, 'success',agentId,Date.now()-tick);
     return `${agentName(agentId)}\n${output.answer}`;
@@ -369,12 +418,17 @@ async function buildRun(state:StoredState,role:Role,query:string,context:ActionC
       }
     }
     if(deal)citations.push(...companyCitations(deal));
-    const managed = await context.retrieveManagedKnowledge?.(retrievalQuery) ?? [];
-    knowledge = [...managed, ...tracks.map(talkKnowledge), ...retrieveKnowledge(state,retrievalQuery)];
+    const prepared=await context.prepareKnowledge?.({question:query,retrievalQuery,history:history.flatMap(item=>[{role:'user' as const,content:item.query},{role:'assistant' as const,content:item.answer}]),context:deal?[{id:deal.id,kind:'customer_fact',text:JSON.stringify({needs:deal.needs,budget:deal.customerProfile?.budget})}]:[]});
+    if(prepared){
+      knowledge=[...(prepared.route==='retrieved'?prepared.knowledge.map(asKnowledge):[]),...tracks.map(talkKnowledge)];
+    }else{
+      const managed = await context.retrieveManagedKnowledge?.(retrievalQuery) ?? [];
+      knowledge = [...managed, ...tracks.map(talkKnowledge), ...retrieveKnowledge(state,retrievalQuery)];
+    }
     for (const item of knowledge) {
       if (!citations.some(entry => entry.id === item.id)) citations.push({ id:item.id, title:item.title, excerpt:item.content.slice(0,240) });
     }
-    step('检索生效知识',`检索当前空间的${knowledge.length}条生效资料。`);
+    step('检索生效知识',prepared?.route==='direct'?'知识库 Agent 判断本次可直接沟通，无需检索。':`检索当前空间的${knowledge.length}条生效资料。`);
     for(const agentId of routed)await generate(agentId);
     step('核对建议边界','保留待核实事项；健康度为规则分值；未自动承诺商务条件或修改商机。');
   return {id:uid('run'),query,answer:answers.join('\n\n────────\n\n'),agentIds:[...new Set(usedAgents)],steps,citations,mode,createdAt:now,duration:Date.now()-started,...(deal?{dealId:deal.id}:{})};
@@ -401,7 +455,8 @@ async function executeWorkflow(state:StoredState,run:Run,checkpoint:WorkflowChec
     const node=workflow.nodes.find(item=>item.id===checkpoint.order[checkpoint.cursor])!;
     const incoming=workflow.edges.filter(edge=>edge.to===node.id).flatMap(edge=>{const frame=own(checkpoint.frames,edge.from);return frame&&(!frame.targets||frame.targets.includes(node.id))?[frame]:[];});
     if(node.type!=='start'&&!incoming.length){trace(node,'当前输入未进入此分支。','','','skipped');continue;}
-    const frame:WorkflowFrame={knowledgeIds:mergeIds(incoming.map(item=>item.knowledgeIds)),answerIds:mergeIds(incoming.map(item=>item.answerIds))};
+    const inheritedRoute=(['conflict','failed','no_evidence','retrieved','direct'] as const).find(route=>incoming.some(item=>item.knowledgeRoute===route));
+    const frame:WorkflowFrame={knowledgeIds:mergeIds(incoming.map(item=>item.knowledgeIds)),answerIds:mergeIds(incoming.map(item=>item.answerIds)),...(inheritedRoute?{knowledgeRoute:inheritedRoute}:{})};
     const previous=frameAnswer(checkpoint,frame,12000);const input=JSON.stringify({query:run.query,previous,knowledgeIds:frame.knowledgeIds,...(node.instruction?{instruction:node.instruction}:{})});
     const tick=Date.now();
     try {
@@ -419,20 +474,25 @@ async function executeWorkflow(state:StoredState,run:Run,checkpoint:WorkflowChec
         const candidates=selected===undefined?available:available.filter(item=>selected.includes(item.id));
         const ranked=rankedKnowledge(candidates,run.query);
         // Explicit bindings remain available even when the current query has no keyword match.
-        const entries = selected === undefined
-          ? [...await context.retrieveManagedKnowledge?.(run.query) ?? [], ...ranked].slice(0, 6)
-          : [...ranked, ...candidates.filter(item=>!ranked.includes(item))].slice(0, 4);
+        const scoped=[...ranked,...candidates.filter(item=>!ranked.includes(item))].slice(0,4);
+        const prepared=await context.prepareKnowledge?.({question:run.query,intent:'business'},selected===undefined?undefined:{knowledgeIds:selected,knowledge:scoped});
+        if(prepared)frame.knowledgeRoute=(['conflict','failed','no_evidence','retrieved','direct'] as const).find(route=>route===prepared.route||route===frame.knowledgeRoute);
+        const entries = prepared
+          ? (prepared.route==='retrieved'?prepared.knowledge.filter(item=>selected===undefined||selected.includes(item.id)).map(asKnowledge):[])
+          : selected === undefined
+            ? [...await context.retrieveManagedKnowledge?.(run.query) ?? [], ...ranked].slice(0, 6)
+            : scoped;
         for(const entry of entries) {
           checkpoint.knowledge[entry.id]={...entry,content:clip(entry.content,6000)};
           if(!run.citations.some(item=>item.id===entry.id))run.citations.push({id:entry.id,title:entry.title,excerpt:entry.content.slice(0,240)});
         }
         frame.knowledgeIds=mergeIds([frame.knowledgeIds,entries.map(item=>item.id)]);
-        trace(node,`检索到${entries.length}条生效资料；候选和退回 Skill 不参与检索。`,input,entries.map(item=>`${item.id} · ${item.title}`).join('\n')||'未检索资料');
+        trace(node,prepared?`${knowledgeBoundary(prepared.route)} 检索到${entries.length}条生效资料。`:`检索到${entries.length}条生效资料；候选和退回 Skill 不参与检索。`,input,entries.map(item=>`${item.id} · ${item.title}`).join('\n')||'未检索资料');
       }
       if(node.type==='agent') {
         const knowledge=frame.knowledgeIds.map(id=>own(checkpoint.knowledge,id)).filter((item):item is Knowledge=>!!item);
         const generation:GenerationInput={query:run.query,agentId:node.agentId!,deal:checkpoint.deal,deals:checkpoint.deals,knowledge,instruction:node.instruction,previous,purpose:'workflow'};
-        const output=context.generate?await context.generate(generation):demoGenerate(generation);
+        const output=await boundedSpecialist(generation,context,frame.knowledgeRoute);
         if(typeof output.answer!=='string'||!output.answer.trim())fail('专家未返回有效文本，请检查模型连接后重试',502);
         checkpoint.answers[node.id]=`${agentName(node.agentId!)}\n${clip(output.answer.trim(),6000)}`;
         frame.answerIds=mergeIds([frame.answerIds,[node.id]]);if(!run.agentIds.includes(node.agentId!))run.agentIds.push(node.agentId!);if(output.mode==='live')run.mode='live';

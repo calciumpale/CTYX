@@ -47,7 +47,7 @@ export function withinChatHours(nowMs:number,policy:ProspectChatPolicy):boolean 
 export function isChatOptOut(value:string,previousOutbound?:string):boolean {
   const normalized=value.normalize('NFKC');
   if(/(?:别|不要|不想|不用|请勿|停止|无需|不必)(?:再)?(?:给我|跟我|对我)?(?:联系|私信|打扰|发(?:送)?(?:消息|信息|广告|私信)|发了|聊了)|(?:取消|停止)(?:接收|推送)|不感兴趣|没兴趣|拉黑|退订|不考虑了/.test(normalized))return true;
-  const needQuestion=/主要打算经营什么业态|大概需要多大面积|希望在哪个城市或区域|租金预算大概是多少|计划什么时候开业或入驻|预算.{0,12}(?:单位|周期)|(?:是否|需要|要不要|方便).{0,12}(?:看场|看铺|看房|看店|到访|看现场)|(?:留|提供).{0,12}(?:联系方式|电话|手机|微信|邮箱)/.test(previousOutbound??'');
+  const needQuestion=/可联系到您的方式|主要打算经营什么业态|大概需要多大面积|希望在哪个城市或区域|租金预算大概是多少|计划什么时候开业或入驻|预算.{0,12}(?:单位|周期)|(?:是否|需要|要不要|方便).{0,12}(?:看场|看铺|看房|看店|到访|看现场)|(?:留|提供).{0,12}(?:联系方式|电话|手机|微信|邮箱)/.test(previousOutbound??'');
   if(needQuestion&&/^(?:不需要(?:了)?|不用(?:了)?|没需要)[。!！,，\s]*(?:谢谢)?[。!！,，\s]*$/.test(normalized.trim()))return false;
   return /(?:^|[。！？！，、\s])(?:不用了|没需要|不需要(?:了)?)(?:[。！？！，、\s]|$)/.test(normalized);
 }

@@ -68,3 +68,85 @@ test('unbound workflow knowledge retrieves documents and explicit bindings keep 
     if (bound) assert.ok(result.run?.citations.some(item => item.id === legacy.id));
   }
 });
+
+test('normal chat invokes shared preparation, skips retrieval for greeting and keeps business citations', async () => {
+  const {prepareKnowledgeContext}=await import('../app/lib/knowledge-agent.ts');
+  for(const query of ['你好','订票前需要什么流程？']){
+    let prepared=false;let lookups=0;
+    const result=await executeMemberAction(createSeed(),'sales','chat',{query},{
+      prepareKnowledge:async request=>{prepared=true;return prepareKnowledgeContext({...request,intent:query==='你好'?'auto':'business'},{retrieve:async()=>{lookups++;return [policy];}});},
+      retrieveManagedKnowledge:async()=>{throw new Error('shared preparation must own lookup');},
+      generate:async input=>({answer:input.knowledge.map(k=>k.content).join('')||'您好。',mode:'live'}),
+    });
+    assert.ok(prepared);assert.equal(lookups,query==='你好'?0:1);
+    assert.equal(result.run?.citations.some(c=>c.id===policy.id),query!=='你好');
+  }
+});
+
+test('explicit workflow knowledge prepares within bound published IDs only',async()=>{
+ const {prepareKnowledgeContext}=await import('../app/lib/knowledge-agent.ts');
+ const state=createSeed();const legacy=state.knowledge.find(k=>k.status==='published')!;
+ state.workflows=[{id:'shared-bound',name:'scope',description:'',status:'published',version:1,updatedAt:policy.updatedAt,nodes:[{id:'start',type:'start',label:'开始',x:0,y:0},{id:'kb',type:'knowledge',label:'知识',x:100,y:0,knowledgeIds:[legacy.id]},{id:'out',type:'output',label:'输出',x:200,y:0}],edges:[{from:'start',to:'kb'},{from:'kb',to:'out'}]}];
+ let called=false;
+ const result=await executeMemberAction(state,'sales','workflow_run',{mode:'published',workflowId:'shared-bound',query:'你好'},{prepareKnowledge:async(request,scope)=>{called=true;assert.equal(request.intent,'business');assert.deepEqual(scope?.knowledgeIds,[legacy.id]);return prepareKnowledgeContext(request,{retrieve:async()=>[legacy]});}});
+ assert.ok(called);assert.ok(result.run?.citations.some(c=>c.id===legacy.id));
+});
+
+test('shared preparation gates common chat and failed business answers without a specialist call',async()=>{
+ for(const route of ['direct','conflict','failed','no_evidence'] as const){
+  let generated=0;
+  const result=await executeMemberAction(createSeed(),'sales','chat',{query:route==='direct'?'你好':'商铺月租多少？'},{prepareKnowledge:async()=>({route,knowledge:[],evidenceIds:[],...(route==='direct'?{answer:'您好，有什么想了解的？'}:{})}),generate:async()=>{generated++;return {answer:'月租8000元。',mode:'live'};}});
+  assert.equal(generated,0);assert.ok(!result.run?.answer.includes('8000'));assert.match(result.run!.answer,route==='conflict'?/冲突/:route==='failed'?/暂时/:route==='no_evidence'?/资料/:/您好/);
+ }
+});
+
+test('shared lookup runs once and specialist product claims stay grounded',async()=>{
+ let prepared=0;let extra=0;
+ const result=await executeMemberAction(createSeed(),'sales','chat',{query:'给我商铺价格方案',agentId:'strategy'},{prepareKnowledge:async()=>{prepared++;return {route:'retrieved',knowledge:[policy],evidenceIds:[]};},retrieveTalkTracks:async()=>{extra++;throw new Error('second lookup');},generate:async()=>({answer:'商铺月租8000元。',mode:'live'})});
+ assert.equal(prepared,1);assert.equal(extra,0);assert.ok(!result.run?.answer.includes('8000'));
+});
+
+test('workflow conflict propagates to specialist and stops unsupported price generation',async()=>{
+ const state=createSeed();state.workflows=[{id:'guarded',name:'guarded',description:'',status:'published',version:1,updatedAt:policy.updatedAt,nodes:[{id:'s',type:'start',label:'开始',x:0,y:0},{id:'k',type:'knowledge',label:'资料',x:100,y:0},{id:'a',type:'agent',agentId:'strategy',label:'回答',x:200,y:0},{id:'o',type:'output',label:'输出',x:300,y:0}],edges:[{from:'s',to:'k'},{from:'k',to:'a'},{from:'a',to:'o'}]}];
+ let generated=0;
+ const result=await executeMemberAction(state,'sales','workflow_run',{workflowId:'guarded',mode:'published',query:'月租多少？'},{prepareKnowledge:async()=>({route:'conflict',knowledge:[policy],evidenceIds:[]}),generate:async()=>{generated++;return {answer:'月租8000元。',mode:'live'};}});
+ assert.equal(generated,0);assert.match(result.run!.answer,/冲突/);assert.ok(!result.run!.answer.includes('8000'));
+});
+
+test('legitimate customer strategy advice can still generate with a failed knowledge boundary',async()=>{
+ const state=createSeed();const deal=state.deals.find(d=>d.ownerId==='sales-1')!;let seen=false;
+ const result=await executeMemberAction(state,'sales','chat',{query:'请根据客户需求给推进建议',dealId:deal.id,agentId:'strategy'},{prepareKnowledge:async()=>({route:'failed',knowledge:[],evidenceIds:[]}),generate:async input=>{seen=true;assert.match(input.instruction!,/资料暂时/);return {answer:'建议先确认客户的决策时间，再约定下一次沟通。',mode:'live'};}});
+ assert.ok(seen);assert.match(result.run!.answer,/建议先确认/);
+});
+
+test('retrieved business answer cannot bypass grounding with spelled-out prices or lose applicability',async()=>{
+ for(const answer of ['每月八千，随时都有。','月租8000元。']){
+  const result=await executeMemberAction(createSeed(),'sales','chat',{query:'商铺月租多少？'},{prepareKnowledge:async()=>({route:'retrieved',knowledge:[{id:'rent',title:'年度价格',content:'以下报价仅适用于年度合同。月租8000元。'}],evidenceIds:[]}),generate:async()=>({answer,mode:'live'})});
+  assert.ok(!result.run?.answer.includes(answer));assert.match(result.run!.answer,/缺少完整资料依据/);
+ }
+});
+
+test('customer strategy retains an owned numeric budget when knowledge is unavailable',async()=>{
+ const state=createSeed();const deal=state.deals.find(d=>d.ownerId==='sales-1')!;
+ deal.customerProfile={decisionChain:'',goals:'',concerns:'',budget:'8000元/月',timeline:''};
+ const answer='客户预算8000元/月，建议先确认决策时间。';
+ const result=await executeMemberAction(state,'sales','chat',{query:'请根据客户预算给推进建议',dealId:deal.id,agentId:'strategy'},{prepareKnowledge:async()=>({route:'failed',knowledge:[],evidenceIds:[]}),generate:async()=>({answer,mode:'live'})});
+ assert.ok(result.run!.answer.includes(answer));assert.equal(result.run!.mode,'live');
+});
+
+test('customer facts never authorize fabricated budgets, inventory, or a current product price',async()=>{
+ for(const answer of ['8000元/月，建议先确认决策时间。','客户预算九千元/月，建议先确认决策时间。','客户预算9000元/月，建议先确认决策时间。','客户预算8000元/月，商铺月租8000元/月。','客户预算8000元/月，现有3间商铺。','客户预算8000元/月的商铺均有货。']){
+  const state=createSeed();const deal=state.deals.find(d=>d.ownerId==='sales-1')!;
+  deal.customerProfile={decisionChain:'',goals:'',concerns:'',budget:'8000元/月',timeline:''};
+  const result=await executeMemberAction(state,'sales','chat',{query:'请根据客户预算给推进建议',dealId:deal.id,agentId:'strategy'},{prepareKnowledge:async()=>({route:'failed',knowledge:[],evidenceIds:[]}),generate:async()=>({answer,mode:'live'})});
+  assert.ok(!result.run!.answer.includes(answer));assert.match(result.run!.answer,/资料暂时不可用/);
+ }
+});
+
+test('customer profile and needs facts are admitted with their field and source attribution',async()=>{
+ const state=createSeed();const deal=state.deals.find(d=>d.ownerId==='sales-1')!;
+ deal.customerProfile={decisionChain:'',goals:'',concerns:'',budget:'8000元/月',timeline:'2026年12月'};deal.needs=['80平米餐饮店'];
+ const answer='客户需要80平米餐饮店，客户计划时间2026年12月，建议先确认决策时间。';
+ const result=await executeMemberAction(state,'sales','chat',{query:'请根据客户需求给推进建议',dealId:deal.id,agentId:'strategy'},{prepareKnowledge:async()=>({route:'failed',knowledge:[],evidenceIds:[]}),generate:async()=>({answer,mode:'live'})});
+ assert.ok(result.run!.answer.includes(answer));
+});

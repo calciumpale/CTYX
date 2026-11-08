@@ -63,7 +63,7 @@ test('conversation settings preserve drafts, save the loaded enabled state, and 
   const snapshot = campaignId => {
     const base = { campaignId, leadId: 'lead-1', recipientId: 'recipient-1', profileUrl: '', mode: 'human', status: 'active', version: 1, lastMessageAt: '2026-11-07T08:00:00Z', lastMessagePreview: '想了解面积和预算', handoffReason, lastSyncedAt, updatedAt: '2026-11-07T08:00:00Z' };
     return { enabled, online: true, policy: policies[campaignId], libraries: [{ id: 'public-info', name: '已审核招商资料' }, { id: 'public-faq', name: '客户常见问题' }], conversations: [
-      { ...base, id: 'conversation-1', nickname: '王女士', memory: { needs: { area: '80–100 平方米', category: '咖啡', budget: '每月 1.5 万元', location: '一楼临街', timing: '明年三月', visit: '周五下午' }, stage: 'qualifying', contactCaptured: false, contactDeclines: 1, contactAsks: 2, summary: '希望临街，待确认租期。' } },
+      { ...base, id: 'conversation-1', nickname: '王女士', taskMemory: {sessionId:'session-a',campaignId,activeCampaignId:campaignId,isActive:true,ready:true,sessionVersion:1,bindingVersion:1,state:{schemaVersion:2,facts:[{id:'area-fact',key:'area',value:'80–100 平方米',status:'confirmed',sourceMessageId:'message-0',sourceText:'希望80–100平方米',actor:'customer',sourceAt:'2026-11-07T08:00:00Z',updatedAt:'2026-11-07T08:00:00Z'}],events:[],ignoredSourceIds:[],sourceWatermark:1,summary:'希望临街，待确认租期。',updatedAt:'2026-11-07T08:00:00Z',contact:{captured:false,declined:true,submittedInvites:1,legacyInvites:1,pendingInvites:0,uncertainInvites:0}}}, memory: { needs: { area: '80–100 平方米', category: '咖啡', budget: '每月 1.5 万元', location: '一楼临街', timing: '明年三月', visit: '周五下午' }, stage: 'qualifying', contactCaptured: false, contactDeclines: 1, contactAsks: 2, summary: '希望临街，待确认租期。' } },
       { ...base, id: 'conversation-closed', nickname: '已退订客户', status: 'closed', closeReason: '客户明确要求停止联系', memory: { needs: {}, stage: 'closed', contactCaptured: false, contactDeclines: 2, contactAsks: 2, summary: '' } },
     ], sync: { conversationId: 'conversation-1', status: syncStatus, updatedAt: '2026-11-07T08:00:00Z', ...(syncError ? { error: syncError } : {}) }, messages: Array.from({ length: 22 }, (_, index) => ({ id: `message-${index}`, conversationId: 'conversation-1', direction: index % 2 ? 'outbound' : 'inbound', actor: index % 2 ? 'human' : 'customer', text: index % 2 ? '可以，下次为您确认具体条件。' : `需求沟通记录 ${index + 1}：希望了解具体铺位条件。`, status: index % 2 ? 'sent' : 'received', createdAt: '2026-11-07T08:00:00Z' })), pool: [] };
   };
@@ -192,9 +192,10 @@ test('conversation settings preserve drafts, save the loaded enabled state, and 
     assert.deepEqual(composingKeys, [true, true, true], 'IME shortcuts must keep their default composition behavior');
     assert.equal(await replyInput.inputValue(), '仅用于测试的未发送草稿');
     assert.equal(posts.filter(item => item.action === 'chatReply').length, 0, 'IME composition must not submit a reply');
-    await page.locator('.prospect-chat-needs > summary').click();
+    await page.locator('.prospect-memory > summary').click();
     await page.getByText('80–100 平方米', { exact: true }).waitFor();
-    await page.getByText('留资询问 2 次 · 拒绝 1 次', { exact: true }).waitFor();
+    await page.getByText('邀请已提交 1 次 · 待发送 0 次 · 待核对 0 次', { exact: true }).waitFor();
+    await page.getByText('历史邀请待核实 1 次 · 未留资 · 已拒绝留资', { exact: true }).waitFor();
     const transcript = page.getByRole('log');
     await transcript.evaluate(el => { el.dispatchEvent(new WheelEvent('wheel')); el.scrollTop = 0; el.dispatchEvent(new Event('scroll')); });
     await page.getByRole('button', { name: '查看最新消息', exact: true }).waitFor();

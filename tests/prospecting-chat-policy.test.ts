@@ -81,3 +81,8 @@ test('bare refusal uses the exact preceding need question without weakening expl
   assert.equal(isChatOptOut('不需要转让费'),false);
   assert.equal(isChatOptOut('不想给手机号'),false);
 });
+test('neutral contact invitation refusal does not mean platform-wide opt out',()=>{
+ assert.equal(isChatOptOut('不用了','方便留一个可联系到您的方式吗？'),false);
+ assert.equal(isChatOptOut('不方便','方便留一个可联系到您的方式吗？'),false);
+ assert.equal(isChatOptOut('不要再联系我','方便留一个可联系到您的方式吗？'),true);
+});

@@ -491,3 +491,12 @@ button.notification-item:hover { background: var(--cds-fill-ghost-hover); }
   .confirmation-dialog .contract-leave-actions { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; margin-top: 24px; }
   .confirmation-dialog .contract-leave-actions .button { width: 100%; min-height: 44px; }
 }
+
+/* Prospecting keeps both work panes inside the same viewport as primary navigation. */
+.app-shell:has(.prospect-workspace) { height: 100dvh; min-height: 0; overflow: hidden; }
+.app-shell:has(.prospect-workspace) > .workspace { display: flex; flex-direction: column; height: 100%; min-height: 0; overflow: hidden; }
+.app-shell:has(.prospect-workspace) .topbar { flex: none; }
+.app-shell:has(.prospect-workspace) .main-content { flex: 1; min-height: 0; overflow: hidden; }
+@media (max-width: 700px) {
+  .app-shell:has(.mobile-role-navigation):has(.prospect-workspace) .main-content { padding-bottom: calc(70px + env(safe-area-inset-bottom)); }
+}

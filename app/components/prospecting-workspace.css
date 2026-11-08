@@ -241,3 +241,12 @@
 @media (max-width: 640px) {
   .prospect-daily input[type="time"], .prospect-daily button { height: 44px; min-height: 44px; }
 }
+
+/* Definite shell height lets each pane own its overflow instead of growing the page. */
+.main-content > .prospect-workspace { height: 100%; min-height: 0; grid-template-rows: minmax(0, 1fr); overflow: hidden; }
+.main-content > .prospect-workspace > .prospect-sidebar,
+.main-content > .prospect-workspace > .prospect-content { min-height: 0; overflow-y: auto; overscroll-behavior-y: contain; scrollbar-width: thin; scrollbar-color: var(--cds-border-strong) transparent; }
+@media (max-width: 850px) {
+  .main-content > .prospect-workspace > .prospect-sidebar { flex: none; max-height: 35%; }
+  .main-content > .prospect-workspace > .prospect-content { flex: 1; }
+}

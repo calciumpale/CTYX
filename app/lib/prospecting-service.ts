@@ -9,8 +9,9 @@ import {requestModelText} from './model-client.ts';
 import type {EffectiveModel} from './connection-config.ts';
 import type {ProspectSnapshot} from './prospecting-types.ts';
 import type {ProspectChatAgentInput,ProspectChatDecision} from './prospecting-chat-types.ts';
+import type {TaskMemoryState,TaskMemoryMessage,TaskMemoryOptions} from './prospecting-memory-types.ts';
 
-interface Dependencies {db:D1Database;readModel:(ownerId:string,origin:string)=>Promise<EffectiveModel|null>;decideChat?:(ownerId:string,origin:string,input:ProspectChatAgentInput)=>Promise<ProspectChatDecision>}
+interface Dependencies {db:D1Database;readModel:(ownerId:string,origin:string)=>Promise<EffectiveModel|null>;decideChat?:(ownerId:string,origin:string,input:ProspectChatAgentInput)=>Promise<ProspectChatDecision>;rememberChat?:(ownerId:string,origin:string,state:TaskMemoryState,messages:TaskMemoryMessage[],options:TaskMemoryOptions)=>Promise<TaskMemoryState>}
 const json=(value:unknown)=>Response.json(value,{headers:memberResponseHeaders});
 const failure=(error:unknown)=>Response.json({error:error instanceof DomainError?error.message:'获客服务暂时不可用，已保存的任务不会丢失，请稍后刷新'},{status:error instanceof DomainError?error.status:503,headers:memberResponseHeaders});
 export function createProspectingService(deps:Dependencies){
@@ -40,10 +41,16 @@ export function createProspectingService(deps:Dependencies){
    if(request.method==='GET'){const query=new URL(request.url).searchParams;if(query.get('mode')==='chat')return json(await store.chat.snapshot(ownerId,memberId,role,query.get('campaignId')||undefined,query.get('conversationId')||undefined));return json(await snapshot(ownerId,memberId,origin,query.get('campaignId')||undefined,Number(query.get('leadPage')||1),query.get('runId')||undefined));}
    assertMemberOrigin(request);const input=await readMeetingBody(request,1600000);const action=input.action;
    let campaignId=typeof input.campaignId==='string'?prospectId(input.campaignId):undefined;let message='操作已保存';let deviceCredentials:Awaited<ReturnType<typeof store.connect>>|undefined;
-   if(['chatSettings','chatTakeover','chatResume','chatReply','chatSync'].includes(String(action))){
+   if(['chatSettings','chatTakeover','chatResume','chatReply','chatSync','chatMemoryEdit','chatSwitchTask'].includes(String(action))){
     if(action==='chatSettings'){if(!campaignId||typeof input.enabled!=='boolean')throw new DomainError('请选择获客任务并设置会话开关');await store.chat.settings(ownerId,memberId,campaignId,input.enabled,input.policy);message=input.enabled?'会话同步和获客助手已开启':'已停止自动同步和回复，未执行的回复已取消';}
     else if(action==='chatSync'){if(!campaignId)throw new DomainError('请选择要同步的会话');const queued=await store.chat.sync(ownerId,memberId,campaignId,prospectId(input.conversationId));message=queued?'已请求助手同步抖音私信':'同步已在队列中或刚完成';}
-    else{if(!Number.isInteger(input.version)||Number(input.version)<1)throw new DomainError('会话版本无效');const id=prospectId(input.conversationId);
+    else if(action==='chatMemoryEdit'){
+     if(!campaignId||!Number.isInteger(input.sessionVersion)||Number(input.sessionVersion)<1||!Number.isInteger(input.bindingVersion)||Number(input.bindingVersion)<1||!['correct','retract','ignore'].includes(String(input.operation)))throw new DomainError('任务记忆版本或操作无效');
+     await store.chat.memoryEdit(ownerId,memberId,prospectId(input.conversationId),campaignId,Number(input.sessionVersion),Number(input.bindingVersion),{factId:prospectId(input.factId),operation:input.operation as 'correct'|'retract'|'ignore',...(typeof input.value==='string'?{value:input.value}:{}),actorId:memberId,now:new Date().toISOString()});message='本任务记忆已更新，原来的待发回复已停止';
+    }else if(action==='chatSwitchTask'){
+     if(!Number.isInteger(input.version)||Number(input.version)<1||!Number.isInteger(input.bindingVersion)||Number(input.bindingVersion)<1)throw new DomainError('会话或接待版本无效');
+     const target=prospectId(input.targetCampaignId);await store.chat.switchTask(ownerId,memberId,prospectId(input.conversationId),target,Number(input.version),Number(input.bindingVersion));campaignId=target;message='接待任务已切换；人工接管状态保持不变，核实新消息后才能继续自动回复';
+    }else{if(!Number.isInteger(input.version)||Number(input.version)<1)throw new DomainError('会话版本无效');const id=prospectId(input.conversationId);await store.chat.assertActiveCampaign(ownerId,memberId,id,campaignId);
      if(action==='chatTakeover'){await store.chat.takeover(ownerId,memberId,id,Number(input.version));message='已接管会话，助手不会继续自动回复';}
      else if(action==='chatResume'){await store.chat.resume(ownerId,memberId,id,Number(input.version));message='已恢复 AI，将同步核实并继续处理最新未回复的客户消息';}
      else{await store.chat.reply(ownerId,memberId,id,Number(input.version),typeof input.message==='string'?input.message:'');message='人工回复已排队，助手会核对当前会话后提交';}
@@ -110,6 +117,7 @@ export function createProspectingService(deps:Dependencies){
     const claim=()=>store.claim(deviceId,input.sendRetryVersion===1,supportsConversations);
     // Persist due inbox observations before prospect analysis or early returns.
     if(supportsConversations)await store.chat.schedule(deviceId);
+    if(supportsConversations)await store.chat.rememberOne(device.owner_id,device.member_id,new URL(request.url).origin,deps.rememberChat);
     if(supportsConversations&&await store.chat.hasQueuedManualSync(deviceId)){
      if(request.signal.aborted)throw new DomainError('请求已取消，未领取新任务',409);
      const queued=await claim();

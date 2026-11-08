@@ -52,6 +52,7 @@ export interface ProspectBridgeJob {
     conversationId?: string; limit?: number; replyId?: string;
     expectedSnapshotId?: string; actor?: 'agent' | 'human';
     manualSync?: boolean; observeOnly?: boolean;
+    sessionId?: string; bindingVersion?: number; answeredMessageIds?: string[];
   };
 }
 export type ProspectBridgeResult =

@@ -6,6 +6,7 @@ import type { ProspectChatConversation, ProspectChatGrade, ProspectChatMessage, 
 import { defaultChatPolicy, normalizeChatPolicy, withinChatHours } from '../lib/prospecting-chat-policy';
 import { useChatScroll } from '../lib/use-chat-scroll';
 import './prospecting-conversations.css';
+import { ProspectingMemory, prospectMessageId } from './ProspectingMemory';
 
 type ChatView = 'chat' | 'pool';
 type Props = {
@@ -19,13 +20,12 @@ type Props = {
   sendingAvailable: boolean;
   resetKey: number;
   onViewChange: (view: ChatView) => void;
+  onCampaignChange?: (campaignId: string) => void;
   onDirtyChange: (dirty: boolean) => void;
   onBusyChange: (busy: boolean) => void;
 };
 type ChatResult = { message?: string; chat: ProspectChatSnapshot };
 type PolicyDraft = Omit<ProspectChatPolicy, 'replyDailyLimit' | 'conversationReplyLimit' | 'replyHoursEnabled'> & { replyDailyLimit: string; conversationReplyLimit: string; replyHoursEnabled: boolean };
-const stageLabels = { understanding: '了解需求', qualifying: '确认条件', contact: '邀请留资', visit: '邀约到访', handoff: '人工对接', closed: '已结束' };
-const needFields = [['area', '面积'], ['category', '业态'], ['budget', '预算'], ['location', '意向位置'], ['timing', '计划时间'], ['visit', '到访安排']] as const;
 const draftFromPolicy = (policy: ProspectChatPolicy = defaultChatPolicy()): PolicyDraft => {
   const normalized = normalizeChatPolicy(policy);
   return { ...normalized, replyHoursEnabled: Boolean(normalized.replyHoursEnabled), libraryIds: [...normalized.libraryIds], replyDailyLimit: String(normalized.replyDailyLimit), conversationReplyLimit: String(normalized.conversationReplyLimit) };
@@ -62,7 +62,7 @@ function dateLabel(value?: string) {
 function VerificationRecords({ messages, onInspect }: { messages: ProspectChatMessage[]; onInspect: () => void }) {
   return <details className="prospect-chat-verification-records" onToggle={onInspect}>
     <summary><span>账号核验记录（{messages.length}次，均未发送）</span><ChevronDown size={13} /></summary>
-    <ol>{messages.map(message => <li key={message.id}>
+    <ol>{messages.map(message => <li key={message.id} id={prospectMessageId(message.id)} tabIndex={-1}>
       <header><span>{actorLabels[message.actor]}</span><time dateTime={message.createdAt}>{dateLabel(message.createdAt)}</time></header>
       <p>{message.text}</p><span>{message.error || '账号核验未完成，本次未发送。'}</span>
     </li>)}</ol>
@@ -72,7 +72,7 @@ function profileLink(value: string) {
   try { const url = new URL(value); if (url.protocol === 'https:' && (url.hostname === 'douyin.com' || url.hostname.endsWith('.douyin.com'))) return url.href; } catch { /* Only show verified Douyin URL shapes. */ }
 }
 
-export function ProspectingConversations({ campaignId, active, view, blocked, paused, modelReady, assistantOnline, sendingAvailable, resetKey, onViewChange, onDirtyChange, onBusyChange }: Props) {
+export function ProspectingConversations({ campaignId, active, view, blocked, paused, modelReady, assistantOnline, sendingAvailable, resetKey, onViewChange, onCampaignChange, onDirtyChange, onBusyChange }: Props) {
   const prefix = useId();
   const [snapshot, setSnapshot] = useState<ProspectChatSnapshot | null>(null);
   const [observedAt, setObservedAt] = useState(0);
@@ -91,6 +91,7 @@ export function ProspectingConversations({ campaignId, active, view, blocked, pa
   const [policyDraft, setPolicyDraft] = useState<PolicyDraft>(() => draftFromPolicy());
   const [policyReady, setPolicyReady] = useState(false);
   const [policyDirty, setPolicyDirty] = useState(false);
+  const [memoryDirty, setMemoryDirty] = useState(false);
   const policyDirtyRef = useRef(false);
   const savedPolicy = useRef(policySignature(draftFromPolicy()));
   const mounted = useRef(true);
@@ -158,7 +159,7 @@ export function ProspectingConversations({ campaignId, active, view, blocked, pa
     const timer = setInterval(() => { if (document.visibilityState === 'visible') void refresh(); }, syncInProgress ? 1500 : 4000);
     return () => { cancelAnimationFrame(frame); clearInterval(timer); };
   }, [active, refresh, selectedId, syncInProgress]);
-  useEffect(() => { onDirtyChange(policyDirty || Object.values(drafts).some(value => value.trim().length > 0)); }, [drafts, onDirtyChange, policyDirty]);
+  useEffect(() => { onDirtyChange(memoryDirty || policyDirty || Object.values(drafts).some(value => value.trim().length > 0)); }, [drafts, memoryDirty, onDirtyChange, policyDirty]);
   useEffect(() => {
     if (previousResetKey.current === resetKey) return;
     previousResetKey.current = resetKey;
@@ -170,18 +171,25 @@ export function ProspectingConversations({ campaignId, active, view, blocked, pa
   useEffect(() => () => { onDirtyChange(false); onBusyChange(false); }, [onBusyChange, onDirtyChange]);
 
   async function execute(action: string, extra: Record<string, unknown>, after?: () => void) {
-    if (busyRef.current || blocked || !campaignId) return;
+    if (busyRef.current || blocked || !campaignId) return false;
     busyRef.current = true; epoch.current++; readInFlight.current = false;
     setBusy(action); onBusyChange(true); setError(''); setNotice('');
+    let succeeded = false;
     try {
       const result = await request<ChatResult>('/api/prospecting', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action, campaignId, ...extra }) });
-      if (!mounted.current) return;
-      applySnapshot(result.chat, true, action === 'chatSettings' && Boolean(extra.policy)); setReadError(''); if (action !== 'chatSync') setNotice(result.message || '会话设置已保存。'); after?.();
+      if (!mounted.current) return false;
+      applySnapshot(result.chat, true, action === 'chatSettings' && Boolean(extra.policy)); setReadError(''); if (action !== 'chatSync') setNotice(result.message || '会话设置已保存。'); succeeded = true; return true;
     } catch (cause) {
       if (mounted.current && !aborted(cause)) setError(errorMessage(cause));
+      return false;
     } finally {
       busyRef.current = false;
-      if (mounted.current) { setBusy(''); onBusyChange(false); void refresh(true); }
+      if (mounted.current) {
+        setBusy(''); onBusyChange(false);
+        // Workspace navigation checks its synchronous busy ref. Release it before success callbacks.
+        if (succeeded && mounted.current) after?.();
+        if (mounted.current && !(succeeded && action === 'chatSwitchTask' && onCampaignChange)) void refresh(true);
+      }
     }
   }
 
@@ -206,7 +214,7 @@ export function ProspectingConversations({ campaignId, active, view, blocked, pa
   const draft = drafts[selectedId] || '';
   const mutationBlocked = blocked || Boolean(busy);
   const settingsError = policyError(policyDraft);
-  const readOnlyConversation = Boolean(!campaignId || conversation?.campaignId !== campaignId);
+  const readOnlyConversation = Boolean(!campaignId || conversation?.campaignId !== campaignId || conversation.taskMemory && !conversation.taskMemory.isActive);
   const syncAvailable = view === 'chat' && Boolean(conversation) && !readOnlyConversation;
   const syncStatus = syncAvailable ? selectedSync : undefined;
   const syncPending = busy === 'chatSync' || syncStatus?.status === 'queued' || syncStatus?.status === 'running';
@@ -289,7 +297,7 @@ export function ProspectingConversations({ campaignId, active, view, blocked, pa
           <aside className="prospect-conversation-list" aria-label="客户会话列表"><div className="prospect-conversation-search"><label htmlFor={`${prefix}-search`}><Search size={15} />查找会话</label><input id={`${prefix}-search`} value={query} onChange={event => setQuery(event.target.value)} placeholder="客户昵称或最近消息" /></div><div className="prospect-conversation-items">{conversations.length ? conversations.map(item => <button key={item.id} className={`prospect-conversation-item${item.id === selectedId ? ' is-selected' : ''}${item.mode === 'human' ? ' is-human' : ''}`} aria-pressed={item.id === selectedId} disabled={Boolean(busy)} onClick={() => selectConversation(item.id)}><span className="prospect-conversation-item-head"><strong>{item.nickname || '未提供昵称'}</strong><time dateTime={item.lastMessageAt}>{dateLabel(item.lastMessageAt)}</time></span><span className="prospect-conversation-preview">{item.lastMessagePreview || '暂无消息内容'}</span><span className="prospect-conversation-item-foot"><span className={`prospect-chat-badge${item.mode === 'human' ? ' is-human' : ''}`}>{item.status === 'closed' ? '已结束' : item.mode === 'human' ? humanModeLabel(item) : 'AI 跟进'}</span>{drafts[item.id]?.trim() && <span className="prospect-chat-draft-label">有草稿</span>}</span></button>) : <p className="prospect-chat-list-empty">没有匹配的会话，试试其他昵称或消息关键词。</p>}</div></aside>
           {conversation ? <div className={`prospect-conversation-detail${conversation.mode === 'human' ? ' is-human' : ''}`}>
             <header className="prospect-conversation-header"><button className="button ghost prospect-chat-back" onClick={() => setMobileDetail(false)}><ArrowLeft size={15} />会话列表</button><div><h3>{conversation.nickname || '未提供昵称'}</h3><div className="prospect-conversation-meta"><span className={`prospect-chat-badge${conversation.mode === 'human' ? ' is-human' : ''}`}>{conversation.mode === 'human' ? <UserRound size={13} /> : <Bot size={13} />}{conversation.status === 'closed' ? '已结束' : conversation.mode === 'human' ? humanModeLabel(conversation) : 'AI 跟进'}</span>{profile && <a href={profile} target="_blank" rel="noopener noreferrer">抖音主页<ExternalLink size={12} /></a>}</div></div>{!readOnlyConversation && <button className="button secondary" disabled={mutationBlocked || conversation.status === 'closed'} onClick={() => changeMode(conversation)}>{busy === 'chatTakeover' || busy === 'chatResume' ? <Loader2 size={15} className="spin" /> : conversation.mode === 'human' ? <Bot size={15} /> : <UserRound size={15} />}{conversation.mode === 'human' ? '交还 AI 助手' : '人工接管'}</button>}</header>
-            <details className="prospect-chat-needs" key={`${conversation.id}-needs`}><summary><strong>客户需求</strong><span>{conversation.memory ? stageLabels[conversation.memory.stage] : '待了解'}</span><span>{conversation.memory?.contactCaptured ? '已留资' : '未留资'}</span><ChevronDown size={13} /></summary><div className="prospect-chat-needs-body"><dl>{needFields.map(([key, label]) => <div key={key}><dt>{label}</dt><dd>{conversation.memory?.needs[key] || '未确认'}</dd></div>)}</dl>{conversation.memory?.summary && <p>{conversation.memory.summary}</p>}<p className="prospect-chat-contact-history">留资询问 {conversation.memory?.contactAsks || 0} 次 · 拒绝 {conversation.memory?.contactDeclines || 0} 次</p></div></details>
+            <ProspectingMemory memory={conversation.taskMemory} conversationId={conversation.id} tasks={snapshot?.memoryTasks || []} editable={Boolean(campaignId && conversation.campaignId === campaignId && conversation.memoryEditable !== false && conversation.status !== 'closed')} busy={mutationBlocked || !active} resetKey={resetKey} onDirtyChange={setMemoryDirty} onEdit={edit => execute('chatMemoryEdit', { conversationId: conversation.id, ...edit })} onSwitch={(targetCampaignId, bindingVersion) => execute('chatSwitchTask', { conversationId: conversation.id, targetCampaignId, version: conversation.version, bindingVersion }, () => onCampaignChange?.(targetCampaignId))} />
             {conversation.status === 'closed' ? <div className="prospect-chat-readonly" role="status"><CircleAlert size={16} /><p>会话已结束{conversation.closeReason ? `：${conversation.closeReason}` : '，消息记录保留。'}</p></div> : <>
               {readOnlyConversation && <div className="prospect-chat-readonly" role="status"><Users size={16} /><p>只读会话，接管与发送由原任务负责人操作。</p></div>}
               {conversation.mode === 'human' && <div className="prospect-chat-takeover" role="status"><UserRound size={16} /><div><strong>{humanModeLabel(conversation)}，AI 助手已停止回复此会话</strong><p>{handoffReason(conversation)}</p></div></div>}
@@ -298,7 +306,7 @@ export function ProspectingConversations({ campaignId, active, view, blocked, pa
               {messages.length ? messages.map(message => {
                 if (isVerificationRecord(message)) return message.id === verificationRecords[0]?.id ? <VerificationRecords key={`${conversation.id}-verification-records`} messages={verificationRecords} onInspect={markUserInput} /> : null;
                 const waiting = message.status === 'waiting';
-                return <article key={message.id} className={`prospect-chat-message is-${message.direction} is-${message.actor}${waiting ? ' is-waiting' : ''}`}>
+                return <article key={message.id} id={prospectMessageId(message.id)} tabIndex={-1} className={`prospect-chat-message is-${message.direction} is-${message.actor}${waiting ? ' is-waiting' : ''}`}>
                   <header><span>{message.actor === 'customer' ? conversation.nickname || '客户' : actorLabels[message.actor]}</span><time dateTime={message.postedAt || message.createdAt}>{dateLabel(message.postedAt || message.createdAt)}</time></header>
                   <p>{message.text}</p>
                   <footer><span className={waiting ? 'prospect-chat-wait-label' : ['failed', 'unknown'].includes(message.status) ? 'needs-attention' : ''}>{waiting && <Clock3 size={12} />}{messageLabels[message.status]}</span>

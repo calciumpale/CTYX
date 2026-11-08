@@ -360,7 +360,7 @@ test('reply policy validates owned libraries and persists memory across store in
  const memory={needs:{area:'60平米',category:'餐饮',location:'海盐'},stage:'qualifying' as const,contactCaptured:false,contactDeclines:0,contactAsks:0,summary:'海盐餐饮需求'};
  await f.chat.processOne('owner-a','member-a','https://example.test',async(_owner,_origin,input)=>{assert.deepEqual(input.policy,policy);return{action:'wait',memory};});
  const fresh=createProspectingChatStore(f.db,()=>Date.parse(f.now()));const snapshot=await fresh.snapshot('owner-a','member-a','sales',x.campaign.id);
- assert.deepEqual(snapshot.policy,policy);assert.deepEqual(snapshot.libraries,[{id:'mine',name:'招商资料'}]);assert.deepEqual(snapshot.conversations[0].memory,memory);
+ assert.deepEqual(snapshot.policy,policy);assert.deepEqual(snapshot.libraries,[{id:'mine',name:'招商资料'}]);assert.deepEqual(snapshot.conversations[0].memory?.needs,memory.needs);assert.ok(snapshot.conversations[0].taskMemory?.state.facts.some(f=>f.key==='location'&&f.value==='海盐'));assert.ok(snapshot.conversations[0].taskMemory?.state.facts.every(f=>f.sourceMessageId));
 });
 
 test('stop requests close durably outside work hours and prevent future greetings across campaigns',async t=>{
@@ -493,6 +493,7 @@ test('saving identical normalized policy keeps a queued reply and its policy rev
 
 test('legacy contact pool evidence hydrates memory even after contact messages leave the recent history window',async t=>{
  const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.chat.settings('owner-a','member-a',x.campaign.id,true);
+ f.sqlite.exec('DELETE FROM workbench_prospect_memory_sources;DELETE FROM workbench_prospect_memory_captures;DELETE FROM workbench_prospect_memory_bindings;DELETE FROM workbench_prospect_memory_sessions');
  f.sqlite.prepare("INSERT INTO workbench_prospect_lead_pool(id,owner_id,conversation_id,contact_key,contact_type,contact_value,nickname,score,grade,reason,status,created_at,updated_at) VALUES ('legacy-contact','owner-a',?,'legacy-phone','phone','13800138000','已留资客户',80,'high','旧版已捕获联系方式','unassigned',?,?)").run(x.conversation.id,f.now(),f.now());
  const before=await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id);assert.equal(before.conversations[0].memory?.contactCaptured,true);
  await readConversation(f,x,[{id:'legacy-followup',direction:'inbound',text:'还是想找60平米的',postedAt:f.now()}]);let called=false;
@@ -773,12 +774,12 @@ test('an outbound-only resume snapshot cannot replay a question outside its visi
 });
 
 
-test('a readiness pause commits neither per-turn memory nor lead capture before the turn can be queued',async t=>{
+test('a readiness pause preserves observed memory without capturing a lead or submitting a reply',async t=>{
  for(const contact of [false,true]){
   const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.chat.settings('owner-a','member-a',x.campaign.id,true);f.advance(61000);
   const inbound={id:'memory-once',direction:'inbound' as const,text:contact?'我的手机号是13800138000，可以电话沟通。':'暂不留联系方式',postedAt:f.now()};await readConversation(f,x,[inbound]);f.sqlite.prepare('UPDATE workbench_prospect_devices SET authenticated=0 WHERE id=?').run(x.device.deviceId);
   const decide=(_o:string,_r:string,input:Parameters<typeof chooseProspectChatAction>[0])=>chooseProspectChatAction(input,{});await f.chat.processOne('owner-a','member-a','https://example.test',decide);
-  let c=(await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations[0];assert.equal(c.memory!.contactDeclines,0);assert.equal(c.memory!.contactAsks,0);assert.equal((await f.chat.snapshot('owner-a','manager-a','manager')).pool.length,0);
+  let c=(await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations[0];assert.equal(c.memory!.contactDeclines,contact?0:1);assert.equal(c.memory!.contactAsks,0);assert.equal(c.taskMemory?.state.contact.captured,contact);assert.equal((await f.chat.snapshot('owner-a','manager-a','manager')).pool.length,0);
   f.advance(31000);await readConversation(f,x,[inbound],'memory-once-reliable');await f.chat.processOne('owner-a','member-a','https://example.test',decide);
   c=(await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations[0];assert.equal(c.memory!.contactDeclines,contact?0:1);assert.equal((await f.chat.snapshot('owner-a','manager-a','manager')).pool.length,contact?1:0);
  }
@@ -802,7 +803,7 @@ async function waitingReply(f:ReturnType<typeof fixture>){
 
 test('a verified pre-dispatch wait retains one reply, memory and processed turn without consuming reply quota',async t=>{
  const f=fixture();t.after(()=>f.sqlite.close());const w=await waitingReply(f);const chat=await f.chat.snapshot('owner-a','member-a','sales',w.x.campaign.id,w.x.conversation.id);const out=chat.messages.filter(m=>m.actor==='agent');
- assert.equal(out.length,1);assert.equal(out[0].status,'waiting');assert.equal(out[0].retryable,true);assert.equal(out[0].retryExhausted,false);assert.equal(out[0].retryAt,new Date(Date.parse(f.now())+60000).toISOString());assert.equal(chat.conversations[0].memory!.contactDeclines,1);
+ assert.equal(out.length,1);assert.equal(out[0].status,'waiting');assert.equal(out[0].retryable,true);assert.equal(out[0].retryExhausted,false);assert.equal(out[0].retryAt,new Date(Date.parse(f.now())+60000).toISOString());assert.equal(chat.conversations[0].memory!.contactDeclines,0);assert.ok(chat.conversations[0].taskMemory?.state.facts.some(f=>f.key==='area'&&/80/.test(f.value)));
  assert.equal(f.sqlite.prepare("SELECT processed FROM workbench_prospect_messages WHERE source_key='waiting-turn'").get()?.processed,1);assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',w.decide),false);assert.equal(w.decisions(),1);
  f.advance(31000);await readConversation(f,w.x,[w.inbound],'waiting-original');assert.equal(await f.store.claim(w.x.device.deviceId,false,true),null);
  f.advance(31000);await readConversation(f,w.x,[w.inbound],'waiting-original');const retry=(await f.store.claim(w.x.device.deviceId,false,true))!;assert.equal(retry.kind,'reply');assert.notEqual(retry.id,w.first.id);assert.equal(retry.input.replyId,w.first.input.replyId);assert.deepEqual(retry.input,w.first.input);

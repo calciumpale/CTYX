@@ -18,7 +18,7 @@ const pages: Record<View, WorkspacePage> = {
   schedule: { title:'提醒及日程', roles:['sales','manager'], section:'schedule' },
   meetings: { title:'会议', roles:['sales','manager','admin'], section:'deals' },
   prospecting: { title:'社交平台获客', roles:['sales','manager'], section:'prospecting' },
-  materials: { title:'AI营销素材生成', roles:['sales','manager'], section:'materials' },
+  materials: { title:'AI营销素材', roles:['sales','manager'], section:'materials' },
   knowledge: { title:'知识库', roles:['sales','manager','admin'], section:'knowledge' },
   training: { title:'培训提升', roles:['sales','manager'], section:'training' },
   approvals: { title:'合同及审批', roles:['sales','manager'], section:'contracts' },

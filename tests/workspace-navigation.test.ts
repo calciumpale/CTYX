@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { canOpenWorkspaceView, readWorkspaceRoute, workspaceSearch, workspaceNavigation, workspaceSection, workspaceManagementNavigation } from '../app/lib/workspace-navigation.ts';
 
 test('business navigation puts marketing materials between acquisition and project follow-up without widening access', () => {
-  const expected=[{id:'prospecting',label:'社交平台获客'},{id:'materials',label:'AI营销素材生成'},{id:'deals',label:'项目跟进'},{id:'schedule',label:'提醒及日程'},{id:'contracts',label:'合同及审批'},{id:'training',label:'培训提升'},{id:'knowledge',label:'知识库'}];
+  const expected=[{id:'prospecting',label:'社交平台获客'},{id:'materials',label:'AI营销素材'},{id:'deals',label:'项目跟进'},{id:'schedule',label:'提醒及日程'},{id:'contracts',label:'合同及审批'},{id:'training',label:'培训提升'},{id:'knowledge',label:'知识库'}];
   for(const role of ['sales','manager'] as const){
     assert.deepEqual(workspaceNavigation(role).map(({id,label})=>({id,label})),expected);
     assert.ok(workspaceNavigation(role).every(item=>(item.mobileLabel??item.label).length<=4));

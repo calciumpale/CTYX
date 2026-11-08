@@ -1,5 +1,12 @@
 import test from 'node:test';import assert from 'node:assert/strict';
 import {parseMaterialInput,materialPayload,validateMaterialUrl,validateSlides,boundedMaterialBytes} from '../app/lib/marketing-material.ts';
+test('retired presentation commands cannot create new tasks or edit old slides through the public surface',async()=>{
+ const {assertCurrentMaterialCommand}=await import('../app/lib/marketing-material.ts');
+ assert.throws(()=>assertCurrentMaterialCommand({action:'generate',input:{kind:'presentation',prompt:'产品'}}),{status:410});
+ assert.throws(()=>assertCurrentMaterialCommand({action:'updateSlides',taskId:'legacy'}),{status:410});
+ for(const kind of ['image','video'])assert.doesNotThrow(()=>assertCurrentMaterialCommand({action:'generate',input:{kind,prompt:'产品'}}));
+ assert.doesNotThrow(()=>assertCurrentMaterialCommand({action:'refresh',taskId:'existing-image'}));
+});
 test('fixed APIMart payload defaults and unsupported options reject',()=>{const input=parseMaterialInput({kind:'video',prompt:'产品'});assert.deepEqual(materialPayload(input,'ignored'),{model:'kling-v3',prompt:'产品',mode:'std',duration:5,aspect_ratio:'16:9',audio:false});assert.throws(()=>parseMaterialInput({kind:'image',prompt:'产品',n:5}));assert.throws(()=>parseMaterialInput({kind:'video',prompt:'产品',duration:16}));});
 test('result destination boundary rejects credential, redirects destination, literal IP and suffix tricks',()=>{for(const u of ['http://cdn.apimart.ai/a','https://127.0.0.1/a','https://cdn.apimart.ai.evil.com/a','https://secret@cdn.apimart.ai/a','https://cdn.apimart.ai:8443/a'])assert.throws(()=>validateMaterialUrl(u));assert.equal(validateMaterialUrl('https://upload.apimart.ai/a').hostname,'upload.apimart.ai');});
 test('observed APIMart delivery host is exact and retains URL trust boundaries',()=>{

@@ -199,3 +199,24 @@ export const workbenchKnowledgeJobs=sqliteTable('workbench_knowledge_jobs',{
 export const workbenchKnowledgeStaging=sqliteTable('workbench_knowledge_staging',{
  id:text('id').primaryKey(),ownerId:text('owner_id').notNull(),jobId:text('job_id').notNull().references(()=>workbenchKnowledgeJobs.id,{onDelete:'cascade'}),ordinal:integer('ordinal').notNull(),parentOrdinal:integer('parent_ordinal'),kind:text('kind').notNull(),text:text('text').notNull(),heading:text('heading').notNull(),tokens:text('tokens').notNull(),vectorJson:text('vector_json'),vectorModel:text('vector_model'),
 },t=>[uniqueIndex('workbench_knowledge_stage_order').on(t.ownerId,t.jobId,t.ordinal)]);
+
+/** Member-private source assets; upload attempts commit through a versioned lease. */
+export const workbenchDigitalHumanAssets = sqliteTable('workbench_digital_human_assets', {
+  id: text('id').primaryKey(), ownerId: text('owner_id').notNull(), memberId: text('member_id').notNull(),
+  requestId: text('request_id').notNull(), payloadHash: text('payload_hash').notNull(), version: integer('version').notNull(),
+  status: text('status').notNull(), updatedAt: text('updated_at').notNull(), dataJson: text('data_json').notNull(),
+}, table => [uniqueIndex('workbench_dh_asset_identity').on(table.ownerId, table.memberId, table.requestId), index('workbench_dh_asset_history').on(table.ownerId, table.memberId, table.updatedAt)]);
+
+/** Live configurations and pinned instance credentials never enter the workspace JSON. */
+export const workbenchDigitalHumanLives = sqliteTable('workbench_digital_human_lives', {
+  id: text('id').primaryKey(), ownerId: text('owner_id').notNull(), memberId: text('member_id').notNull(),
+  requestId: text('request_id').notNull(), payloadHash: text('payload_hash').notNull(), version: integer('version').notNull(),
+  status: text('status').notNull(), updatedAt: text('updated_at').notNull(), dataJson: text('data_json').notNull(),
+}, table => [uniqueIndex('workbench_dh_live_identity').on(table.ownerId, table.memberId, table.requestId), index('workbench_dh_live_history').on(table.ownerId, table.memberId, table.updatedAt)]);
+
+/** External mutations are journaled before I/O and their accepted results retained before projection. */
+export const workbenchDigitalHumanOperations = sqliteTable('workbench_digital_human_operations', {
+  ownerId: text('owner_id').notNull(), memberId: text('member_id').notNull(), requestId: text('request_id').notNull(),
+  liveId: text('live_id').notNull(), action: text('action').notNull(), payloadHash: text('payload_hash').notNull(),
+  status: text('status').notNull(), dataJson: text('data_json').notNull(),
+}, table => [primaryKey({columns: [table.ownerId, table.memberId, table.requestId]}), index('workbench_dh_operation_live').on(table.ownerId, table.memberId, table.liveId)]);

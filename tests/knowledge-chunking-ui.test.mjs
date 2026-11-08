@@ -56,7 +56,7 @@ test('knowledge settings and explicit preview/apply preserve old content on desk
  const document={id:'doc',libraryId:'library',title:'旧资料',fileName:'old.txt',strategy:'flat',status:'pending',chunkCount:2,indexedCount:0,sourceAvailable:false,contentVersion:1};
  await page.route('**/api/knowledge-library',async route=>{const body=route.request().postDataJSON(); if(body)actions.push(body);await route.fulfill({json:body?.action==='previewChunking'?{preview:{totalChunks:1,samples:[{text:'精确原文'}]}}:body?.action==='beginRechunk'?{document,job:{id:'job',status:'error',error:'合成失败'}}:{libraries:[{id:'library',name:'测试知识库',documentCount:1,version:1}],documents:[document],canManage:true,embeddingConfigured:false}});});
  for(const width of [1280,390]){await page.setViewportSize({width,height:740});await page.goto(origin+'/?module=knowledge');await page.getByRole('button',{name:'切块设置 / 重新切块'}).click();await page.getByText('成功激活前，旧内容及检索仍可用。').waitFor();assert.equal(await page.getByRole('button',{name:'确认重新切块'}).isEnabled(),false);await page.locator('textarea').fill('精确原文');await page.getByRole('button',{name:'预览拟用切块'}).click();await page.getByText('预览结果（尚未生效）').waitFor();const heights=await page.locator('fieldset input, fieldset select').evaluateAll(nodes=>nodes.map(node=>node.getBoundingClientRect().height));assert.ok(heights.every(height=>height===(width>850?36:44)),JSON.stringify(heights));await page.getByRole('button',{name:'确认重新切块'}).click();await page.getByRole('dialog').getByRole('alert').filter({hasText:'合成失败'}).waitFor();assert.equal(actions.at(-1).text,'精确原文');assert.equal(actions.at(-1).version,1);assert.ok(await page.getByText('旧内容及检索仍可用。',{exact:false}).count());}
- } finally {await browser?.close();await server.close();await rm(cacheDir,{recursive:true,force:true});}
+ } finally {await browser?.close();await server.close();await rm(cacheDir,{recursive:true,force:true,maxRetries:5,retryDelay:100});}
 });
 
 test('multiple selection and drag share a bounded queue, pause safely and retry accepted uploads without duplicates',{timeout:90000},async()=>{
@@ -113,7 +113,7 @@ test('multiple selection and drag share a bounded queue, pause safely and retry 
   await page.setViewportSize({width:390,height:740});
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
   assert.deepEqual(errors,[]);
- }finally{release?.();await browser?.close();await server.close();await rm(cacheDir,{recursive:true,force:true});}
+ }finally{release?.();await browser?.close();await server.close();await rm(cacheDir,{recursive:true,force:true,maxRetries:5,retryDelay:100});}
 });
 
 test('rechunk consumes sibling jobs, waits on leases, resumes errors and retires cancelled intents',{timeout:60000},async()=>{
@@ -144,7 +144,7 @@ test('rechunk consumes sibling jobs, waits on leases, resumes errors and retires
  assert.equal(begins.length,2);assert.notEqual(begins[0].requestId,begins[1].requestId);
  mode='cancelled';await page.getByRole('button',{name:'确认重新切块'}).click();await page.getByRole('dialog').getByRole('alert').filter({hasText:'任务已取消或被替代'}).waitFor();assert.equal(begins[1].requestId,begins[2].requestId);
  mode='waiting';await page.getByRole('button',{name:'确认重新切块'}).click();await page.getByText('任务暂未推进').first().waitFor();assert.notEqual(begins[2].requestId,begins[3].requestId);
- }finally{await browser?.close();await server.close();await rm(cacheDir,{recursive:true,force:true});}
+ }finally{await browser?.close();await server.close();await rm(cacheDir,{recursive:true,force:true,maxRetries:5,retryDelay:100});}
 });
 
 test('pause during accepted begin survives its response and only an explicit resume starts batches',{timeout:60000},async()=>{
@@ -173,5 +173,5 @@ test('pause during accepted begin survives its response and only an explicit res
  const resume=page.getByRole('button',{name:'继续重新切块',exact:true});await resume.waitFor();assert.ok(await resume.isEnabled());assert.equal(continues,0);
  await resume.click();await page.waitForFunction(()=>[...document.querySelectorAll('button')].some(button=>button.textContent==='继续重新切块'&&!button.disabled));
  assert.equal(continues,8);assert.equal(begins,1);await page.getByText('重新切块：indexing · 128 / 1000 · 旧内容仍可用',{exact:true}).waitFor();
- }finally{releaseBegin?.();await browser?.close();await server.close();await rm(cacheDir,{recursive:true,force:true});}
+ }finally{releaseBegin?.();await browser?.close();await server.close();await rm(cacheDir,{recursive:true,force:true,maxRetries:5,retryDelay:100});}
 });

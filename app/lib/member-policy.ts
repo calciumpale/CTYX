@@ -27,6 +27,9 @@ export function assertMemberApi(role:MemberRole,pathname:string,method:string):v
   if(['/api/web-prospects','/api/marketing-materials'].includes(path)){if(role!=='admin'&&['GET','POST'].includes(verb))return;return denied();}
   if(path==='/api/marketing-materials/result'){if(role!=='admin'&&['GET','HEAD'].includes(verb))return;return denied();}
   if(path==='/api/material-connection'){if(role==='admin'&&['GET','POST'].includes(verb))return;return denied();}
+  if(path==='/api/digital-humans'){if(role!=='admin'&&['GET','POST'].includes(verb))return;return denied();}
+  if(path==='/api/digital-humans/source'){if(role!=='admin'&&['GET','HEAD','PUT'].includes(verb))return;return denied();}
+  if(path==='/api/zego-connection'){if(role==='admin'&&['GET','POST'].includes(verb))return;return denied();}
   if(path==='/api/prospecting'){if(role!=='admin'&&['GET','POST'].includes(verb))return;return denied();}
   if(path==='/api/schedules'){if(role!=='admin'&&['GET','POST'].includes(verb))return;return denied();}
   if(path==='/api/meeting-imports'){if(verb==='GET'||role!=='admin'&&verb==='POST')return;return denied();}

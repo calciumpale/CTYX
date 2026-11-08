@@ -42,7 +42,7 @@ test('full workbench opens converted projects after reload and guards material d
   assert.equal(await page.locator('.cw-chat-title h2').innerText(),deal.name);
   assert.ok(reads>=2);
   assert.equal(new URL(page.url()).searchParams.get('deal'),deal.id);
-  await page.locator('.sidebar nav').getByRole('link',{name:'AI营销素材生成',exact:true}).click();
+  await page.locator('.sidebar nav').getByRole('link',{name:'AI营销素材',exact:true}).click();
   for(const label of ['目标受众','产品卖点','参考资料']){
     await page.getByLabel(label).fill('保留此输入');
     await page.locator('.sidebar nav').getByRole('link',{name:'项目跟进',exact:true}).click();

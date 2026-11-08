@@ -108,6 +108,6 @@ test('existing module controls share outer border geometry on desktop and mobile
   } finally {
     await browser?.close();
     await server.close();
-    await rm(cacheDir,{recursive:true,force:true});
+    await rm(cacheDir,{recursive:true,force:true,maxRetries:5,retryDelay:100});
   }
 });

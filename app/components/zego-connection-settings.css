@@ -1,0 +1,18 @@
+.zego-connection { min-width: 0; }
+.zego-connection a { color: inherit; text-decoration: underline; text-underline-offset: 3px; }
+.zego-fields { display: grid; gap: 8px; min-width: 0; margin: 0; padding: 0; border: 0; }
+.zego-connection .zego-fields > label { margin: 0; }
+.zego-connection .zego-fields input:not([type=checkbox]), .zego-connection .zego-fields select { height: 36px; min-height: 36px; padding: 6px 10px; min-width: 0; }
+.zego-connection .zego-toggle { margin: 8px 0 12px; flex-direction: row; }
+.zego-connection input[type=checkbox] { accent-color: var(--primary, #25272a); }
+.zego-grants { display: grid; gap: 12px; padding: 16px 0; border-top: 1px solid var(--border, #e1e4e8); }
+.zego-grants h4 { margin: 0; font-size: 14px; font-weight: 550; }
+.zego-connection .zego-grants p { margin: 0; }
+.zego-grant { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 12px; align-items: end; }
+.zego-connection .zego-grant label, .zego-grant-field { display: flex; flex-direction: column; gap: 8px; margin: 0; min-width: 0; }
+.zego-grants > button, .zego-connection .zego-reload { justify-self: start; }
+@media (max-width: 760px) {
+  .zego-connection .zego-fields input:not([type=checkbox]), .zego-connection .zego-fields select { height: 44px; min-height: 44px; }
+  .zego-grant { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+  .zego-grant > button { justify-self: start; }
+}

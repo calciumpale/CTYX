@@ -169,6 +169,13 @@
       "when": 1794149320743,
       "tag": "0023_greedy_pet_avengers",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "6",
+      "when": 1794154811925,
+      "tag": "0024_yellow_wasp",
+      "breakpoints": true
     }
   ]
 }

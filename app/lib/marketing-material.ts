@@ -9,6 +9,11 @@ export function materialPayload(input:MaterialInput,model:string) {const prompt=
 // Exact APIMart delivery hosts, including getapib.org observed in authenticated task results.
 // No wildcard suffixes or configurable URLs; downloads never forward the provider key.
 export const MATERIAL_RESULT_HOSTS=['upload.apimart.ai','getapib.org'];
+/** Historical presentation records remain decodable; their public creation/editor surface is retired. */
+export function assertCurrentMaterialCommand(command:Record<string,unknown>):void {
+ const input=command.input;
+ if(command.action==='updateSlides'||command.action==='generate'&&input&&typeof input==='object'&&!Array.isArray(input)&&(input as Record<string,unknown>).kind==='presentation')throw new DomainError('产品演示稿功能已移除，请使用图文生成',410);
+}
 export function validateMaterialUrl(value:unknown):URL {let u:URL;try{u=new URL(String(value));}catch{throw new DomainError('生成结果地址不受信任',502);}if(u.protocol!=='https:'||u.username||u.password||u.port||u.hash||!MATERIAL_RESULT_HOSTS.includes(u.hostname))throw new DomainError('生成结果地址不受信任',502);return u;}
 export async function boundedMaterialBytes(response:Response,max:number):Promise<Uint8Array<ArrayBuffer>> {if(!response.ok||Number(response.headers.get('content-length')??0)>max)throw new DomainError('结果下载失败或超过大小限制',502);const reader=response.body?.getReader();if(!reader)throw new DomainError('生成结果为空',502);let length=0;const chunks:Uint8Array[]=[];try{while(true){const {done,value}=await reader.read();if(done)break;length+=value.length;if(length>max){await reader.cancel();throw new DomainError('生成结果超过大小限制',502);}chunks.push(value);}}finally{reader.releaseLock();}const output=new Uint8Array(length);let at=0;for(const c of chunks){output.set(c,at);at+=c.length;}return output;}
 /** Slide edits may contain up to 12 × 5 bounded Chinese bullets. */

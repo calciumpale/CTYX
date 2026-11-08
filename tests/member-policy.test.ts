@@ -3,6 +3,23 @@ import assert from 'node:assert/strict';
 import {assertMemberApi,assertMemberAction,assertMemberApprovalAction,executeMemberAction,projectAccountState,projectAccountResult,readMemberDisplayName,requireMemberRole} from '../app/lib/member-policy.ts';
 import {createSeed} from '../app/lib/seed.ts';
 
+test('digital-human business uploads stay separate from admin connection maintenance', () => {
+  for (const role of ['sales', 'manager'] as const) {
+    for (const method of ['GET', 'POST']) assert.doesNotThrow(() => assertMemberApi(role, '/api/digital-humans', method));
+    for (const method of ['GET', 'HEAD', 'PUT']) assert.doesNotThrow(() => assertMemberApi(role, '/api/digital-humans/source', method));
+    for (const method of ['GET', 'POST', 'PUT', 'DELETE']) assert.throws(() => assertMemberApi(role, '/api/zego-connection', method), {status:403});
+    assert.throws(() => assertMemberApi(role, '/api/digital-humans', 'DELETE'), {status:403});
+    assert.throws(() => assertMemberApi(role, '/api/digital-humans/source', 'POST'), {status:403});
+  }
+  for (const method of ['GET', 'POST']) assert.doesNotThrow(() => assertMemberApi('admin', '/api/zego-connection', method));
+  for (const method of ['GET', 'POST', 'PUT', 'HEAD']) {
+    assert.throws(() => assertMemberApi('admin', '/api/digital-humans', method), {status:403});
+    assert.throws(() => assertMemberApi('admin', '/api/digital-humans/source', method), {status:403});
+  }
+  assert.throws(() => assertMemberApi('admin', '/api/zego-connection', 'PUT'), {status:403});
+  assert.throws(() => assertMemberApi('sales', '/api/digital-humans/source/foreign', 'GET'), {status:403});
+});
+
 test('API authorization protects settings, customer data, reports, and unknown endpoints independently of navigation',()=>{
   for(const role of ['sales','manager'] as const)for(const path of ['/api/connections','/api/embedding-connection','/api/company-connection','/api/workspace-members'])assert.throws(()=>assertMemberApi(role,path,'GET'),{status:403});
   for(const path of ['/api/deal-recordings','/api/recording-transcriptions','/api/training-voice','/api/sales-reports'])assert.throws(()=>assertMemberApi('admin',path,'GET'),{status:403});

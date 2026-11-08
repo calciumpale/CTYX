@@ -172,3 +172,20 @@ export const workbenchProspectMemoryEvents=sqliteTable('workbench_prospect_memor
 export const workbenchProspectMemoryCaptures=sqliteTable('workbench_prospect_memory_captures',{
  sessionId:text('session_id').notNull(),captureId:text('capture_id').notNull(),
 },t=>[primaryKey({columns:[t.sessionId,t.captureId]})]);
+
+/** One-time owner-scoped, restorable department setup. */
+export const workbenchDepartmentSetups=sqliteTable('workbench_department_setups',{
+ ownerId:text('owner_id').primaryKey(),manifestHash:text('manifest_hash').notNull(),beforeState:text('before_state').notNull(),beforeAccounts:text('before_accounts').notNull(),resultJson:text('result_json').notNull(),completedAt:text('completed_at').notNull(),
+});
+
+/** Member-private durable paid material submissions, independent of workspace JSON. */
+export const workbenchMaterialTasks=sqliteTable('workbench_material_tasks',{
+ id:text('id').primaryKey(),ownerId:text('owner_id').notNull(),memberId:text('member_id').notNull(),requestId:text('request_id').notNull(),payloadHash:text('payload_hash').notNull(),version:integer('version').notNull(),status:text('status').notNull(),updatedAt:text('updated_at').notNull(),dataJson:text('data_json').notNull(),
+},table=>[uniqueIndex('workbench_material_identity').on(table.ownerId,table.memberId,table.requestId),index('workbench_material_history').on(table.ownerId,table.memberId,table.updatedAt)]);
+
+export const workbenchWebProspectTasks=sqliteTable('workbench_web_prospect_tasks',{
+ id:text('id').primaryKey(),ownerId:text('owner_id').notNull(),memberId:text('member_id').notNull(),requestId:text('request_id').notNull(),payloadHash:text('payload_hash').notNull(),status:text('status').notNull(),createdAt:text('created_at').notNull(),dataJson:text('data_json').notNull(),
+},t=>[uniqueIndex('workbench_web_task_retry').on(t.ownerId,t.memberId,t.requestId),index('workbench_web_task_history').on(t.ownerId,t.memberId,t.createdAt)]);
+export const workbenchWebProspectLeads=sqliteTable('workbench_web_prospect_leads',{
+ id:text('id').primaryKey(),ownerId:text('owner_id').notNull(),memberId:text('member_id').notNull(),taskId:text('task_id').notNull(),sourceUrl:text('source_url').notNull(),version:integer('version').notNull(),status:text('status').notNull(),projectId:text('project_id'),dataJson:text('data_json').notNull(),
+},t=>[uniqueIndex('workbench_web_lead_url').on(t.ownerId,t.memberId,t.sourceUrl),index('workbench_web_lead_member').on(t.ownerId,t.memberId)]);

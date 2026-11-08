@@ -35,7 +35,7 @@ test('trusted identity normalization and origin validation do not use a role coo
 
 test('workspace member applicants are distinct from the manager and admin has template-only authority',async(t)=>{
   const {sqlite,service,payload}=fixture();t.after(()=>sqlite.close());
-  const salesperson={id:'sales-account',email:'sales+sales-account@accounts.ctai.local',name:'销售',workspaceId:alice.id,memberRole:'sales' as const};
+  const salesperson={id:'sales-account',email:'sales+sales-account@accounts.ctai.local',name:'销售',workspaceId:alice.id,memberRole:'sales' as const,salesId:'sales-1'};
   const manager={...alice,workspaceId:alice.id,memberRole:'manager' as const};
   const admin={id:'admin-account',email:'admin+admin-account@accounts.ctai.local',name:'管理员',workspaceId:alice.id,memberRole:'admin' as const};
   const input=payload({steps:[{id:'manager',label:'销售管理者审批',role:'manager',approverName:'Alice',approverEmail:alice.email}]});

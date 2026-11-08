@@ -1,3 +1,4 @@
+import {readMemberSalesScope} from '../../lib/member-policy.ts';
 import { env } from 'cloudflare:workers';
 import { DomainError } from '../../lib/domain.ts';
 import { readRole, readWorkbench, requireUserId } from '../../lib/server.ts';
@@ -29,7 +30,7 @@ export async function POST(request:Request):Promise<Response> {
     let input:unknown;try{input=JSON.parse(new TextDecoder().decode(bytes));}catch{throw new DomainError('会话参数格式不正确');}
     const sessionId=input&&typeof input==='object'&&!Array.isArray(input)?(input as Record<string,unknown>).sessionId:undefined;
     if(typeof sessionId!=='string'||sessionId.length>128)throw new DomainError('请选择有效的带练会话');
-    const state=await readWorkbench(userId,readRole(request),new URL(request.url).origin);
+    const state=await readWorkbench(userId,readRole(request),new URL(request.url).origin,readMemberSalesScope(request));
     const session=state.trainingSessions.find(item=>item.id===sessionId);
     if(!session)throw new DomainError('当前视角无法访问此带练会话',403);
     if(session.status!=='active')throw new DomainError('本次带练已结束，请开始新的练习',409);

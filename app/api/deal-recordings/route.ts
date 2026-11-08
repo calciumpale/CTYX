@@ -1,3 +1,4 @@
+import {readMemberSalesScope} from '../../lib/member-policy.ts';
 import {salesMutationEvents} from '../../lib/sales-report-domain.ts';
 import { env } from 'cloudflare:workers';
 import { DomainError, projectState } from '../../lib/domain.ts';
@@ -25,12 +26,12 @@ export async function POST(request:Request):Promise<Response> {
     if((origin&&origin!==siteOrigin)||request.headers.get('sec-fetch-site')==='cross-site')throw new DomainError('只允许从当前站点上传录音',403);
     const storage=bucket();const input=await parseRecordingForm(request);const role=readRole(request);
     let before:Awaited<ReturnType<typeof loadWorkspace>>;
-    const result=await saveRecordingNote(userId,role,input,{actorName:readMemberDisplayName(request),bucket:storage,load:async()=>{before=await loadWorkspace(userId,siteOrigin);return before;},save:(revision,state)=>saveWorkspace(userId,revision,state,salesMutationEvents(before,state,'deal_note',{dealId:input.dealId},new Date().toISOString()))});
+    const result=await saveRecordingNote(userId,role,input,{actorName:readMemberDisplayName(request),salesScope:readMemberSalesScope(request),bucket:storage,load:async()=>{before=await loadWorkspace(userId,siteOrigin);return before;},save:(revision,state)=>saveWorkspace(userId,revision,state,salesMutationEvents(before,state,'deal_note',{dealId:input.dealId},new Date().toISOString()))});
     const existing=new Set(before!.deals.find(deal=>deal.id===input.dealId)?.notes.map(note=>note.id));
     const recording=result.state.deals.find(deal=>deal.id===input.dealId)?.notes.find(note=>!existing.has(note.id)&&note.recording)?.recording;
     let transcription:Awaited<ReturnType<ReturnType<typeof createSpeechTranscriptionService>['start']>>|undefined;
-    if(recording){try{transcription=await createSpeechTranscriptionService(env as Cloudflare.Env,{load:loadWorkspace,save:saveWorkspace}).start(userId,role,input.dealId,recording.id,siteOrigin);}catch{/* A transcription failure never discards the committed recording. */}}
-    try{result.state=projectState(await refreshSalesProject(userId,input.dealId,siteOrigin),role);}catch{/* Derivative analysis cannot turn an already saved recording into a failed upload. */}
+    if(recording){try{transcription=await createSpeechTranscriptionService(env as Cloudflare.Env,{load:loadWorkspace,save:saveWorkspace}).start(userId,role,input.dealId,recording.id,siteOrigin,false,readMemberSalesScope(request));}catch{/* A transcription failure never discards the committed recording. */}}
+    try{result.state=projectState(await refreshSalesProject(userId,input.dealId,siteOrigin),role,readMemberSalesScope(request));}catch{/* Derivative analysis cannot turn an already saved recording into a failed upload. */}
     return Response.json({...result,...(transcription?{transcription}:{}),message:transcription?.status==='failed'?`录音及跟进记录已保存；${transcription.message}`:transcription?'录音及跟进记录已保存，转写任务已提交':result.message},{headers:responseHeaders});
   }catch(error){return failure(error);}
 }
@@ -39,7 +40,7 @@ async function read(request:Request,head=false):Promise<Response> {
     const userId=requireUserId(request);const url=new URL(request.url);const role=readRole(request);
     const dealId=url.searchParams.get('dealId')??'';const id=url.searchParams.get('id')??'';
     if(!dealId||dealId.length>100)throw new DomainError('录音不存在或当前视角无权访问',404);
-    const state=projectState(await loadWorkspace(userId,url.origin),role);
+    const state=projectState(await loadWorkspace(userId,url.origin),role,readMemberSalesScope(request));
     const recording=authorizedRecording(state,dealId,id);const storage=bucket();const key=await recordingObjectKey(userId,id);
     const metadata=await storage.head(key);
     if(!metadata||metadata.size!==recording.size)throw new DomainError('录音不存在或暂时无法读取',404);

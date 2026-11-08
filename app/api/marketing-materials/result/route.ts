@@ -1,0 +1,5 @@
+import {DomainError} from '../../../lib/domain.ts';
+import {materialRuntime} from '../../../lib/marketing-material-runtime.ts';
+import {materialFailure,materialHeaders,materialIdentity} from '../route.ts';
+export const dynamic='force-dynamic';
+export async function GET(request:Request){try{const {owner,member}=materialIdentity(request),url=new URL(request.url),id=url.searchParams.get('taskId'),index=Number(url.searchParams.get('fileIndex'));if(!id||!url.searchParams.has('fileIndex')||!Number.isInteger(index)||index<0)throw new DomainError('素材文件参数无效');const runtime=materialRuntime(url.origin),task=await runtime.store.get(owner,member,id);if(task.status!=='completed'||!task.files[index])throw new DomainError('素材文件不存在',404);const file=task.files[index],object=await runtime.bucket?.get(file.key);if(!object)throw new DomainError('素材文件暂时无法读取',404);return new Response(object.body,{headers:{...materialHeaders,'Content-Type':file.type,'Content-Disposition':`attachment; filename="material-${index+1}.${file.name.split('.').pop()}"`,'Content-Length':String(object.size),'Content-Security-Policy':"default-src 'none'; sandbox"}});}catch(e){return materialFailure(e);}}

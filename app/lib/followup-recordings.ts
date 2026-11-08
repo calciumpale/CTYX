@@ -1,3 +1,4 @@
+import type {SalesScope} from './sales-scope.ts';
 import { assertRevision, DomainError, executeAction, projectState } from './domain.ts';
 import type { ApiResult, FollowupRecording, Role, WorkbenchState } from './types.ts';
 
@@ -10,7 +11,7 @@ export interface RecordingObjectStore {
   delete(key:string):Promise<void>;
 }
 export interface RecordingPersistence {
-  actorName?:string;
+  actorName?:string;salesScope?:SalesScope;
   load:()=>Promise<WorkbenchState>;
   save:(revision:number,state:WorkbenchState)=>Promise<void>;
   bucket:RecordingObjectStore;
@@ -106,7 +107,7 @@ export async function saveRecordingNote(userId:string,role:Role,input:RecordingF
   const audio=await validateRecording(input.audio);
   const recording:FollowupRecording={id:`recording-${crypto.randomUUID()}`,name:audio.name,size:audio.bytes.length,mimeType:audio.mimeType};
   // The domain checks role visibility and text before any object can be written.
-  const result=await executeAction(state,role,'deal_note',{dealId:input.dealId,text:input.text},{trustedRecording:recording,actorName:deps.actorName});
+  const result=await executeAction(state,role,'deal_note',{dealId:input.dealId,text:input.text},{trustedRecording:recording,actorName:deps.actorName,salesScope:deps.salesScope});
   const key=await recordingObjectKey(userId,recording.id);
   const uploaded=await deps.bucket.put(key,audio.bytes,{onlyIf:{etagDoesNotMatch:'*'},httpMetadata:{contentType:audio.mimeType}});
   if(!uploaded)throw new DomainError('录音暂时无法保存，请重新上传',503);
@@ -114,7 +115,7 @@ export async function saveRecordingNote(userId:string,role:Role,input:RecordingF
     try{await deps.bucket.delete(key);}catch{console.error('Follow-up recording cleanup failed');}
     throw error;
   }
-  return {...result,state:projectState(result.state,role),message:'录音及跟进记录已保存'};
+  return {...result,state:projectState(result.state,role,deps.salesScope),message:'录音及跟进记录已保存'};
 }
 /** Call only with a state projected to the current role. */
 export function authorizedRecording(state:WorkbenchState,dealId:string,id:string):FollowupRecording {

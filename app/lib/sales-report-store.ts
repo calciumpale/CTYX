@@ -1,3 +1,4 @@
+import { salesReportEligible, currentSalesProject } from './sales-project-eligibility.ts';
 import { DomainError } from './domain.ts';
 import { salesDayBounds } from './sales-report-domain.ts';
 import type { WorkbenchState } from './types.ts';
@@ -14,8 +15,8 @@ export async function persistSalesWorkspace(db:D1Database,userId:string,expected
   if(events.length>100)throw new DomainError('单次业务变更事件过多，请分批保存',413);
   const now=new Date().toISOString();const guard='SELECT 1 FROM workbench_workspaces WHERE user_id = ? AND revision = ? AND state_json = ?';const guarded=[userId,expectedRevision,source.state_json];
   const statements:D1PreparedStatement[]=[];
-  const manual=new Map(nextState.deals.filter(deal=>deal.dataOrigin==='manual').map(deal=>[deal.id,deal]));
-  for(const event of events){if(!manual.has(event.projectId)||manual.get(event.projectId)!.version!==event.sourceVersion||!Number.isFinite(Date.parse(event.occurredAt)))throw new DomainError('销售事件与本次项目记录不一致',400);
+  const eligible=new Map(nextState.deals.filter(salesReportEligible).map(deal=>[deal.id,deal]));
+  for(const event of events){if(!eligible.has(event.projectId)||eligible.get(event.projectId)!.version!==event.sourceVersion||eligible.get(event.projectId)!.ownerId!==event.ownerId||!Number.isFinite(Date.parse(event.occurredAt)))throw new DomainError('销售事件与本次项目记录不一致',400);
     statements.push(db.prepare(`INSERT INTO workbench_sales_events (user_id,id,project_id,kind,owner_id,occurred_at,data_json) SELECT ?,?,?,?,?,?,? WHERE EXISTS (${guard}) ON CONFLICT(user_id,id) DO NOTHING`).bind(userId,event.id,event.projectId,event.kind,event.ownerId,event.occurredAt,JSON.stringify(event),...guarded));
   }
   const coverageAt=events.reduce((value,event)=>event.occurredAt<value?event.occurredAt:value,now);
@@ -41,7 +42,15 @@ export function createSalesReportStore(db:D1Database){
       const counts:SalesEventCounts={won:Number(outcomes?.won??0),lost:Number(outcomes?.lost??0)};for(const row of grouped.results)counts[row.kind]=Number(row.total);
       return {events:records.results.map(row=>JSON.parse(row.data_json) as SalesEvent),counts,ownerCounts:new Map(owners.results.map(row=>[row.owner_id,Number(row.total)]))};
     },
-    async pendingApprovals(ownerId:string):Promise<number>{user(ownerId);const row=await db.prepare("SELECT COUNT(*) AS total FROM workbench_approval_requests r WHERE r.owner_id = ? AND r.status = 'pending' AND EXISTS (SELECT 1 FROM workbench_workspaces w,json_each(w.state_json,'$.deals') p WHERE w.user_id = r.owner_id AND json_extract(p.value,'$.id') = r.project_id AND json_extract(p.value,'$.dataOrigin') = 'manual')").bind(ownerId).first<{total:number}>();return Number(row?.total??0);},
+    async pendingApprovals(ownerId:string):Promise<number>{
+      user(ownerId);
+      const [workspace,requests]=await Promise.all([
+        this.workspace(ownerId),
+        db.prepare("SELECT project_id FROM workbench_approval_requests WHERE owner_id = ? AND status = 'pending'").bind(ownerId).all<{project_id:string}>(),
+      ]);
+      const current=new Set(workspace.deals.filter(currentSalesProject).map(deal=>deal.id));
+      return requests.results.filter(request=>current.has(request.project_id)).length;
+    },
     async list(ownerId:string):Promise<SalesReportSummary[]>{user(ownerId);const rows=await db.prepare('SELECT status,version,lease_token,lease_until,data_json FROM workbench_sales_reports WHERE user_id = ? ORDER BY report_date DESC LIMIT 30').bind(ownerId).all<ReportRow>();return rows.results.map(row=>{const report=JSON.parse(row.data_json) as SalesReport;return {date:report.date,status:row.status,mode:report.mode,updatedAt:report.updatedAt,newProjects:report.snapshot.metrics.newProjects,followups:report.snapshot.metrics.followups};});},
     async claim(ownerId:string,date:string,report:SalesReport,expectedVersion:number,now:string):Promise<string|null>{
       user(ownerId);salesDayBounds(date);const token=crypto.randomUUID(),until=new Date(Date.parse(now)+10*60000).toISOString();

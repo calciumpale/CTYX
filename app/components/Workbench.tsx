@@ -1,6 +1,6 @@
 'use client';
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
-import { ArrowDown, ArrowRight, Bell, BookOpen, BriefcaseBusiness, CalendarDays, Check, ChevronDown, ChevronRight, CircleAlert, ClipboardCheck, Clock3, ExternalLink, GitBranch, Home, Loader2, LogOut, Menu, MessageSquare, Moon, PanelLeftClose, Search, Settings, ShieldCheck, Sun, Users, Video, Workflow, X } from 'lucide-react';
+import { ArrowDown, ArrowRight, Bell, BookOpen, BriefcaseBusiness, CalendarDays, Check, ChevronDown, ChevronRight, CircleAlert, ClipboardCheck, Clock3, ExternalLink, GitBranch, Home, Loader2, LogOut, Menu, MessageSquare, Moon, PanelLeftClose, Presentation, Search, Settings, ShieldCheck, Sun, Users, Video, Workflow, X } from 'lucide-react';
 import { useWorkbench } from '../lib/api';
 import { useChatScroll } from '../lib/use-chat-scroll';
 import { canOpenWorkspaceView, readWorkspaceRoute, workspaceManagementNavigation, workspaceNavigation, workspaceSearch, workspaceSection, workspaceTitle } from '../lib/workspace-navigation';
@@ -18,9 +18,10 @@ import type { MemberSession } from '../lib/member-types';
 import { MeetingImportWorkspace } from './MeetingImportWorkspace';
 import { ProspectingWorkspace } from './ProspectingWorkspace';
 import { ScheduleWorkspace } from './ScheduleWorkspace';
+import MarketingMaterials from './MarketingMaterials';
 
 const navigationIcons: Partial<Record<View, typeof Home>> = {
-  home:Home, deals:BriefcaseBusiness, schedule:CalendarDays, meetings:Video, prospecting:Search,
+  home:Home, deals:BriefcaseBusiness, schedule:CalendarDays, meetings:Video, prospecting:Search, materials:Presentation,
   knowledge:BookOpen, training:MessageSquare, approvals:ClipboardCheck, contracts:ClipboardCheck,
   members:Users, rules:ShieldCheck, settings:Settings, studio:Workflow, runs:Clock3,
 };
@@ -35,7 +36,7 @@ export default function Workbench({member,onLogout}:{member:MemberSession;onLogo
   },[reload]);
   const [view, setView] = useState<View>(member.role==='admin'?'home':'deals');
   const [routeReady,setRouteReady]=useState(false);
-  const [prospectingSection,setProspectingSection]=useState<'create'|'screen'|'handoff'>('create');
+  const [prospectingSection,setProspectingSection]=useState<'create'|'screen'|'handoff'|'web'>('create');
   const [navigationKey, setNavigationKey] = useState(0);
   const [meetingEmbed, setMeetingEmbed] = useState(false);
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
@@ -174,11 +175,11 @@ export default function Workbench({member,onLogout}:{member:MemberSession;onLogo
     setFocusedDeal(id);setProjectIntent(null);
     const url=new URL(window.location.href);url.search=workspaceSearch(url.search,{view:'deals',dealId:id});window.history.replaceState(null,'',url.href);
   },[]);
-  const onProspectingSectionChange=useCallback((section:'create'|'screen'|'handoff')=>{
+  const onProspectingSectionChange=useCallback((section:'create'|'screen'|'handoff'|'web')=>{
     setProspectingSection(section);
     const url=new URL(window.location.href);url.search=workspaceSearch(url.search,{view:'prospecting',prospectingSection:section});window.history.replaceState(null,'',url.href);
   },[]);
-  if (loading || !state || !routeReady) return <div className="loading-screen"><BrandMark /><h1>营销工作台</h1>{error ? <><p role="alert">{error}</p><button className="button secondary" onClick={() => void reload().catch(() => {})}>重新加载</button></> : <p><Loader2 size={16} className="spin" />正在加载…</p>}</div>;
+  if (loading || !state || !routeReady) return <div className="loading-screen"><BrandMark /><h1>AI营销工作台</h1>{error ? <><p role="alert">{error}</p><button className="button secondary" onClick={() => void reload().catch(() => {})}>重新加载</button></> : <p><Loader2 size={16} className="spin" />正在加载…</p>}</div>;
   const candidates = state.skills.filter(s => s.status === 'candidate');
   const noticeCount = (state.role === 'manager' ? candidates.length : 0) + Math.min(3, state.activities.length);
   const props = { state, mutate, notify, onAsk };
@@ -196,11 +197,11 @@ export default function Workbench({member,onLogout}:{member:MemberSession;onLogo
     },
   });
   const globalControls = <><button className="global-search" aria-label="搜索工作空间" onClick={()=>{setSearch('');setSearchOpen(true);}}><Search size={16}/><span>搜索</span><kbd>⌘ K</kbd></button><button className="icon-button notification-button" onClick={()=>{setNoticesOpen(true);setNoticeRead(true);}} aria-label={'通知'+(noticeCount?'，'+noticeCount+'项动态':'')}><Bell size={18}/>{noticeCount>0&&!noticeRead&&<i/>}</button></>;
-  if(meetingEmbed)return <div className="meeting-embed-shell"><header className="meeting-embed-header"><span className="meeting-embed-brand"><BrandMark small/>营销工作台</span><a href="/?view=meetings" target="_blank" rel="noopener noreferrer">完整工作台 <ExternalLink size={13}/></a><button className="icon-button" disabled={accountBusy} onClick={requestLogout} aria-label={`退出${member.displayName}的账号`} title={`当前账号：${member.displayName}`}>{accountBusy?<Loader2 size={16} className="spin"/>:<LogOut size={16}/>}</button></header>{toast&&<p className="meeting-message" role="status">{toast}</p>}<MeetingImportWorkspace state={state} onWorkspaceRefresh={reload} initialDealId={focusedDeal} admin={member.role==='admin'} compact/></div>;
+  if(meetingEmbed)return <div className="meeting-embed-shell"><header className="meeting-embed-header"><span className="meeting-embed-brand"><BrandMark small/>AI营销工作台</span><a href="/?view=meetings" target="_blank" rel="noopener noreferrer">完整工作台 <ExternalLink size={13}/></a><button className="icon-button" disabled={accountBusy} onClick={requestLogout} aria-label={`退出${member.displayName}的账号`} title={`当前账号：${member.displayName}`}>{accountBusy?<Loader2 size={16} className="spin"/>:<LogOut size={16}/>}</button></header>{toast&&<p className="meeting-message" role="status">{toast}</p>}<MeetingImportWorkspace state={state} onWorkspaceRefresh={reload} initialDealId={focusedDeal} admin={member.role==='admin'} compact/></div>;
   return <div className="app-shell">
     {mobileMenu && <button className="sidebar-backdrop" onClick={() => setMobileMenu(false)} aria-label="关闭导航" />}
     <aside className={'sidebar '+(mobileMenu?'mobile-open':'')} aria-label="主导航">
-      <div className="sidebar-brand"><a {...linkProps(homeView)} className="brand-link" aria-label="营销工作台首页"><BrandMark small/><span>营销工作台</span></a><button className="icon-button close-nav" onClick={()=>setMobileMenu(false)} aria-label="收起导航"><PanelLeftClose size={18}/></button></div>
+      <div className="sidebar-brand"><a {...linkProps(homeView)} className="brand-link" aria-label="AI营销工作台首页"><BrandMark small/><span>AI营销工作台</span></a><button className="icon-button close-nav" onClick={()=>setMobileMenu(false)} aria-label="收起导航"><PanelLeftClose size={18}/></button></div>
       <div className="sidebar-tools">{globalControls}</div>
       {member.role!=='admin'&&<button className="new-task-button" onClick={()=>{setConversation([]);setFailedRequest(null);setChatError('');setChatOpen(true);setMobileMenu(false);}} disabled={chatBusy}><MessageSquare size={17}/><span>AI 营销助手</span></button>}
       <nav aria-label="业务导航">{navigation.map(item=>{const Icon=item.icon;const current=section===item.id;return <a key={item.id} {...linkProps(item.id)} className={'nav-item '+(current?'active':'')} aria-current={current?'page':undefined}><Icon size={18} strokeWidth={1.7}/><span>{item.label}</span>{item.id==='contracts'&&approvalPendingCount>0&&<small aria-label={`${approvalPendingCount} 项待审批`}>{approvalPendingCount>99?'99+':approvalPendingCount}</small>}{item.id==='knowledge'&&member.role==='manager'&&candidates.length>0&&<small>{candidates.length}</small>}</a>;})}</nav>
@@ -211,7 +212,8 @@ export default function Workbench({member,onLogout}:{member:MemberSession;onLogo
       <main className="main-content" key={view+':'+navigationKey}>
         {view==='home'&&member.role==='admin'&&<AdminHome state={state} onNavigate={navigate}/>}
         {view==='reports'&&member.role==='manager'&&<SalesDailyReport state={state} notify={notify} onNavigate={navigate}/>}
-        {view==='prospecting'&&member.role!=='admin'&&<ProspectingWorkspace onGuardReady={onProspectingGuardReady} initialSection={prospectingSection} onSectionChange={onProspectingSectionChange}/>}
+        {view==='prospecting'&&member.role!=='admin'&&<ProspectingWorkspace onGuardReady={onProspectingGuardReady} initialSection={prospectingSection} onSectionChange={onProspectingSectionChange} onNavigateProject={id=>{void reload().then(()=>navigate('deals',id)).catch(()=>notify('项目已保存，工作台暂未刷新。请稍后重新打开。'));}}/>}
+        {view==='materials'&&member.role!=='admin'&&<MarketingMaterials notify={notify} onBusyChange={onProjectBusy} onDirtyChange={onProjectDirty}/>}
         {view==='schedule'&&member.role!=='admin'&&<ScheduleWorkspace pendingApprovals={approvalPendingCount} state={state} member={member} notify={notify} onNavigate={navigate} onBusyChange={onProjectBusy} onDirtyChange={onProjectDirty}/>}
         {view==='deals'&&member.role!=='admin'&&<CustomerWorkspace member={member} {...props} onReload={reload} onBusyChange={onProjectBusy} onDirtyChange={onProjectDirty} onNavigate={navigate} initialDealId={focusedDeal} initialIntent={projectIntent} onSelectedDealChange={onSelectedDealChange}/>}
         {(view==='contracts'||view==='approvals')&&member.role!=='admin'&&<ContractCenter {...props} initialTab={view==='approvals'?'approvals':'contracts'} initialDealId={focusedDeal} initialContractId={focusedApprovalContract} initialApprovalId={focusedApprovalId} onNavigate={navigate} onReloadWorkspace={reload} onBusyChange={view==='approvals'?onApprovalBusy:onContractBusy} onDirtyChange={view==='approvals'?onApprovalDirty:onContractDirty} pendingCount={approvalPendingCount}/>}

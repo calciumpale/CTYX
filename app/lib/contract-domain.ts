@@ -1,3 +1,4 @@
+import {scopeFor} from './sales-scope.ts';
 import {DomainError} from './domain.ts';
 import {CONTRACT_TYPES} from './contract-types.ts';
 import type {ContractAnalysis,ContractDocument,ContractFindingStatus} from './contract-types.ts';
@@ -10,7 +11,7 @@ function allowed(payload:Record<string,unknown>,keys:string[]){if(Object.keys(pa
 export async function handleContractAction(state:WorkbenchState,role:Role,action:string,payload:Record<string,unknown>,context:ContractActionContext):Promise<{id:string;message:string;reviewed?:ContractDocument}|null>{
   if(!['contract_save','contract_review','contract_finding_status'].includes(action))return null;
   const now=context.now;const contracts=state.contracts??=[];
-  const deal=(key:unknown)=>{const item=state.deals.find(d=>d.id===key);if(!item)fail('请选择合同关联项目',404);if(role==='sales'&&item.ownerId!=='sales-1')fail('无权访问其他销售的合同',403);return item;};
+  const deal=(key:unknown)=>{const item=state.deals.find(d=>d.id===key);if(!item)fail('请选择合同关联项目',404);if(role==='sales'&&item.ownerId!==scopeFor(state).salesId)fail('无权访问其他销售的合同',403);return item;};
   const existing=()=>{const document=contracts.find(d=>d.id===payload.id);if(!document)fail('合同不存在或无权访问',404);deal(document.dealId);if(!Number.isInteger(payload.version)||payload.version!==document.version)fail('合同已更新，请刷新后重试',409);return document;};
   if(action==='contract_save'){
     allowed(payload,['id','version','dealId','title','text','contractType','ourParty','focus','fileName','sourceFormat','importWarnings']);

@@ -1,3 +1,4 @@
+import {markSalesBusinessChanges} from './sales-project-eligibility.ts';
 import type {EffectiveModel} from './connection-config.ts';
 import {DomainError} from './domain.ts';
 import {requestModelText} from './model-client.ts';
@@ -77,7 +78,7 @@ function excerpt(prefix:string,value:string,max:number,kind:string):string{
 }
 
 /** Adds attributed source material only. Model inferences never overwrite manually maintained customer fields. */
-export function linkMeetingToWorkspace(state:WorkbenchState,imported:MeetingImport):{state:WorkbenchState;changed:boolean}{
+export function linkMeetingToWorkspace(state:WorkbenchState,imported:MeetingImport,now=new Date().toISOString()):{state:WorkbenchState;changed:boolean}{
   const next=structuredClone(state),deal=next.deals.find(item=>item.id===imported.dealId);
   if(!deal)throw new DomainError('关联项目已不存在，会议资料仍可重新选择项目',404);
   if(typeof imported.id!=='string'||!/^[a-zA-Z0-9_-]{1,160}$/.test(imported.id)||!Number.isFinite(Date.parse(imported.createdAt)))throw new DomainError('会议来源标识或时间不正确');
@@ -107,5 +108,6 @@ export function linkMeetingToWorkspace(state:WorkbenchState,imported:MeetingImpo
     const contacted=new Date(imported.record.startedAt).toISOString().slice(0,10);
     if(!Number.isFinite(Date.parse(deal.lastContact))||Date.parse(contacted)>Date.parse(deal.lastContact))deal.lastContact=contacted;
   }
+  markSalesBusinessChanges(state,next,now);
   return {state:next,changed:true};
 }

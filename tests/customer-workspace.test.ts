@@ -34,6 +34,19 @@ test('selection preserves explicit project IDs and refuses unavailable deep link
   assert.equal(selectCompanyProject(companies[0], 'unavailable'), 'a');
 });
 
+test('current companies exclude archives while history retains exact projects and their customer evidence', () => {
+  const archived = { ...deal('old', '远山科技'), archive: { at: '2026-11-08T00:00:00Z', reason: '企业目录替换', migrationKey: 'setup' }, notes: [{ id: 'note', text: '客户原话', author: 'ZS', date: '2026-10-01' }] };
+  const active = deal('new', '远山科技');
+  const input = [archived, active];
+  assert.deepEqual(companyDirectory(input).flatMap(company => company.projects.map(item => item.id)), ['new']);
+  const history = companyDirectory(input, 'archived');
+  assert.deepEqual(history.flatMap(company => company.projects.map(item => item.id)), ['old']);
+  assert.deepEqual(history[0].projects[0].notes, archived.notes);
+  assert.equal(selectInitialCustomerProject(history, 'old'), 'old');
+  assert.equal(selectInitialCustomerProject(companyDirectory(input), 'old'), null);
+  assert.equal(input[0].archive?.reason, '企业目录替换');
+});
+
 test('project chat history never includes other companies, sibling projects, global or workflow runs', () => {
   const runs = [run('b', 'selected', '2026-11-07T10:00:00Z'), run('a', 'selected', '2026-11-07T09:00:00Z'), run('private', 'other', '2026-11-07T08:00:00Z'), run('global', undefined, '2026-11-07T11:00:00Z'), run('workflow', 'selected', '2026-11-07T12:00:00Z', { workflowId: 'flow' })];
   assert.deepEqual(customerChatHistory(runs, 'selected').map(item => item.id), ['a', 'b']);

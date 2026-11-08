@@ -4,13 +4,13 @@ import { createApprovalStore } from './approval-store.ts';
 import type { ApprovalActor, ApprovalRequest, ApprovalTemplate, ApprovalSummary, ApprovalAction } from './approval-types.ts';
 import type { ApprovalListOptions, ApprovalRecord } from './approval-store.ts';
 import type { Role, WorkbenchState } from './types.ts';
-import {assertMemberApprovalAction,requireMemberRole} from './member-policy.ts';
+import {readMemberSalesScope,assertMemberApprovalAction,requireMemberRole} from './member-policy.ts';
 
 function identity(actor:ApprovalActor):ApprovalActor {
   const id=actor.id?.trim(),email=actor.email?.trim().toLowerCase(),name=actor.name?.trim();
   if(!id||id.length>256||!email||email.length>254||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||!name||name.length>200||/[\u0000-\u001f\u007f]/.test(id+email+name))throw new DomainError('请先使用平台账号登录',401);
   if(actor.workspaceId&&(!actor.workspaceId.trim()||actor.workspaceId.length>256||!['sales','manager','admin'].includes(actor.memberRole??'')))throw new DomainError('工作台登录身份无效',401);
-  return {id,email,name,...(actor.workspaceId?{workspaceId:actor.workspaceId,memberRole:actor.memberRole}:{})};
+  return {id,email,name,...(actor.salesId?{salesId:actor.salesId}:{}),...(actor.workspaceId?{workspaceId:actor.workspaceId,memberRole:actor.memberRole}:{})};
 }
 /** Middleware verifies the app session; a shared Sites owner never makes sales their own approver. */
 export function readApprovalIdentity(request:Request):ApprovalActor {
@@ -19,8 +19,8 @@ export function readApprovalIdentity(request:Request):ApprovalActor {
   let name=request.headers.get('x-ctai-member-display-name')??username;
   try{name=decodeURIComponent(name);}catch{throw new DomainError('登录姓名无效，请重新登录',401);}
   // The manager keeps the established platform identity so existing assigned approvals remain valid.
-  const email=role==='manager'?platformEmail:`${username}+${accountId}@accounts.ctai.local`;
-  return identity({id:role==='manager'?ownerId:accountId,email,name:name||email,workspaceId:ownerId,memberRole:role});
+  const email=role==='manager'?platformEmail:`${username==='zs'?'sales':username}+${accountId}@accounts.ctai.local`;
+  return identity({id:role==='manager'?ownerId:accountId,email,name:name||email,workspaceId:ownerId,memberRole:role,salesId:readMemberSalesScope(request)?.salesId});
 }
 export function assertApprovalOrigin(request:Request):void {
   const origin=request.headers.get('origin'),site=request.headers.get('sec-fetch-site');
@@ -69,7 +69,7 @@ export function createApprovalService(db:D1Database,clock:()=>string=()=>new Dat
         const id=requestId(payload),inputHash=await approvalInputHash(payload),existing=await store.get(id);
         if(existing){if(existing.ownerId!==ownerId||existing.request.applicant.id!==actor.id||existing.inputHash!==inputHash)throw new DomainError('申请标识已使用，请重新发起；原申请未修改',409);return {request:(await fresh(existing)).request,message:'申请已提交'};}
         const saved=await source(ownerId);if(!saved)throw new DomainError('请先保存项目后再发起审批',404);
-        const workspace=role==='sales'?{...saved.workspace,deals:saved.workspace.deals.filter(deal=>deal.ownerId==='sales-1')}:saved.workspace;
+        const workspace=role==='sales'?{...saved.workspace,deals:saved.workspace.deals.filter(deal=>deal.ownerId===(actor.salesId??(!actor.workspaceId?'sales-1':undefined)))}:saved.workspace;
         if(payload.previousRequestId!==undefined){const previous=typeof payload.previousRequestId==='string'?await store.visible(payload.previousRequestId,actor):null;if(!previous||previous.ownerId!==ownerId||previous.request.applicant.id!==actor.id||previous.projectId!==payload.projectId||previous.kind!==payload.kind)throw notFound();if(!['returned','rejected','withdrawn','superseded'].includes((await fresh(previous)).status))throw new DomainError('原申请仍在审批或已经通过，不能重新提交',409);}
         const request={...await buildApproval(payload,workspace,actor,now),ownerId};
         try{await store.insert(record(request),request.steps.map(step=>step.approverEmail));}catch(error){if(error instanceof DomainError&&error.status===409){const raced=await store.get(id);if(raced?.ownerId===ownerId&&raced.request.applicant.id===actor.id&&raced.inputHash===inputHash)return {request:(await fresh(raced)).request,message:'申请已提交'};}throw error;}

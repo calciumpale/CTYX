@@ -2,14 +2,16 @@ import type { AgentId, Deal, Run } from './types.ts';
 
 export interface CustomerCompany { key: string; name: string; projects: Deal[]; }
 export interface CustomerChatRequest { query: string; dealId: string; conversationRunIds: string[]; agentId?: AgentId; }
+export type CustomerDirectoryScope = 'active' | 'archived';
 const compare = (a: string, b: string) => a.localeCompare(b, 'zh-CN') || (a < b ? -1 : a > b ? 1 : 0);
 export const normalizedCompanyName = (value: string) => value.normalize('NFKC').trim().replace(/\s+/g, ' ').toLocaleLowerCase('zh-CN');
 const displayName = (deal: Deal) => (deal.name.trim() || deal.companyProfile?.companyName.trim() || '未命名企业').normalize('NFKC').replace(/\s+/g, ' ');
 
 /** The caller supplies server-scoped deals. Research aliases never join two differently named clients. */
-export function companyDirectory(deals: readonly Deal[]): CustomerCompany[] {
+export function companyDirectory(deals: readonly Deal[], scope: CustomerDirectoryScope = 'active'): CustomerCompany[] {
   const groups = new Map<string, Deal[]>();
   for (const deal of deals) {
+    if (Boolean(deal.archive) !== (scope === 'archived')) continue;
     const name = normalizedCompanyName(deal.name.trim() || deal.companyProfile?.companyName || '');
     const key = name ? `company:${name}` : `unnamed:${deal.id}`;
     groups.set(key, [...(groups.get(key) || []), deal]);

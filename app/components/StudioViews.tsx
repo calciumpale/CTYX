@@ -10,6 +10,7 @@ import { TrainingVoiceControls } from './TrainingVoiceControls';
 import { TrainingProfileSetup, TrainingSessionProfile } from './TrainingProfileSetup';
 import type { TrainingProfile } from '../lib/training-profile';
 import { ApiConnectionSettings } from './ApiConnectionSettings';
+import MaterialConnectionSettings from './MaterialConnectionSettings';
 import { EmbeddingSettings } from './EmbeddingSettings';
 import { CompanyConnectionSettings } from './CompanyConnectionSettings';
 import { SpeechRecognitionSettings } from './SpeechRecognitionSettings';
@@ -319,8 +320,9 @@ export { RunsView } from './RunHistoryView';
 export function SettingsView({ state,onConnectionChanged }: ViewProps & {onConnectionChanged?:()=>Promise<void>}) {
   return <section className="studio-view studio-settings-view">
     <PageHeading title="服务连接"/>
-    <nav className="studio-service-nav" aria-label="服务连接"><a href="#api-configuration">大模型</a><a href="#speech-recognition-settings">语音识别</a><a href="#jinghai-api-configuration">企业数据</a><a href="#embedding-configuration">向量检索</a></nav>
+    <nav className="studio-service-nav" aria-label="服务连接"><a href="#api-configuration">大模型</a><a href="#material-connection">营销素材</a><a href="#speech-recognition-settings">语音识别</a><a href="#jinghai-api-configuration">企业数据</a><a href="#embedding-configuration">向量检索</a></nav>
     <ApiConnectionSettings onSaved={onConnectionChanged}/>
+    <div id="material-connection"><MaterialConnectionSettings onConnectionChanged={onConnectionChanged}/></div>
     <SpeechRecognitionSettings/>
     <CompanyConnectionSettings provider="jinghai"/><CompanyConnectionSettings/><EmbeddingSettings/>
     <details className="studio-setting-description studio-workspace-data"><summary>工作空间数据</summary>

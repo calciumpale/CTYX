@@ -27,3 +27,22 @@ test('receipt cannot change target project or switch between create and followup
  await assert.rejects(executeAction(updated.state,'sales','deal_intake',{...input,requestId:followup.requestId},{now,extractIntake:async()=>extraction()}),error=>error instanceof DomainError&&error.status===409);
  await assert.rejects(executeAction(updated.state,'sales','deal_intake_followup',{...followup,requestId:input.requestId},{now}),error=>error instanceof DomainError&&error.status===409);
 });
+
+test('new intake skips archived duplicate while explicit historical followup remains accessible',async()=>{
+ const salesScope={salesId:'sales-yl',displayName:'YL'};
+ const extractIntake=async()=>{const result=extraction();delete result.fields.projectName;return result;};
+ const first=await executeAction(createSeed(now),'sales','deal_intake',input,{now,salesScope,extractIntake});
+ const archived=first.state.deals.find(deal=>deal.id===first.dealId)!;
+ archived.archive={at:now,reason:'目录替换',migrationKey:'test-archive'};
+ const fresh=await executeAction(first.state,'sales','deal_intake',{...input,requestId:crypto.randomUUID()},{now,salesScope,extractIntake});
+ assert.equal(fresh.intake,undefined);
+ assert.ok(fresh.dealId);
+ assert.notEqual(fresh.dealId,archived.id);
+ assert.equal(fresh.state.deals.find(deal=>deal.id===fresh.dealId)?.archive,undefined);
+ assert.deepEqual(fresh.state.deals.find(deal=>deal.id===archived.id),archived);
+ const followup=await executeAction(fresh.state,'sales','deal_intake_followup',{dealId:archived.id,requestId:crypto.randomUUID(),text:'补充历史沟通记录',inputMode:'text'},{now,salesScope});
+ const history=followup.state.deals.find(deal=>deal.id===archived.id)!;
+ assert.equal(history.notes[0].text,'补充历史沟通记录');
+ assert.deepEqual(history.archive,archived.archive);
+ await assert.rejects(executeAction(fresh.state,'sales','deal_intake_followup',{dealId:archived.id,requestId:crypto.randomUUID(),text:'越权访问',inputMode:'text'},{now,salesScope:{salesId:'sales-ch',displayName:'CH'}}),{status:403});
+});

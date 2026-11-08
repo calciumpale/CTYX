@@ -13,14 +13,14 @@ const role=(value:string):value is MemberRole=>['sales','manager','admin'].inclu
 const hex=(bytes:Uint8Array)=>Array.from(bytes,byte=>byte.toString(16).padStart(2,'0')).join('');
 const random=(size:number)=>hex(crypto.getRandomValues(new Uint8Array(size)));
 const sha256=async(value:string)=>hex(new Uint8Array(await crypto.subtle.digest('SHA-256',encoder.encode(value))));
-async function passwordHash(password:string,salt:string,iterations:number):Promise<string>{
+export async function passwordHash(password:string,salt:string,iterations:number):Promise<string>{
   const key=await crypto.subtle.importKey('raw',encoder.encode(password),'PBKDF2',false,['deriveBits']);
   return hex(new Uint8Array(await crypto.subtle.deriveBits({name:'PBKDF2',hash:'SHA-256',salt:encoder.encode(salt),iterations},key,256)));
 }
 function sameHash(left:string,right:string):boolean{let mismatch=left.length^right.length;for(let i=0;i<Math.max(left.length,right.length);i++)mismatch|=(left.charCodeAt(i)||0)^(right.charCodeAt(i)||0);return mismatch===0;}
 function owner(value:string):string{if(!value||value.length>512||/[\u0000-\u001f\u007f]/.test(value))throw new DomainError('请先使用平台账号登录',401);return value;}
 function publicMember(row:AccountRow):MemberSession{
-  if(!role(row.role))throw new DomainError('账号状态异常，请联系管理员',403);
+  if(!role(row.role)||row.role==='sales'&&!row.sales_id)throw new DomainError('账号状态异常，请联系管理员',403);
   return {accountId:row.account_id,username:row.username,displayName:row.display_name,role:row.role,...(row.sales_id?{salesId:row.sales_id}:{})};
 }
 function tokenFromCookie(cookies:string|null|undefined):string|null{
@@ -47,6 +47,7 @@ export function trustedMemberHeaders(original:Headers,member:MemberSession):Head
  * Human requests always retain their outer identity and must pass app authorization. */
 export function memberRouteAccess(request:Request):'session'|'service'|'manager'|'operator'|'member'{
   const path=new URL(request.url).pathname.replace(/\/$/,'');
+  if(path==='/api/workspace-setup'&&request.method==='POST'&&request.headers.has('x-ctai-setup-capability'))return 'service';
   if(path==='/api/workspace-session')return 'session';
   if(['/api/meeting-bridge/setup','/api/meeting-bridge/poll','/api/meeting-bridge/heartbeat','/api/meeting-bridge/complete','/api/meeting-bridge/media'].includes(path)&&request.method==='POST')return 'service';
   if(['/api/prospecting-bridge/status','/api/prospecting-bridge/poll','/api/prospecting-bridge/heartbeat','/api/prospecting-bridge/complete'].includes(path)&&request.method==='POST')return 'service';
@@ -85,8 +86,8 @@ export function createMemberAuthStore(environment:{DB?:D1Database;now?:()=>numbe
     if(!row||row.role!=='admin'||!row.enabled)throw new DomainError('仅管理员可以管理账号',403);
   }
   async function bootstrap(ownerId:string):Promise<void>{
-    owner(ownerId);const count=await db.prepare('SELECT COUNT(*) AS count FROM workbench_member_accounts WHERE owner_id=?').bind(ownerId).first<{count:number}>();if(count&&Number(count.count)>=3)return;
-    const definitions=[{username:'sales',displayName:'林晓',role:'sales',salesId:'sales-1'},{username:'manager',displayName:'销售管理者',role:'manager',salesId:null},{username:'admin',displayName:'管理员',role:'admin',salesId:null}];
+    owner(ownerId);const count=await db.prepare('SELECT COUNT(*) AS count FROM workbench_member_accounts WHERE owner_id=?').bind(ownerId).first<{count:number}>();if(count&&Number(count.count)>0)return;
+    const definitions=[...['zs','yl','ch','yy','wl'].map(username=>({username,displayName:username.toUpperCase(),role:'sales',salesId:username==='zs'?'sales-1':`sales-${username}`})),{username:'manager',displayName:'销售管理者',role:'manager',salesId:null},{username:'admin',displayName:'管理员',role:'admin',salesId:null}];
     const credentials=await Promise.all(definitions.map(async item=>{const salt=random(24);return {...item,id:`member-${crypto.randomUUID()}`,salt,hash:await passwordHash('admin',salt,PASSWORD_ITERATIONS)};}));
     // One atomic statement prevents partially seeded owners; existing credentials are never reset.
     const placeholders=credentials.map(()=>'(?,?,?,?,?,?,?,?,?,?,?,?)').join(',');
@@ -95,7 +96,7 @@ export function createMemberAuthStore(environment:{DB?:D1Database;now?:()=>numbe
   }
   async function authenticate(ownerId:string,cookies:string|null|undefined):Promise<MemberSession|null>{
     owner(ownerId);const token=tokenFromCookie(cookies);if(!token)return null;
-    const tokenHash=await sha256(token);const row=await db.prepare('SELECT a.* FROM workbench_member_sessions s JOIN workbench_member_accounts a ON a.account_id=s.account_id AND a.owner_id=s.owner_id WHERE s.token_hash=? AND s.owner_id=? AND s.expires_at>? AND a.enabled=1').bind(tokenHash,ownerId,seconds()).first<AccountRow>();
+    const tokenHash=await sha256(token);const row=await db.prepare("SELECT a.* FROM workbench_member_sessions s JOIN workbench_member_accounts a ON a.account_id=s.account_id AND a.owner_id=s.owner_id WHERE s.token_hash=? AND s.owner_id=? AND s.expires_at>? AND a.enabled=1 AND (a.role<>'sales' OR (a.sales_id IS NOT NULL AND (SELECT COUNT(*) FROM workbench_member_accounts b WHERE b.owner_id=a.owner_id AND b.sales_id=a.sales_id AND b.role='sales' AND b.enabled=1)=1))").bind(tokenHash,ownerId,seconds()).first<AccountRow>();
     return row&&role(row.role)?publicMember(row):null;
   }
   async function logout(ownerId:string,cookies:string|null|undefined):Promise<void>{owner(ownerId);const token=tokenFromCookie(cookies);if(token)await db.prepare('DELETE FROM workbench_member_sessions WHERE owner_id=? AND token_hash=?').bind(ownerId,await sha256(token)).run();}

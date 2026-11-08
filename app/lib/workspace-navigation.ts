@@ -7,8 +7,8 @@ interface WorkspacePage {
   section?: WorkspaceSection;
 }
 
-export type WorkspaceSection = 'prospecting' | 'deals' | 'schedule' | 'contracts' | 'training' | 'knowledge';
-export type ProspectingSection = 'create' | 'screen' | 'handoff';
+export type WorkspaceSection = 'prospecting' | 'materials' | 'deals' | 'schedule' | 'contracts' | 'training' | 'knowledge';
+export type ProspectingSection = 'create' | 'screen' | 'handoff' | 'web';
 
 // One registry owns page names, frontend access, and navigation order.
 // Server-side permissions remain authoritative for every API request.
@@ -18,6 +18,7 @@ const pages: Record<View, WorkspacePage> = {
   schedule: { title:'提醒及日程', roles:['sales','manager'], section:'schedule' },
   meetings: { title:'会议', roles:['sales','manager','admin'], section:'deals' },
   prospecting: { title:'社交平台获客', roles:['sales','manager'], section:'prospecting' },
+  materials: { title:'AI营销素材生成', roles:['sales','manager'], section:'materials' },
   knowledge: { title:'知识库', roles:['sales','manager','admin'], section:'knowledge' },
   training: { title:'培训提升', roles:['sales','manager'], section:'training' },
   approvals: { title:'合同及审批', roles:['sales','manager'], section:'contracts' },
@@ -41,8 +42,8 @@ export function workspaceTitle(view: View, role: MemberRole): string {
 }
 
 export function workspaceNavigation(role: MemberRole): Array<{id:View;label:string;mobileLabel?:string}> {
-  const mobile: Partial<Record<View,string>>={prospecting:'社交获客',schedule:'提醒日程',contracts:'合同审批'};
-  return (['prospecting','deals','schedule','contracts','training','knowledge'] as const)
+  const mobile: Partial<Record<View,string>>={prospecting:'获客',materials:'素材',deals:'项目',schedule:'日程',contracts:'合同',training:'陪练',knowledge:'知识库'};
+  return (['prospecting','materials','deals','schedule','contracts','training','knowledge'] as const)
     .filter(id => canOpenWorkspaceView(role,id))
     .map(id => ({id,label:workspaceTitle(id,role),...(mobile[id]?{mobileLabel:mobile[id]}:{})}));
 }
@@ -82,7 +83,7 @@ export function readWorkspaceRoute(search: string, role: MemberRole): WorkspaceR
   if(view==='meetings'&&params.get('embed')!=='tencent')return {view:role==='admin'?'settings':'schedule'};
   const route: WorkspaceRoute = {view:view as View};
   const section=params.get('section');
-  if(view==='prospecting'&&(section==='create'||section==='screen'||section==='handoff'))route.prospectingSection=section;
+  if(view==='prospecting'&&(section==='create'||section==='screen'||section==='handoff'||section==='web'))route.prospectingSection=section;
   const intent = params.get('intent');
   if (view === 'deals' && (intent === 'create' || intent === 'followup')) route.intent = intent;
   const dealId = identifier(params.get('deal'));

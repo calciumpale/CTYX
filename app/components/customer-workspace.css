@@ -12,6 +12,12 @@
 .cw-directory-heading > div { min-width: 0; }
 .cw-directory-heading h1 { font-size: 15px; font-weight: 600; letter-spacing: -.02em; }
 .cw-directory-heading > div > span { display: block; margin-top: 4px; color: var(--cds-text-muted); font-size: 11px; }
+.cw-directory-scope { display: flex; gap: 4px; margin: 0 12px 12px; padding: 3px; border: 1px solid var(--cds-border); border-radius: var(--control-radius); }
+.cw-directory-scope button { flex: 1; min-height: var(--control-height); padding: 5px 7px; border: 0; border-radius: 5px; color: var(--cds-text-secondary); background: transparent; font-size: 12px; cursor: pointer; }
+.cw-directory-scope button:hover { background: var(--cds-fill-ghost-hover); }
+.cw-directory-scope button[aria-pressed="true"] { background: var(--cds-fill-ghost-selected); color: var(--cds-text-primary); font-weight: 550; }
+.cw-directory-scope button:disabled { opacity: .5; cursor: wait; }
+.cw-directory-scope span { margin-left: 5px; font-size: 11px; font-variant-numeric: tabular-nums; }
 .cw-directory-search { margin: 0 12px 14px; position: relative; }
 .cw-directory-search > label { position: absolute; inset: 0 auto 0 10px; display: flex; align-items: center; color: var(--cds-text-muted); pointer-events: none; z-index: 1; }
 .cw-directory-search input { text-indent: 20px; background: var(--cds-surface-2); }
@@ -29,6 +35,9 @@
 .cw-directory-empty { padding: 35px 18px; display: grid; justify-items: center; gap: 12px; color: var(--cds-text-muted); font-size: 12px; }
 .cw-conversation { min-width: 0; min-height: 0; display: flex; flex-direction: column; position: relative; background: var(--cds-surface-2); }
 .cw-chat-header { padding: 15px 24px; min-height: 78px; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--cds-border); flex-shrink: 0; }
+.cw-record-status { padding: 10px 24px; background: var(--cds-surface-0); border-bottom: 1px solid var(--cds-border); font-size: 12px; line-height: 1.7; flex-shrink: 0; }
+.cw-record-status strong { font-weight: 550; }
+.cw-record-status p { color: var(--cds-text-secondary); margin-top: 3px; }
 .cw-chat-title { flex: 1; min-width: 0; }
 .cw-chat-title h2 { font-size: 16px; line-height: 1.6; font-weight: 600; overflow-wrap: anywhere; }
 .cw-chat-title > div { display: flex; align-items: center; gap: 8px; color: var(--cds-text-muted); font-size: 11px; margin-top: 3px; flex-wrap: wrap; }
@@ -103,6 +112,7 @@
 .cw-sources { margin-top: 10px; color: var(--cds-text-secondary); font-size: 11px; }
 .cw-sources p { margin: 8px 0; }
 .cw-sources small { display: block; color: var(--cds-text-muted); }
+.cw-source-excerpt { display: block; margin-top: 5px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .cw-next-action > .button { margin-top: 14px; }
 .cw-muted { color: var(--cds-text-muted); font-size: 12px; line-height: 1.8; }
 .cw-error { margin: 12px 0 !important; font-size: 12px; line-height: 1.8; color: var(--cds-text-primary); padding: 11px 12px; background: var(--cds-alpha-1); border: 1px solid var(--cds-border); border-radius: 10px; overflow-wrap: anywhere; }

@@ -41,7 +41,8 @@ export function salesInput(deal: Deal, transcripts: CallTranscript[]): SalesInpu
   if (notes.length > 10 || calls.length > 3 || deal.risks.length > 6) truncated = true;
   if (deal.notes.some(n => n.recording)) warnings.push('录音附件尚未作为对话内容分析；只有已填写文字或已保存转写可作为采购意向证据。');
   if (truncated) warnings.push('本次使用有界资料片段，较早或较长记录未全部提交；采购结论仍需人工核实。');
-  if (deal.dataOrigin !== 'manual') warnings.push('当前项目为合成示例，不构成真实客户意向或业绩证据。');
+  if (deal.dataOrigin === 'research') warnings.push('公开来源本身不代表客户关系或采购意向；实际业务以人工记录为准。');
+  else if (deal.dataOrigin !== 'manual') warnings.push('当前项目为合成示例，不构成真实客户意向或业绩证据。');
   return { dealId: deal.id, companyName: deal.name, projectName: deal.projectName ?? deal.name, stage: deal.stage, dataOrigin: deal.dataOrigin ?? 'sample', outcome: deal.outcome ?? 'open', sources, warnings, coverage: { notes: notes.length, transcripts: calls.length, includedNotes: new Set(sources.filter(s => s.kind === 'note').map(s => s.id.replace(/:negative$/, ''))).size, includedTranscripts: new Set(sources.filter(s => s.kind === 'transcript').map(s => s.id.replace(/:negative$/, ''))).size, truncated } };
 }
 

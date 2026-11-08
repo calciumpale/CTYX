@@ -1,3 +1,4 @@
+import {scopeFor} from './sales-scope.ts';
 import { DomainError } from './domain.ts';
 import { DEFAULT_TALKTRACK_POLICY } from './talktrack-types.ts';
 import type { CallTranscript, TalkTrack, TalkTrackPolicy } from './talktrack-types.ts';
@@ -37,7 +38,7 @@ export function maintainTalkTracks(state:WorkbenchState,now:string):number{
   }state.talkTrackPolicy={...policy,lastRunAt:now};return count;
 }
 export async function handleTalkAction(state:WorkbenchState,role:Role,action:string,payload:Record<string,unknown>,now:string,approve?:(track:TalkTrack)=>Promise<void>,actorName?:string):Promise<string|null>{
-  const deal=()=>{const d=state.deals.find(d=>d.id===payload.dealId);if(!d)fail('项目不存在',404);if(role==='sales'&&d.ownerId!=='sales-1')fail('无权操作其他销售的项目',403);return d;};
+  const deal=()=>{const d=state.deals.find(d=>d.id===payload.dealId);if(!d)fail('项目不存在',404);if(role==='sales'&&d.ownerId!==scopeFor(state).salesId)fail('无权操作其他销售的项目',403);return d;};
   switch(action){
     case 'deal_outcome':{const d=deal();if(payload.version!==d.version)fail('项目已更新，请刷新后重试',409);if(payload.confirmed!==true||!['open','won','lost'].includes(String(payload.outcome)))fail('请确认项目成单或结项结果');if(d.outcome===payload.outcome)fail('项目结果没有变化',409);d.outcome=payload.outcome as Deal['outcome'];d.version++;if(d.outcome==='won'){d.wonAt=now;await queueFeedback(state,d,now);}else{delete d.wonAt;for(const j of state.feedbackJobs??[])if(j.dealId===d.id){j.status='done';j.message='项目结果已变更，自动提炼停止';delete j.leaseToken;delete j.leaseUntil;}for(const t of state.talkTracks??[])if(t.dealId===d.id&&t.status!=='rejected'){t.status='archived';t.updatedAt=now;t.version++;t.reviewNote='来源项目已撤销成单，需要重新核实来源';}}return '项目结果已保存';}
     case 'transcript_add':{const d=deal();if(!['pasted','file'].includes(String(payload.source)))fail('请选择转写文本来源');const value=str(payload.text,'通话转写',50000);const all=state.transcripts??=[];if(all.reduce((sum,t)=>sum+t.text.length,0)+value.length>500000)fail('当前工作空间转写容量已满，请联系管理员扩容',413);if(all.some(t=>t.dealId===d.id&&t.text===value))fail('这段转写已保存，无需重复提交',409);all.unshift({id:id('transcript'),dealId:d.id,employeeId:d.ownerId,employeeName:d.owner,text:value,source:payload.source as 'pasted'|'file',createdAt:now});d.version++;d.lastContact=now.slice(0,10);await queueFeedback(state,d,now);return '通话转写已保存，成单项目自动进入提炼流程';}

@@ -1,3 +1,4 @@
+import type {SalesScope} from './sales-scope.ts';
 import {DomainError,executeAction,projectState} from './domain.ts';
 import type {ActionContext} from './domain.ts';
 import type {MemberRole} from './member-types.ts';
@@ -10,6 +11,9 @@ export function requireMemberRole(request:Request):MemberRole {
   if(request.headers.get('x-ctai-member-authenticated')!=='1'||!request.headers.get('x-ctai-member-account-id')||!request.headers.get('x-ctai-member-username')||!['sales','manager','admin'].includes(role??''))throw new DomainError('请先登录工作台',401);
   return role as MemberRole;
 }
+export function readMemberSalesScope(request:Request):SalesScope|undefined {
+ const role=requireMemberRole(request);if(role!=='sales')return undefined;const salesId=request.headers.get('x-ctai-member-sales-id');if(!salesId||!/^[a-zA-Z0-9_.:-]{1,128}$/.test(salesId))throw new DomainError('销售账号归属无效，请重新登录',401);return {salesId,displayName:readMemberDisplayName(request),accountId:request.headers.get('x-ctai-member-account-id')!};
+}
 export function readMemberDisplayName(request:Request):string {
   requireMemberRole(request);let name=request.headers.get('x-ctai-member-display-name')??request.headers.get('x-ctai-member-username')??'';
   try{name=decodeURIComponent(name).trim();}catch{throw new DomainError('登录姓名无效，请重新登录',401);}
@@ -20,6 +24,9 @@ export function readMemberDisplayName(request:Request):string {
 export function assertMemberApi(role:MemberRole,pathname:string,method:string):void {
   const path=pathname.replace(/\/$/,'');const verb=method.toUpperCase();
   if(path==='/api/workbench'){if(['GET','POST'].includes(verb))return;return denied();}
+  if(['/api/web-prospects','/api/marketing-materials'].includes(path)){if(role!=='admin'&&['GET','POST'].includes(verb))return;return denied();}
+  if(path==='/api/marketing-materials/result'){if(role!=='admin'&&['GET','HEAD'].includes(verb))return;return denied();}
+  if(path==='/api/material-connection'){if(role==='admin'&&['GET','POST'].includes(verb))return;return denied();}
   if(path==='/api/prospecting'){if(role!=='admin'&&['GET','POST'].includes(verb))return;return denied();}
   if(path==='/api/schedules'){if(role!=='admin'&&['GET','POST'].includes(verb))return;return denied();}
   if(path==='/api/meeting-imports'){if(verb==='GET'||role!=='admin'&&verb==='POST')return;return denied();}
@@ -28,6 +35,7 @@ export function assertMemberApi(role:MemberRole,pathname:string,method:string):v
   if(path==='/api/business-settings'){if(verb==='GET'||role==='admin'&&verb==='POST')return;return denied();}
   if(path==='/api/knowledge-library'){if(verb==='GET'||verb==='POST')return;return denied();}
   if(['/api/connections','/api/embedding-connection','/api/company-connection'].includes(path)){if(role==='admin'&&['GET','POST'].includes(verb))return;return denied();}
+  if(path==='/api/workspace-setup'){if(role==='admin'&&verb==='POST')return;return denied();}
   if(path==='/api/workspace-members'){if(role==='admin'&&['GET','POST','PATCH'].includes(verb))return;return denied();}
   if(path==='/api/speech-settings'){if(verb==='GET'||verb==='POST'&&role!=='sales')return;return denied();}
   if(path==='/api/sales-reports'){if(role==='manager'&&['GET','POST'].includes(verb))return;return denied();}
@@ -90,8 +98,8 @@ function operationalRun(run:Run):Run {
   return {id:run.id,query:'任务记录',answer:'',agentIds:[...run.agentIds],steps:run.steps.map(step=>({id:step.id,title:'执行步骤',...(step.agent?{agent:step.agent}:{}),...(step.nodeId?{nodeId:step.nodeId}:{}),detail:'',duration:step.duration,status:step.status})),citations:[],mode:run.mode,createdAt:run.createdAt,duration:run.duration,...(run.workflowId?{workflowId:run.workflowId}:{}),...(run.status?{status:run.status}:{}),...(run.workflowVersion?{workflowVersion:run.workflowVersion}:{}),...(run.workflowSource?{workflowSource:run.workflowSource}:{})};
 }
 /** Never expose raw canonical state to the admin account, including on write responses. */
-export function projectAccountState(role:MemberRole,state:WorkbenchState):WorkbenchState {
-  if(role==='sales')return projectState(state,'sales');
+export function projectAccountState(role:MemberRole,state:WorkbenchState,scope?:SalesScope):WorkbenchState {
+  if(role==='sales')return projectState(state,'sales',scope);
   const result=projectState(state,'manager');
   if(role==='manager'){
     result.workflows=result.workflows.filter(workflow=>workflow.published||workflow.status==='published').map(workflow=>workflow.published?{id:workflow.id,...workflow.published,status:'published',updatedAt:workflow.published.publishedAt}:workflow);
@@ -106,8 +114,8 @@ export function projectAccountState(role:MemberRole,state:WorkbenchState):Workbe
   clean.viewer={name:'管理员',team:'系统管理',salesId:''};
   return clean;
 }
-export function projectAccountResult(role:MemberRole,result:ApiResult):ApiResult {
-  const state=projectAccountState(role,result.state);
+export function projectAccountResult(role:MemberRole,result:ApiResult,scope?:SalesScope):ApiResult {
+  const state=projectAccountState(role,result.state,scope);
   if(role!=='admin')return {...result,state};
   return {state,...(result.run?{run:operationalRun(result.run)}:{}),message:'操作已完成'};
 }

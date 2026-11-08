@@ -6,16 +6,17 @@ import type { ProspectCampaign, ProspectDeviceView, ProspectJobView, ProspectLea
 import { Overlay } from './CoreViews';
 import { ProspectingDailyDiscovery } from './ProspectingDailyDiscovery';
 import { ProspectingConversations } from './ProspectingConversations';
+import WebProspecting from './WebProspecting';
 import './prospecting-workspace.css';
 
 type PostResult = { snapshot: ProspectSnapshot; deviceCredentials?: { deviceId: string; deviceToken: string }; campaignId?: string; message?: string };
 type Draft = { version: number; greeting: string };
 type LeaveGuard = (proceed: () => void) => boolean;
-export type ProspectingSection = 'create' | 'screen' | 'handoff';
+export type ProspectingSection = 'create' | 'screen' | 'handoff' | 'web';
 type ProspectingTab = 'candidates' | 'leads' | 'chat' | 'pool' | 'history';
 const sectionForTab = (tab: ProspectingTab): ProspectingSection => tab === 'history' ? 'create' : tab === 'chat' || tab === 'pool' ? 'handoff' : 'screen';
-const sectionLabels: Record<ProspectingSection, string> = { create: '新建任务', screen: '筛选线索', handoff: '留资对接' };
-const sectionTabs: Record<ProspectingSection, ProspectingTab> = { create: 'history', screen: 'candidates', handoff: 'chat' };
+const sectionLabels: Record<ProspectingSection, string> = { create: '新建任务', screen: '筛选线索', handoff: '留资对接', web: '全网线索' };
+const sectionTabs: Record<ProspectingSection, ProspectingTab> = { create: 'history', screen: 'candidates', handoff: 'chat', web: 'history' };
 const leadLabels: Record<ProspectLeadStatus, string> = { pending: '待审核', rejected: '已拒绝', queued: '等待发送', sending: '正在发送', submitted: '已提交', failed: '发送失败', unknown: '待核对', unreachable: '暂不可联系' };
 const jobLabels = { queued: '排队中', running: '进行中', done: '已完成', failed: '未完成', unknown: '待核对', cancelled: '已取消' };
 const jobKinds = { discover: '发现竞品账号', collect: '采集评论', send: '发送招呼', readConversation: '同步客户会话', reply: '发送聊天回复' };
@@ -99,7 +100,7 @@ function CampaignForm({ busy, modelReady, onCreate, onCancel, onDirtyChange }: {
   </form>;
 }
 
-export function ProspectingWorkspace({ onGuardReady, initialSection = 'create', onSectionChange }: { onGuardReady?: (guard: LeaveGuard | null) => void; initialSection?: ProspectingSection; onSectionChange?: (section: ProspectingSection) => void }) {
+export function ProspectingWorkspace({ onGuardReady, initialSection = 'create', onSectionChange, onNavigateProject }: { onGuardReady?: (guard: LeaveGuard | null) => void; initialSection?: ProspectingSection; onSectionChange?: (section: ProspectingSection) => void; onNavigateProject?: (id: string) => void }) {
   const prefix = useId();
   const [snapshot, setSnapshot] = useState<ProspectSnapshot | null>(null);
   const [campaignId, setCampaignId] = useState('');
@@ -128,6 +129,9 @@ export function ProspectingWorkspace({ onGuardReady, initialSection = 'create', 
   const [formDirty, setFormDirty] = useState(false);
   const [chatDirty, setChatDirty] = useState(false);
   const [chatBusy, setChatBusy] = useState(false);
+  const [webDirty, setWebDirty] = useState(false);
+  const webBusyRef = useRef(false);
+  const onWebBusyChange = useCallback((value: boolean) => { webBusyRef.current = value; }, []);
   const [chatResetKey, setChatResetKey] = useState(0);
   const chatBusyRef = useRef(false);
   const onChatBusyChange = useCallback((value: boolean) => { chatBusyRef.current = value; setChatBusy(value); }, []);
@@ -176,11 +180,12 @@ export function ProspectingWorkspace({ onGuardReady, initialSection = 'create', 
     finally { if (generation === epoch.current) { readInFlight.current = false; if (mounted.current) setLoading(false); } }
   }, [applySnapshot, request]);
   useEffect(() => {
+    if (section === 'web') return;
     mounted.current = true; const activeControllers = controllers.current;
     const frame = requestAnimationFrame(() => { void refresh(); });
     const timer = setInterval(() => { if (document.visibilityState === 'visible') void refresh(); }, 4000);
     return () => { mounted.current = false; cancelAnimationFrame(frame); clearInterval(timer); activeControllers.forEach(controller => controller.abort()); activeControllers.clear(); readInFlight.current = false; };
-  }, [refresh]);
+  }, [refresh, section]);
   const post = async (input: Record<string, unknown>) => { const result = await request<PostResult>('/api/prospecting', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) }); if (input.action === 'create') { const initialView = { page: 1, runId: '' }; leadQuery.current = initialView; leadViewRef.current = initialView; setLeadView(initialView); return result; } if (leadQuery.current.page !== 1 || leadQuery.current.runId) result.snapshot = await request<ProspectSnapshot>(`/api/prospecting?campaignId=${encodeURIComponent(String(input.campaignId || activeCampaign.current))}&leadPage=${leadQuery.current.page}&runId=${encodeURIComponent(leadQuery.current.runId)}`); return result; };
   async function execute(label: string, operation: () => Promise<PostResult>, after?: (result: PostResult) => void) {
     if (busyRef.current || chatBusyRef.current) return;
@@ -194,19 +199,19 @@ export function ProspectingWorkspace({ onGuardReady, initialSection = 'create', 
     } catch (cause) { if (mounted.current && !cancelled(cause)) setError(readableError(cause)); }
     finally { busyRef.current = false; if (mounted.current) setBusy(''); }
   }
-  const hasUnsaved = discoveryDirty || selectionEdited || chatDirty || formDirty || Object.keys(drafts).length > 0 || Boolean(importContent.trim()) || Boolean(credentials);
+  const hasUnsaved = webDirty || discoveryDirty || selectionEdited || chatDirty || formDirty || Object.keys(drafts).length > 0 || Boolean(importContent.trim()) || Boolean(credentials);
   const guardLeave = useCallback((proceed: () => void) => {
-    if (busyRef.current || chatBusyRef.current) { setError('当前操作正在保存，请等待完成后再离开。'); return false; }
+    if (busyRef.current || chatBusyRef.current || webBusyRef.current) { setError('当前操作正在保存，请等待完成后再离开。'); return false; }
     if (hasUnsaved) { pendingLeave.current = proceed; setLeaveRequested(true); return false; }
     return true;
   }, [hasUnsaved, setError, setLeaveRequested]);
   useEffect(() => { onGuardReady?.(guardLeave); return () => onGuardReady?.(null); }, [guardLeave, onGuardReady]);
   useEffect(() => {
-    const protect = (event: BeforeUnloadEvent) => { if (hasUnsaved || busyRef.current || chatBusyRef.current) { event.preventDefault(); event.returnValue = ''; } };
+    const protect = (event: BeforeUnloadEvent) => { if (hasUnsaved || busyRef.current || chatBusyRef.current || webBusyRef.current) { event.preventDefault(); event.returnValue = ''; } };
     window.addEventListener('beforeunload', protect); return () => window.removeEventListener('beforeunload', protect);
   }, [hasUnsaved]);
   function guarded(proceed: () => void) { if (guardLeave(proceed)) proceed(); }
-  function discardDrafts() { setDiscoveryDirty(false); selectionDirty.current = false; setSelectionEdited(false); leadQuery.current = { page: 1, runId: '' }; setLeadView(leadQuery.current); importReadGeneration.current++; setChatResetKey(value => value + 1); setFormResetKey(value => value + 1); setChatDirty(false); setDrafts({}); setFormDirty(false); setImportContent(''); setImportName(''); setCredentials(undefined); setAdvancedCdp(''); }
+  function discardDrafts() { setWebDirty(false); setDiscoveryDirty(false); selectionDirty.current = false; setSelectionEdited(false); leadQuery.current = { page: 1, runId: '' }; setLeadView(leadQuery.current); importReadGeneration.current++; setChatResetKey(value => value + 1); setFormResetKey(value => value + 1); setChatDirty(false); setDrafts({}); setFormDirty(false); setImportContent(''); setImportName(''); setCredentials(undefined); setAdvancedCdp(''); }
   function showTab(next: ProspectingTab) {
     const nextSection = sectionForTab(next);
     rememberedTabs.current[nextSection] = next;
@@ -316,10 +321,11 @@ export function ProspectingWorkspace({ onGuardReady, initialSection = 'create', 
   return <div className="prospect-workspace">
     <aside className="prospect-sidebar" aria-label="社交平台获客栏目">
       <div className="prospect-sidebar-title">社交平台获客</div>
-      <nav>{(['create', 'screen', 'handoff'] as const).map(item => <a key={item} href={`?view=prospecting&section=${item}`} aria-current={section === item ? 'page' : undefined} onClick={event => sectionLink(event, item)}>{item === 'create' ? <Plus size={16} /> : item === 'screen' ? <Search size={16} /> : <Users size={16} />}<span>{sectionLabels[item]}</span></a>)}</nav>
-      <div className="prospect-sidebar-platform"><span>当前平台</span><strong>抖音</strong></div>
+      <nav>{(['create', 'screen', 'handoff', 'web'] as const).map(item => <a key={item} href={`?view=prospecting&section=${item}`} aria-current={section === item ? 'page' : undefined} onClick={event => sectionLink(event, item)}>{item === 'create' ? <Plus size={16} /> : item === 'screen' || item === 'web' ? <Search size={16} /> : <Users size={16} />}<span>{sectionLabels[item]}</span></a>)}</nav>
+      <div className="prospect-sidebar-platform"><span>当前平台</span><strong>{section === 'web' ? '公开网页' : '抖音'}</strong></div>
     </aside>
     <div className="prospect-content" aria-label={sectionLabels[section]}>
+    {section === 'web' ? <>{error && <p className="prospect-inline-error" role="alert">{error}</p>}<WebProspecting onDirtyChange={setWebDirty} onBusyChange={onWebBusyChange} onNavigateProject={onNavigateProject}/></> : <>
     <header className="prospect-heading"><div><h1>社交平台获客</h1><p className="prospect-section-label">{sectionLabels[section]}</p></div><span className="prospect-platform-status"><span className="prospect-status">抖音</span>{connected ? '账号已连接' : device?.online ? '等待账号确认' : device?.id ? '同步助手离线' : '尚未连接'}</span></header>
     <details className="prospect-connection" ref={connectionDetails} hidden={section !== 'create'}>
       <summary><Monitor size={18} /><span><strong>{connected ? `${device?.accountName || '抖音账号'} · 已连接` : device?.online ? '同步助手在线，等待抖音账号确认' : device?.id ? '同步助手离线' : '连接你的抖音账号'}</strong>{connected && readOnlyAccount && <small>私信身份待验证</small>}</span><ChevronDown size={16} /></summary>
@@ -408,6 +414,7 @@ export function ProspectingWorkspace({ onGuardReady, initialSection = 'create', 
       {section === 'screen' && !campaign && <div className="prospect-empty"><Search size={26} /><h2>先创建获客任务</h2><p>保存产品与客群要求后，选择抖音账号来源并采集、筛选评论线索。</p><button className="button primary" onClick={() => openSection('create')}><Plus size={15} />新建任务</button></div>}
       {section === 'handoff' && <div className="prospect-tabs" aria-label="留资对接内容"><button aria-pressed={tab === 'chat'} onClick={() => setTab('chat')}>客户会话</button><button aria-pressed={tab === 'pool'} onClick={() => setTab('pool')}>留资线索池</button></div>}
       <ProspectingConversations key={campaign?.id || 'global'} campaignId={campaign?.id} active={section === 'handoff'} view={tab === 'pool' ? 'pool' : 'chat'} blocked={Boolean(busy) || loading} paused={Boolean(paused)} modelReady={snapshot.modelReady} assistantOnline={Boolean(device?.online)} sendingAvailable={Boolean(connected && !readOnlyAccount && !paused && !busy && !loading)} resetKey={chatResetKey} onViewChange={setTab} onCampaignChange={selectCampaign} onDirtyChange={setChatDirty} onBusyChange={onChatBusyChange} />
+    </>}
     </>}
     </div>
     {leaveRequested && <Overlay className="confirmation-dialog" title="有尚未保存的获客内容" onClose={() => { setLeaveRequested(false); pendingLeave.current = null; }}><p>继续会丢弃未提交的需求、招呼草稿、聊天回复或导入内容。尚未保存的一次性配对配置也会关闭。</p><div className="contract-leave-actions"><button data-dialog-initial-focus="true" className="button secondary" onClick={() => { setLeaveRequested(false); pendingLeave.current = null; }}>继续编辑</button><button className="button primary" onClick={() => { const proceed = pendingLeave.current; pendingLeave.current = null; discardDrafts(); setLeaveRequested(false); proceed?.(); }}>放弃更改并继续</button></div></Overlay>}

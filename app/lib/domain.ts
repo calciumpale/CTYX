@@ -1,3 +1,6 @@
+import { markSalesBusinessChanges } from './sales-project-eligibility.ts';
+import {bindScope,scopeFor,rosterFor} from './sales-scope.ts';
+import type {SalesScope,SalesOwner} from './sales-scope.ts';
 import type {KnowledgeAgentRequest,KnowledgePreparedContext,KnowledgeAgentEvidence} from './knowledge-agent.ts';
 import {validateIntakeExtraction} from './project-intake.ts';
 import type {IntakeExtraction} from './project-intake-types.ts';
@@ -20,9 +23,9 @@ export class DomainError extends Error {
 interface WorkflowFrame {knowledgeIds:string[];answerIds:string[];targets?:string[];knowledgeRoute?:KnowledgePreparedContext['route'];}
 interface WorkflowCheckpoint {workflow:Workflow;role:Role;deal?:Deal;deals:Deal[];knowledge:Record<string,Knowledge>;answers:Record<string,string>;frames:Record<string,WorkflowFrame>;order:string[];cursor:number;}
 type StoredState=WorkbenchState & {_access?:Record<string,string>;_workflowRuns?:Record<string,WorkflowCheckpoint>};
-export interface GenerationInput {query:string;agentId:AgentId;projectApprovals?:ProjectApprovalContext[];deal?:Deal;deals:Deal[];knowledge:Knowledge[];instruction?:string;previous?:string;history?:{query:string;answer:string}[];contractReviews?:{title:string;reviewedAt?:string;analysis:ContractAnalysis}[];purpose?:'chat'|'workflow';}
+export interface GenerationInput {salesScope?:SalesScope;query:string;agentId:AgentId;projectApprovals?:ProjectApprovalContext[];deal?:Deal;deals:Deal[];knowledge:Knowledge[];instruction?:string;previous?:string;history?:{query:string;answer:string}[];contractReviews?:{title:string;reviewedAt?:string;analysis:ContractAnalysis}[];purpose?:'chat'|'workflow';}
 export interface GenerationOutput {answer:string;mode:'demo'|'live';}
-export interface ActionContext {prepareKnowledge?:(request:KnowledgeAgentRequest,scope?:{knowledgeIds:string[];knowledge:Knowledge[]})=>Promise<KnowledgePreparedContext>;actorName?:string;extractIntake?:(text:string)=>Promise<IntakeExtraction>;now?:string;generate?:(input:GenerationInput)=>Promise<GenerationOutput>;trainingGenerate?:(input:TrainingGenerationInput)=>Promise<GenerationOutput>;enrichCompany?:(deal:Deal)=>Promise<CompanyProfile>;trustedRecording?:FollowupRecording;reviewContract?:(document:ContractDocument,deal:Deal)=>Promise<ContractAnalysis>;contractModelName?:string;approveTalkTrack?:(track:TalkTrack)=>Promise<void>;retrieveTalkTracks?:(query:string)=>Promise<TalkTrack[]>;retrieveManagedKnowledge?:(query:string)=>Promise<Knowledge[]>;}
+export interface ActionContext {salesScope?:SalesScope;salesOwners?:SalesOwner[];prepareKnowledge?:(request:KnowledgeAgentRequest,scope?:{knowledgeIds:string[];knowledge:Knowledge[]})=>Promise<KnowledgePreparedContext>;actorName?:string;extractIntake?:(text:string)=>Promise<IntakeExtraction>;now?:string;generate?:(input:GenerationInput)=>Promise<GenerationOutput>;trainingGenerate?:(input:TrainingGenerationInput)=>Promise<GenerationOutput>;enrichCompany?:(deal:Deal)=>Promise<CompanyProfile>;trustedRecording?:FollowupRecording;reviewContract?:(document:ContractDocument,deal:Deal)=>Promise<ContractAnalysis>;contractModelName?:string;approveTalkTrack?:(track:TalkTrack)=>Promise<void>;retrieveTalkTracks?:(query:string)=>Promise<TalkTrack[]>;retrieveManagedKnowledge?:(query:string)=>Promise<Knowledge[]>;}
 const agentIds=new Set(AGENTS.map(item=>item.id));
 const nodeTypes=new Set(['start','intent','knowledge','agent','review','output']);
 const managerActions=new Set(['skill_review','knowledge_add','workflow_save','workflow_publish','workflow_review']);
@@ -78,17 +81,18 @@ function projectChanges(payload:Record<string,unknown>,previous?:Deal):Partial<D
   return changes;
 }
 function assignedOwner(state:WorkbenchState,role:Role,requested:unknown,actorName?:string):{ownerId:string;owner:string} {
-  if(role==='sales') {if(requested!==undefined)fail('销售只能创建自己负责的项目');return {ownerId:'sales-1',owner:actorName??'林晓'};}
+  if(role==='sales') {if(requested!==undefined)fail('销售只能创建自己负责的项目');return {ownerId:scopeFor(state).salesId,owner:actorName??scopeFor(state).displayName};}
   if(requested===undefined||requested==='manager')return {ownerId:'manager',owner:actorName??'周予安'};
-  const id=text(requested,'负责人',100);const existing=state.deals.find(deal=>deal.ownerId===id);
+  const id=text(requested,'负责人',100);const roster=rosterFor(state);const existing=roster?roster.find(item=>item.salesId===id):state.deals.find(deal=>deal.ownerId===id);
+  if(roster){if(!existing)fail('请选择启用的销售负责人');const member=existing as SalesOwner;return {ownerId:member.salesId,owner:member.displayName};}
   if(!existing)fail('请选择已有的项目负责人');
-  return {ownerId:existing.ownerId,owner:existing.owner};
+  return {ownerId:(existing as Deal).ownerId,owner:(existing as Deal).owner};
 }
 function profileTime(value:unknown):string {
   const date=text(value,'来源获取时间',40);if(!Number.isFinite(Date.parse(date)))fail('来源获取时间不正确');return date;
 }
 /** Validate again at the trusted service boundary; client payloads cannot create research facts. */
-function validateCompanyProfile(value:unknown,deal:Deal):CompanyProfile {
+export function validateCompanyProfile(value:unknown,deal:Deal):CompanyProfile {
   try {
     const input=object(value);if(!input)fail('企业画像格式不正确');
     const companyName=text(input.companyName,'企业名称',200);if(companyName!==deal.name.trim())fail('企业画像与当前企业不匹配');
@@ -131,41 +135,41 @@ function find<T extends {id:string}>(items:T[],id:unknown,label:string):T {
 }
 function visibleDeal(state:WorkbenchState,role:Role,id:unknown):Deal {
   const deal=find(state.deals,id,'客户');
-  if(role==='sales'&&deal.ownerId!=='sales-1') fail('当前销售视角无权访问该项目',403);
+  if(role==='sales'&&deal.ownerId!==scopeFor(state).salesId) fail('当前销售视角无权访问该项目',403);
   return deal;
 }
 function checkVersion(actual:number,supplied:unknown) {if(!Number.isInteger(supplied)||actual!==supplied) fail('记录已更新，请刷新后重试',409);}
 function ownerOf(state:StoredState,id:string):string {return state._access?.[id]??'manager';}
 function owned(state:StoredState,id:string,role:Role) {
-  if(role==='sales'&&ownerOf(state,id)!=='sales-1') fail('当前视角无权访问这条记录',403);
+  if(role==='sales'&&ownerOf(state,id)!==scopeFor(state).salesId) fail('当前视角无权访问这条记录',403);
 }
-function mark(state:StoredState,id:string,role:Role) { (state._access??={})[id]=role==='sales'?'sales-1':'manager'; }
+function mark(state:StoredState,id:string,role:Role) { (state._access??={})[id]=role==='sales'?scopeFor(state).salesId:'manager'; }
 function activity(state:StoredState,role:Role,title:string,detail:string,type:string,now:string) {
   const entry={id:uid('activity'),title,detail,date:now,type};state.activities.unshift(entry);mark(state,entry.id,role);state.activities=state.activities.slice(0,150);
 }
 export function assertRevision(state:WorkbenchState,revision:unknown) {
   if(!Number.isInteger(revision)||revision!==state.revision) fail('工作空间已更新，请刷新后重试；本次操作未保存',409);
 }
-export function projectState(state:WorkbenchState,role:Role):WorkbenchState {
-  const result=structuredClone(state) as StoredState;
+export function projectState(state:WorkbenchState,role:Role,scope?:SalesScope):WorkbenchState {
+  const result=structuredClone(state) as StoredState;bindScope(result,scope??scopeFor(state));
   if(role==='sales') {
-    const ownIds=new Set(result.deals.filter(d=>d.ownerId==='sales-1').map(d=>d.id));
+    const ownIds=new Set(result.deals.filter(d=>d.ownerId===scopeFor(result).salesId).map(d=>d.id));
     result.contracts=result.contracts?.filter(c=>ownIds.has(c.dealId));
     result.transcripts=result.transcripts?.filter(t=>ownIds.has(t.dealId));
     result.feedbackJobs=result.feedbackJobs?.filter(j=>ownIds.has(j.dealId));
     result.talkTracks=result.talkTracks?.filter(t=>t.status==='published'||ownIds.has(t.dealId));
     result.talkTrackUsages=result.talkTrackUsages?.filter(u=>!u.dealId||ownIds.has(u.dealId));
-    result.deals=result.deals.filter(item=>item.ownerId==='sales-1');
+    result.deals=result.deals.filter(item=>item.ownerId===scopeFor(result).salesId);
     result.workflows=result.workflows.filter(item=>item.published||item.status==='published').map(publishedView);
-    result.skills=result.skills.filter(item=>item.status==='published'||ownerOf(result,item.id)==='sales-1'||(!result._access?.[item.id]&&item.author==='林晓'));
+    result.skills=result.skills.filter(item=>item.status==='published'||ownerOf(result,item.id)===scopeFor(result).salesId||(scopeFor(result).salesId==='sales-1'&&!result._access?.[item.id]&&item.author==='林晓'));
     result.knowledge=result.knowledge.filter(item=>item.status==='published');
-    result.runs=result.runs.filter(item=>ownerOf(result,item.id)==='sales-1');
-    result.trainingSessions=result.trainingSessions.filter(item=>ownerOf(result,item.id)==='sales-1');
-    result.activities=result.activities.filter(item=>ownerOf(result,item.id)==='sales-1'||item.id==='activity-1');
+    result.runs=result.runs.filter(item=>ownerOf(result,item.id)===scopeFor(result).salesId);
+    result.trainingSessions=result.trainingSessions.filter(item=>ownerOf(result,item.id)===scopeFor(result).salesId);
+    result.activities=result.activities.filter(item=>ownerOf(result,item.id)===scopeFor(result).salesId||scopeFor(result).salesId==='sales-1'&&item.id==='activity-1');
   }
   for(const job of result.feedbackJobs??[]){delete job.leaseToken;delete job.leaseUntil;}
   result.role=role;
-  result.viewer={name:role==='sales'?'林晓':'周予安',team:'销售工作空间',salesId:'sales-1'};
+  result.viewer={name:role==='sales'?scopeFor(result).displayName:'周予安',team:'销售工作空间',salesId:scopeFor(result).salesId};
   delete result._access;
   delete result._workflowRuns;
   return result;
@@ -277,11 +281,11 @@ function rankedKnowledge(entries:Knowledge[],query:string):Knowledge[] {
 function chooseDeal(state:WorkbenchState,role:Role,query:string,dealId?:unknown):Deal|undefined {
   // Explicit selections are scoped by stable identity; shared display names are not authorization keys.
   if(dealId) return visibleDeal(state,role,dealId);
-  if(role==='sales'&&state.deals.some(deal=>deal.ownerId!=='sales-1'&&(
-    !!deal.projectName&&query.includes(deal.projectName)||query.includes(deal.name)&&!state.deals.some(own=>own.ownerId==='sales-1'&&own.name===deal.name)
+  if(role==='sales'&&state.deals.some(deal=>deal.ownerId!==scopeFor(state).salesId&&(
+    !!deal.projectName&&query.includes(deal.projectName)||query.includes(deal.name)&&!state.deals.some(own=>own.ownerId===scopeFor(state).salesId&&own.name===deal.name)
   )))fail('当前销售视角无权访问问题中提及的项目',403);
-  const matches=state.deals.filter(deal=>query.includes(deal.name)||!!deal.projectName&&query.includes(deal.projectName));
-  const visible=role==='sales'?matches.filter(deal=>deal.ownerId==='sales-1'):matches;
+  const matches=state.deals.filter(deal=>!deal.archive&&(query.includes(deal.name)||!!deal.projectName&&query.includes(deal.projectName)));
+  const visible=role==='sales'?matches.filter(deal=>deal.ownerId===scopeFor(state).salesId):matches;
   if(matches.length&&!visible.length)fail('当前销售视角无权访问问题中提及的项目',403);
   const named=visible.filter(deal=>deal.projectName&&query.includes(deal.projectName));
   // A company can have several projects. An ambiguous company name must not silently pick one.
@@ -393,7 +397,7 @@ async function buildRun(state:StoredState,role:Role,query:string,context:ActionC
   const routed=options.agentId?[options.agentId as AgentId]:inheritedRoute.length?inheritedRoute:routeAgents(query);
   const retrievalQuery=followup?`${latest!.query}\n${query}`:query;
   const portfolio=routed.includes('opportunity')&&/商机|漏斗|客户|团队|招商|销售|跟进/.test(retrievalQuery);
-  const visibleDeals=role==='sales'?state.deals.filter(item=>item.ownerId==='sales-1'):state.deals;
+  const active=state.deals.filter(item=>!item.archive);const visibleDeals=role==='sales'?active.filter(item=>item.ownerId===scopeFor(state).salesId):active;
   const scopedDeals=deal?[deal]:portfolio?visibleDeals:[];
   const explicitTracks=approvedTracks(state,options.talkTrackIds);
   const semanticTracks=!context.prepareKnowledge&&context.retrieveTalkTracks&&!explicitTracks.length&&routed.includes('strategy')?await context.retrieveTalkTracks(retrievalQuery):[];
@@ -401,7 +405,7 @@ async function buildRun(state:StoredState,role:Role,query:string,context:ActionC
   let knowledge:Knowledge[]=[];
   const step=(title:string,detail:string,status:TraceStep['status']='success',agent?:AgentId,duration=0)=>steps.push({id:uid('step'),title,detail,status,agent,duration});
   const generate=async (agentId:AgentId,instruction?:string,previous=answers.join('\n\n'))=> {
-    const tick=Date.now();const input:GenerationInput={query,agentId,deal,deals:scopedDeals,knowledge,instruction:[instruction,explicitTracks.length?'用户指定采用以下已审核话术的结构和表达方式：'+explicitTracks.map(t=>t.title).join('、')+'。根据当前客户资料改写占位符，不照搬来源项目事实。':undefined].filter(Boolean).join('\n'),previous,history,...(agentId==='risk'&&deal?{contractReviews:(state.contracts??[]).filter(c=>c.dealId===deal.id&&c.analysis).slice(0,5).map(c=>({title:c.title,reviewedAt:c.reviewedAt,analysis:c.analysis!}))}:{}),purpose:'chat'};
+    const tick=Date.now();const input:GenerationInput={salesScope:context.salesScope,query,agentId,deal,deals:scopedDeals,knowledge,instruction:[instruction,explicitTracks.length?'用户指定采用以下已审核话术的结构和表达方式：'+explicitTracks.map(t=>t.title).join('、')+'。根据当前客户资料改写占位符，不照搬来源项目事实。':undefined].filter(Boolean).join('\n'),previous,history,...(agentId==='risk'&&deal?{contractReviews:(state.contracts??[]).filter(c=>c.dealId===deal.id&&c.analysis).slice(0,5).map(c=>({title:c.title,reviewedAt:c.reviewedAt,analysis:c.analysis!}))}:{}),purpose:'chat'};
     const output=await boundedSpecialist(input,context,prepared?.route,prepared?.answer);
     if(output.mode==='live')mode='live';usedAgents.push(agentId);answers.push(`${agentName(agentId)}\n${output.answer}`);
     step(`${agentName(agentId)}生成`,`${output.mode==='demo'?'本地规则演示，未请求外部模型':'服务端外部模型返回'}；使用${knowledge.length}条生效资料${deal?`；客户：${deal.name}`:''}${instruction?`；节点指令：${instruction}`:''}`, 'success',agentId,Date.now()-tick);
@@ -491,7 +495,7 @@ async function executeWorkflow(state:StoredState,run:Run,checkpoint:WorkflowChec
       }
       if(node.type==='agent') {
         const knowledge=frame.knowledgeIds.map(id=>own(checkpoint.knowledge,id)).filter((item):item is Knowledge=>!!item);
-        const generation:GenerationInput={query:run.query,agentId:node.agentId!,deal:checkpoint.deal,deals:checkpoint.deals,knowledge,instruction:node.instruction,previous,purpose:'workflow'};
+        const generation:GenerationInput={salesScope:context.salesScope,query:run.query,agentId:node.agentId!,deal:checkpoint.deal,deals:checkpoint.deals,knowledge,instruction:node.instruction,previous,purpose:'workflow'};
         const output=await boundedSpecialist(generation,context,frame.knowledgeRoute);
         if(typeof output.answer!=='string'||!output.answer.trim())fail('专家未返回有效文本，请检查模型连接后重试',502);
         checkpoint.answers[node.id]=`${agentName(node.agentId!)}\n${clip(output.answer.trim(),6000)}`;
@@ -519,7 +523,7 @@ async function executeWorkflow(state:StoredState,run:Run,checkpoint:WorkflowChec
 }
 async function startWorkflow(state:StoredState,role:Role,workflow:Workflow,source:'draft'|'published',query:string,context:ActionContext,now:string,dealId?:unknown):Promise<Run> {
   const order=validateWorkflow(workflow,true);const deal=chooseDeal(state,role,query,dealId);
-  const scoped=role==='sales'?state.deals.filter(item=>item.ownerId==='sales-1'):state.deals;
+  const active=state.deals.filter(item=>!item.archive);const scoped=role==='sales'?active.filter(item=>item.ownerId===scopeFor(state).salesId):active;
   const checkpoint:WorkflowCheckpoint={workflow:structuredClone({...workflow,published:undefined}),role,deal:deal?compactDeal(deal):undefined,deals:scoped.map(compactDeal),order,cursor:0,knowledge:{},answers:{},frames:{}};
   const run:Run={id:uid('run'),query,answer:'',agentIds:[],steps:[],citations:deal?companyCitations(deal):[],mode:'demo',createdAt:now,duration:0,workflowId:workflow.id,workflowVersion:workflow.version,workflowSource:source,status:'completed',...(deal?{dealId:deal.id}:{})};
   await executeWorkflow(state,run,checkpoint,context);return run;
@@ -549,8 +553,8 @@ async function trainingResponse(input:TrainingGenerationInput,context:ActionCont
 }
 
 /** Returns an unfiltered canonical state; only projectState may be sent to a client. */
-export async function executeAction(original:WorkbenchState,role:Role,action:string,payload:Record<string,unknown>,context:ActionContext={}):Promise<ApiResult> {
-  const state=structuredClone(original) as StoredState;const now=context.now??new Date().toISOString();const actor=context.actorName===undefined?(role==='sales'?'林晓':'周予安'):text(context.actorName,'操作者姓名',200);
+async function executeActionInternal(original:WorkbenchState,role:Role,action:string,payload:Record<string,unknown>,context:ActionContext={}):Promise<ApiResult> {
+  const state=structuredClone(original) as StoredState;bindScope(state,context.salesScope,context.salesOwners);const now=context.now??new Date().toISOString();const actor=context.actorName===undefined?(role==='sales'?scopeFor(state).displayName:'周予安'):text(context.actorName,'操作者姓名',200);
   if(managerActions.has(action)&&role!=='manager')fail('此操作需要销售管理者体验视角',403);
   if(!payload||typeof payload!=='object'||Array.isArray(payload))fail('请求参数格式不正确');
   let run:Run|undefined;let session:TrainingSession|undefined;let dealId:string|undefined;let message='已保存';
@@ -567,7 +571,7 @@ export async function executeAction(original:WorkbenchState,role:Role,action:str
     if(extracted.status==='needs_info')return {state,intake:{status:'needs_info',question:extracted.question||'请补充客户企业名称。',draft:extracted},message:'请补充必要信息'};
     const normalize=(v:string)=>v.toLowerCase().replace(/[\s·・,，。;；:：()（）]/g,'');
     const name=text(extracted.fields.name,'企业名称',200),projectName=text(extracted.fields.projectName||`${name} · 新商机`,'项目名称',200);
-    const matches=state.deals.filter(d=>d.dataOrigin==='manual'&&(role!=='sales'||d.ownerId==='sales-1')&&normalize(d.name)===normalize(name)&&(projectName===`${name} · 新商机`||normalize(d.projectName||d.name)===normalize(projectName)));
+    const matches=state.deals.filter(d=>!d.archive&&d.dataOrigin==='manual'&&(role!=='sales'||d.ownerId===scopeFor(state).salesId)&&normalize(d.name)===normalize(name)&&(projectName===`${name} · 新商机`||normalize(d.projectName||d.name)===normalize(projectName)));
     if(matches.length&&payload.forceNew!==true)return {state,intake:{status:'duplicate',question:'已有相似项目，要记为跟进，还是另建项目？',draft:extracted,existing:matches.slice(0,5).map(d=>({id:d.id,name:d.name,projectName:d.projectName||d.name}))},message:'找到已有项目，请选择录入方式'};
     const fields={...extracted.fields};delete fields.stage;
     if(fields.website){try{fields.website=publicUrl(/^https?:\/\//i.test(fields.website)?fields.website:`https://${fields.website}`);}catch{delete fields.website;}}
@@ -711,4 +715,11 @@ export async function executeAction(original:WorkbenchState,role:Role,action:str
   }
   trimRunHistory(state);state.revision=original.revision+1;
   return {state,...(run?{run}:{}),...(session?{session}:{}),...(dealId?{dealId}:{}),message};
+}
+
+/** Record eligibility only from a successful human mutation; persistence shares the workspace CAS. */
+export async function executeAction(original:WorkbenchState,role:Role,action:string,payload:Record<string,unknown>,context:ActionContext={}):Promise<ApiResult> {
+  const result=await executeActionInternal(original,role,action,payload,context);
+  markSalesBusinessChanges(original,result.state,context.now??new Date().toISOString());
+  return result;
 }

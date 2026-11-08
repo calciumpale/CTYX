@@ -353,3 +353,4 @@
   .project-search input { height: calc(var(--control-height) - 2px); }
   .project-scope-switch > button { min-height: var(--control-height); }
 }
+.project-record-status { margin: 0 0 18px; padding: 12px 14px; border: 1px solid var(--cds-border); border-radius: var(--control-radius); background: var(--cds-surface-0); color: var(--cds-text-secondary); font-size: 13px; line-height: 1.8; overflow-wrap: anywhere; }

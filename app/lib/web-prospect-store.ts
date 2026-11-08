@@ -1,0 +1,39 @@
+import { DomainError } from './domain.ts';
+import type { WebProspectTask, WebProspectLead, WebProspectSnapshot } from './web-prospect-types.ts';
+import type { WorkbenchState, Deal } from './types.ts';
+const conflict = () => new DomainError('记录已更新或正在处理，请刷新后重试', 409);
+export function createWebProspectStore(db: D1Database) {
+    const snapshot = async (owner: string, member: string): Promise<WebProspectSnapshot> => { const [tasks, leads] = await Promise.all([db.prepare('SELECT data_json FROM workbench_web_prospect_tasks WHERE owner_id=? AND member_id=? ORDER BY created_at DESC LIMIT 60').bind(owner, member).all<{
+            data_json: string;
+        }>(), db.prepare('SELECT data_json FROM workbench_web_prospect_leads WHERE owner_id=? AND member_id=? ORDER BY rowid DESC LIMIT 500').bind(owner, member).all<{
+            data_json: string;
+        }>()]); return { tasks: tasks.results.map(r => JSON.parse(r.data_json)), leads: leads.results.map(r => JSON.parse(r.data_json)) }; };
+    const identity = async (owner: string, member: string, request: string): Promise<WebProspectTask | null> => { const r = await db.prepare('SELECT data_json FROM workbench_web_prospect_tasks WHERE owner_id=? AND member_id=? AND request_id=?').bind(owner, member, request).first<{
+        data_json: string;
+    }>(); return r ? JSON.parse(r.data_json) : null; };
+    const getLead = async (owner: string, member: string, id: string): Promise<WebProspectLead> => { const r = await db.prepare('SELECT data_json FROM workbench_web_prospect_leads WHERE owner_id=? AND member_id=? AND id=?').bind(owner, member, id).first<{
+        data_json: string;
+    }>(); if (!r)
+        throw new DomainError('线索不存在', 404); return JSON.parse(r.data_json); };
+    async function insert(t: WebProspectTask) { const cutoff = new Date(Date.parse(t.createdAt) - 30000).toISOString(); const r = await db.prepare("INSERT INTO workbench_web_prospect_tasks (id,owner_id,member_id,request_id,payload_hash,status,created_at,data_json) SELECT ?,?,?,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM workbench_web_prospect_tasks WHERE owner_id=? AND member_id=? AND (status='running' OR created_at>?)) ON CONFLICT DO NOTHING").bind(t.id, t.ownerId, t.memberId, t.requestId, t.payloadHash, t.status, t.createdAt, JSON.stringify(t), t.ownerId, t.memberId, cutoff).run(); return r.meta.changes === 1; }
+    async function expire(owner: string, member: string) { const cutoff = new Date(Date.now() - 60000).toISOString(); await db.prepare("UPDATE workbench_web_prospect_tasks SET status='failed',data_json=json_set(data_json,'$.status','failed','$.errors',json('[\"任务中断，请重新搜索\"]')) WHERE owner_id=? AND member_id=? AND status='running' AND created_at<?").bind(owner, member, cutoff).run(); }
+    async function finish(t: WebProspectTask, leads: WebProspectLead[]) { const guard = "SELECT 1 FROM workbench_web_prospect_tasks WHERE id=? AND owner_id=? AND member_id=? AND status='running'"; const values = [t.id, t.ownerId, t.memberId]; await db.batch([...leads.map(l => db.prepare(`INSERT INTO workbench_web_prospect_leads (id,owner_id,member_id,task_id,source_url,version,status,data_json) SELECT ?,?,?,?,?,?,?,? WHERE EXISTS (${guard}) ON CONFLICT DO NOTHING`).bind(l.id, l.ownerId, l.memberId, l.taskId, l.sourceUrl, l.version, l.status, JSON.stringify(l), ...values)), db.prepare("UPDATE workbench_web_prospect_tasks SET status=?,data_json=? WHERE id=? AND owner_id=? AND member_id=? AND status='running'").bind(t.status, JSON.stringify(t), ...values)]); }
+    async function review(owner: string, member: string, id: string, version: number, status: WebProspectLead['status']) { const lead = await getLead(owner, member, id); if (lead.projectId)
+        throw conflict(); const next = { ...lead, version: version + 1, status }; const r = await db.prepare('UPDATE workbench_web_prospect_leads SET version=?,status=?,data_json=? WHERE owner_id=? AND member_id=? AND id=? AND version=? AND project_id IS NULL').bind(next.version, status, JSON.stringify(next), owner, member, id, version).run(); if (r.meta.changes !== 1)
+        throw conflict(); return next; }
+    async function convert(lead: WebProspectLead, companyName: string, projectName: string, salesId: string) { if (lead.projectId)
+        return lead.projectId; const row = await db.prepare('SELECT state_json,revision FROM workbench_workspaces WHERE user_id=?').bind(lead.ownerId).first<{
+        state_json: string;
+        revision: number;
+    }>(); if (!row)
+        throw new DomainError('请先打开项目中心初始化工作空间', 409); const owner = await db.prepare("SELECT display_name FROM workbench_member_accounts WHERE owner_id=? AND enabled=1 AND role='sales' AND sales_id=?").bind(lead.ownerId, salesId).first<{
+        display_name: string;
+    }>(); if (!owner)
+        throw new DomainError('请选择当前启用的销售归属', 403); const state = JSON.parse(row.state_json) as WorkbenchState; const id = 'web-project-' + lead.id; const now = new Date().toISOString(); const deal: Deal = { id, name: companyName, projectName, source: '公开网页线索', website: '', region: '', createdAt: now, dataOrigin: 'research', contact: '', position: '', industry: '', owner: owner.display_name, ownerId: salesId, stage: '线索', amount: 0, health: 0, priority: 'low', lastContact: '', nextAction: '核实公开来源与企业关联', summary: '', needs: [], risks: [], notes: [], version: 1, avatar: companyName.slice(0, 1), companyProfile: { companyName, summary: lead.excerpt, facts: [], sources: [{ id: lead.id, title: lead.title, url: lead.sourceUrl, provider: 'web', retrievedAt: lead.retrievedAt, snippet: lead.excerpt }], provider: 'web', status: 'partial', warnings: ['企业名称由操作者填写；来源与企业的关联尚未核实', '公开网页信息不代表客户购买意向'], updatedAt: now, modelUsed: false } }; state.deals.push(deal); state.revision = row.revision + 1; const json = JSON.stringify(state); if (new TextEncoder().encode(json).length > 1800000)
+        throw new DomainError('工作空间容量不足', 413); const next = { ...lead, version: lead.version + 1, projectId: id }; const leadGuard = "SELECT 1 FROM workbench_web_prospect_leads WHERE owner_id=? AND member_id=? AND id=? AND version=? AND status='qualified' AND project_id IS NULL"; const lg = [lead.ownerId, lead.memberId, lead.id, lead.version]; const rosterGuard = "SELECT 1 FROM workbench_member_accounts WHERE owner_id=? AND enabled=1 AND role='sales' AND sales_id=?"; const results = await db.batch([db.prepare(`UPDATE workbench_workspaces SET state_json=?,revision=?,updated_at=? WHERE user_id=? AND revision=? AND state_json=? AND EXISTS (${leadGuard}) AND EXISTS (${rosterGuard})`).bind(json, state.revision, now, lead.ownerId, row.revision, row.state_json, ...lg, lead.ownerId, salesId), db.prepare(`UPDATE workbench_web_prospect_leads SET version=?,project_id=?,data_json=? WHERE owner_id=? AND member_id=? AND id=? AND version=? AND status='qualified' AND project_id IS NULL AND EXISTS (SELECT 1 FROM workbench_workspaces WHERE user_id=? AND revision=? AND state_json=?)`).bind(next.version, id, JSON.stringify(next), ...lg, lead.ownerId, state.revision, json)]); if (results[0].meta.changes !== 1 || results[1].meta.changes !== 1)
+        throw conflict(); return id; }
+    return { snapshot, identity, getLead, insert, finish, review, expire, convert };
+}
+export type WebProspectStore = ReturnType<typeof createWebProspectStore>;
+/** Gateway headers identify a principal; current account state remains authoritative. */
+export async function verifyWebProspectMember(db:D1Database,ownerId:string,memberId:string,role:'sales'|'manager',salesId?:string){const row=await db.prepare('SELECT role,sales_id FROM workbench_member_accounts WHERE owner_id=? AND account_id=? AND enabled=1').bind(ownerId,memberId).first<{role:string;sales_id:string|null}>();if(!row||row.role!==role||role==='sales'&&(!row.sales_id||row.sales_id!==salesId))throw new DomainError('账号已停用或登录归属已更新，请重新登录',401);return row;}

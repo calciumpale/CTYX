@@ -5,7 +5,7 @@ export interface SalesEvidence { refId: string; quote: string; }
 export interface SalesSource { id: string; kind: 'project' | 'profile' | 'note' | 'transcript'; label: string; text: string; at?: string; }
 export interface SalesInput {
   dealId: string; companyName: string; projectName: string; stage: string;
-  dataOrigin: 'sample' | 'manual'; outcome: 'open' | 'won' | 'lost';
+  dataOrigin: 'sample' | 'manual' | 'research'; outcome: 'open' | 'won' | 'lost';
   sources: SalesSource[]; warnings: string[];
   coverage: { notes: number; transcripts: number; includedNotes: number; includedTranscripts: number; truncated: boolean };
 }

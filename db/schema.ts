@@ -1,3 +1,4 @@
+import {sql} from 'drizzle-orm';
 import { index, integer, primaryKey, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
 
 /** Managed knowledge is owner-scoped and independent of legacy workspace knowledge. FTS5 is defined in SQL. */
@@ -110,14 +111,14 @@ export const workbenchProspectDevices=sqliteTable('workbench_prospect_devices',{
 },table=>[uniqueIndex('workbench_prospect_device_token').on(table.tokenHash),index('workbench_prospect_device_member').on(table.ownerId,table.memberId,table.enabled)]);
 export const workbenchProspectCampaigns=sqliteTable('workbench_prospect_campaigns',{
  id:text('id').primaryKey(),ownerId:text('owner_id').notNull(),memberId:text('member_id').notNull(),status:text('status').notNull(),dataJson:text('data_json').notNull(),createdAt:text('created_at').notNull(),updatedAt:text('updated_at').notNull(),
-},table=>[index('workbench_prospect_campaign_member').on(table.ownerId,table.memberId,table.createdAt)]);
+},table=>[index('workbench_prospect_campaign_member').on(table.ownerId,table.memberId,table.createdAt),index('workbench_prospect_campaign_discovery_due').on(table.ownerId,table.memberId,table.status,sql`json_extract(${table.dataJson}, '$.dailyDiscovery.enabled')`,sql`json_extract(${table.dataJson}, '$.dailyDiscovery.nextRunAt')`)]);
 export const workbenchProspectLeads=sqliteTable('workbench_prospect_leads',{
  id:text('id').notNull(),campaignId:text('campaign_id').notNull(),ownerId:text('owner_id').notNull(),memberId:text('member_id').notNull(),version:integer('version').notNull().default(1),status:text('status').notNull(),jobId:text('job_id'),analysisAttempted:integer('analysis_attempted').notNull().default(0),dataJson:text('data_json').notNull(),updatedAt:text('updated_at').notNull(),
 },table=>[primaryKey({columns:[table.campaignId,table.id]}),index('workbench_prospect_lead_member').on(table.ownerId,table.memberId,table.campaignId)]);
 /** recipient_key retains first-touch reservations even for uncertain/failed dispatches. */
 export const workbenchProspectJobs=sqliteTable('workbench_prospect_jobs',{
  id:text('id').primaryKey(),ownerId:text('owner_id').notNull(),memberId:text('member_id').notNull(),deviceId:text('device_id').notNull(),campaignId:text('campaign_id').notNull(),leadId:text('lead_id'),kind:text('kind').notNull(),status:text('status').notNull(),inputJson:text('input_json').notNull(),resultJson:text('result_json'),error:text('error'),activeKey:text('active_key'),recipientKey:text('recipient_key'),senderId:text('sender_id'),leaseHash:text('lease_hash'),leaseUntil:text('lease_until'),startedAt:text('started_at'),createdAt:text('created_at').notNull(),updatedAt:text('updated_at').notNull(),
-},table=>[uniqueIndex('workbench_prospect_job_active').on(table.activeKey),uniqueIndex('workbench_prospect_job_recipient').on(table.recipientKey),index('workbench_prospect_job_queue').on(table.deviceId,table.status,table.createdAt),index('workbench_prospect_job_sender').on(table.ownerId,table.senderId,table.startedAt)]);
+},table=>[uniqueIndex('workbench_prospect_job_active').on(table.activeKey),uniqueIndex('workbench_prospect_job_recipient').on(table.recipientKey),index('workbench_prospect_job_queue').on(table.deviceId,table.status,table.createdAt),index('workbench_prospect_job_sender').on(table.ownerId,table.senderId,table.startedAt),index('workbench_prospect_job_discovery_run').on(sql`json_extract(${table.inputJson}, '$.discoveryRunId')`,table.status,table.kind)]);
 
 export const workbenchProspectConversations=sqliteTable('workbench_prospect_conversations',{
  id:text('id').primaryKey(),ownerId:text('owner_id').notNull(),memberId:text('member_id').notNull(),campaignId:text('campaign_id').notNull(),leadId:text('lead_id').notNull(),senderId:text('sender_id').notNull(),recipientId:text('recipient_id').notNull(),profileUrl:text('profile_url').notNull(),nickname:text('nickname').notNull(),mode:text('mode').notNull().default('agent'),status:text('status').notNull().default('active'),version:integer('version').notNull().default(1),openedAt:text('opened_at').notNull(),lastReadAt:text('last_read_at'),lastSnapshotId:text('last_snapshot_id'),hasBaseline:integer('has_baseline').notNull().default(0),lastMessageAt:text('last_message_at').notNull(),lastMessagePreview:text('last_message_preview').notNull().default(''),handoffReason:text('handoff_reason'),memoryJson:text('memory_json').notNull().default('{}'),closeReason:text('close_reason'),lastCheckedAt:text('last_checked_at'),processingToken:text('processing_token'),processingUntil:text('processing_until'),updatedAt:text('updated_at').notNull(),
@@ -147,3 +148,7 @@ export const workbenchSchedules = sqliteTable('workbench_schedules', {
   index('workbench_schedule_calendar').on(table.workspaceOwnerId, table.ownerAccountId, table.deletedAt, table.startAt),
   index('workbench_schedule_team').on(table.workspaceOwnerId, table.deletedAt, table.startAt),
 ]);
+
+export const workbenchProspectDiscoveryRuns=sqliteTable('workbench_prospect_discovery_runs',{
+ id:text('id').primaryKey(),ownerId:text('owner_id').notNull(),memberId:text('member_id').notNull(),campaignId:text('campaign_id').notNull(),dailyKey:text('daily_key'),scheduledFor:text('scheduled_for').notNull(),status:text('status').notNull(),dataJson:text('data_json').notNull(),createdAt:text('created_at').notNull(),updatedAt:text('updated_at').notNull(),
+},table=>[uniqueIndex('workbench_prospect_discovery_daily').on(table.campaignId,table.dailyKey),index('workbench_prospect_discovery_member').on(table.ownerId,table.memberId,table.campaignId,table.createdAt)]);

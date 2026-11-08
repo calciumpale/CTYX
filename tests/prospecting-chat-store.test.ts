@@ -883,3 +883,48 @@ test('a completed durable reply cannot block recovery of a later ordinary unansw
  f.advance(15000);await readConversation(f,w.x,[w.inbound,later],'later-ordinary-snapshot');assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',w.decide),true);const next=(await f.store.claim(w.x.device.deviceId,false,true))!;assert.equal(next.kind,'reply');assert.notEqual(next.id,queued);assert.notEqual(next.input.replyId,w.first.input.replyId);assert.equal(w.decisions(),3);
  assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',w.decide),false);assert.equal(w.decisions(),3);
 });
+
+for(const quiet of [false,true])test(`legacy last inbound recovery is bounded (quiet=${quiet})`,async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.chat.settings('owner-a','member-a',x.campaign.id,true);await readConversation(f,x,[],'baseline');f.advance(61000);
+ const messages=[{id:'legacy-old',direction:'inbound' as const,text:'餐饮',postedAt:f.now()},{id:'legacy-current',direction:'inbound' as const,text:quiet?'谢谢':'80-100平',postedAt:f.now()}];await readConversation(f,x,messages,'current');
+ f.sqlite.prepare("UPDATE workbench_prospect_messages SET processed=1 WHERE conversation_id=? AND direction='inbound'").run(x.conversation.id);
+ f.advance(31000);await readConversation(f,x,messages,'current');
+ assert.equal(f.sqlite.prepare("SELECT COUNT(*) n FROM workbench_prospect_messages WHERE conversation_id=? AND direction='inbound' AND processed=0").get(x.conversation.id)?.n,quiet?0:1);
+ let calls=0;const decide=async()=>{calls++;return chooseProspectChatAction({campaign:{name:'租铺',requirements:'租赁咨询',minIntentScore:70},conversation:{nickname:'客户'},messages:[],inbound:{id:'legacy-current',text:messages[1].text}},{generate:async()=>JSON.stringify({action:'wait'})});};
+ assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',decide),!quiet);
+ if(!quiet){assert.equal(f.sqlite.prepare("SELECT COUNT(*) n FROM workbench_prospect_jobs WHERE kind='reply' AND status='queued'").get()?.n,1);}
+ assert.equal(calls,quiet?0:1);
+});
+
+for(const block of ['human','closed','sent','waiting','unknown','missing-current','audited-wait'])test(`legacy recovery refuses ${block}`,async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.chat.settings('owner-a','member-a',x.campaign.id,true);await readConversation(f,x,[],'baseline');f.advance(61000);const inbound={id:'legacy-blocked',direction:'inbound' as const,text:'餐饮80-100平',postedAt:f.now()};await readConversation(f,x,[inbound],'current');
+ f.sqlite.prepare("UPDATE workbench_prospect_messages SET processed=1 WHERE conversation_id=? AND direction='inbound'").run(x.conversation.id);
+ if(block==='human')f.sqlite.prepare("UPDATE workbench_prospect_conversations SET mode='human',handoff_reason='已由销售接管' WHERE id=?").run(x.conversation.id);
+ if(block==='closed')f.sqlite.prepare("UPDATE workbench_prospect_conversations SET status='closed' WHERE id=?").run(x.conversation.id);
+ if(block==='audited-wait')f.sqlite.prepare("UPDATE workbench_prospect_conversations SET memory_json=json_set(memory_json,'$.lastDecision',json(?)) WHERE id=?").run(JSON.stringify({action:'wait',inboundId:'legacy-blocked'}),x.conversation.id);
+ if(['sent','waiting','unknown'].includes(block))f.sqlite.prepare("INSERT INTO workbench_prospect_messages(id,conversation_id,owner_id,member_id,source_key,direction,actor,text,status,created_at,eligible,processed) VALUES(?,?,?,?,?,'outbound','human','已回复',?,?,0,1)").run('block-out',x.conversation.id,'owner-a','member-a','block-out',block==='unknown'?'failed':block,f.now());
+ if(block!=='closed'){f.advance(31000);await readConversation(f,x,block==='missing-current'?[]:[inbound],'next');}
+ assert.equal(f.sqlite.prepare("SELECT processed FROM workbench_prospect_messages WHERE source_key='legacy-blocked'").get()?.processed,1);
+ assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',async()=>{throw new Error('must not decide');}),false);
+});
+
+for(const mutation of ['takeover','account','campaign'])test(`legacy recovery atomically refuses concurrent ${mutation}`,async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.chat.settings('owner-a','member-a',x.campaign.id,true);await readConversation(f,x,[],'baseline');f.advance(61000);const inbound={id:'race-legacy',direction:'inbound' as const,text:'餐饮80-100平',postedAt:f.now()};await readConversation(f,x,[inbound],'current');f.sqlite.prepare("UPDATE workbench_prospect_messages SET processed=1 WHERE conversation_id=? AND direction='inbound'").run(x.conversation.id);
+ f.advance(31000);await f.store.seen(x.device.deviceId,{authenticated:true,accountId:'MS4wSender001'});await f.chat.schedule(x.device.deviceId);const job=(await f.store.claim(x.device.deviceId,false,true))!;assert.equal(job.kind,'readConversation');
+ f.interceptNextBatch(()=>{
+  if(mutation==='takeover')f.sqlite.prepare("UPDATE workbench_prospect_conversations SET mode='human',handoff_reason='已由销售接管',version=version+1 WHERE id=?").run(x.conversation.id);
+  if(mutation==='account')f.sqlite.prepare("UPDATE workbench_prospect_devices SET account_id='new-account' WHERE id=?").run(x.device.deviceId);
+  if(mutation==='campaign')f.sqlite.prepare("UPDATE workbench_prospect_campaigns SET data_json=json_set(data_json,'$.chatEnabled',json('false')) WHERE id=?").run(x.campaign.id);
+ });
+ await f.store.complete(x.device.deviceId,job.id,job.leaseToken,{senderAccountId:'MS4wSender001',recipientId:'MS4wRecipient001',observedAt:f.now(),snapshotId:'current',reliable:true,messages:[inbound]});
+ assert.equal(f.sqlite.prepare("SELECT processed FROM workbench_prospect_messages WHERE source_key='race-legacy'").get()?.processed,1);
+ assert.equal(f.sqlite.prepare("SELECT json_extract(memory_json,'$.legacyRecoveredInboundId') marker FROM workbench_prospect_conversations WHERE id=?").get(x.conversation.id)?.marker,null);
+});
+
+test('legacy agreement following a visit question recovers and queues once',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.chat.settings('owner-a','member-a',x.campaign.id,true);await readConversation(f,x,[],'baseline');f.advance(61000);
+ const messages=[{id:'visit-out',direction:'outbound' as const,text:'您是否需要实地看场？',postedAt:f.now()},{id:'visit-answer',direction:'inbound' as const,text:'好的',postedAt:f.now()}];await readConversation(f,x,messages,'visit-current');f.sqlite.prepare("UPDATE workbench_prospect_messages SET processed=1 WHERE conversation_id=? AND direction='inbound'").run(x.conversation.id);f.advance(31000);await readConversation(f,x,messages,'visit-current');
+ assert.equal(f.sqlite.prepare("SELECT processed FROM workbench_prospect_messages WHERE source_key='visit-answer'").get()?.processed,0);
+ assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',async(_owner,_origin,input)=>chooseProspectChatAction(input,{generate:async()=>JSON.stringify({action:'wait'})})),true);
+ assert.equal(f.sqlite.prepare("SELECT COUNT(*) n FROM workbench_prospect_jobs WHERE kind='reply' AND status='queued'").get()?.n,1);
+});

@@ -1,5 +1,7 @@
+import {prospectCommentIdentity} from './prospecting-comment-identity.ts';
+import {createDiscoveryPersistence,normalizeDiscoverySchedule,mergeDiscoveryCandidates,nextDiscoveryAt,latestDiscoveryAt,discoveryVideoSlices} from './prospecting-discovery.ts';
 import {DomainError} from './domain.ts';
-import {canAutoApprove,greetingText,normalizeCandidates,normalizeComments,normalizeCampaignInput,object,prospectHash,prospectToken,safeProspectError,scoreComment,scoreCommentIntent,text,MAX_PROSPECT_COMMENTS,PROSPECT_LEASE_MS,PROSPECT_SEND_INTERVAL_MS} from './prospecting-domain.ts';
+import {canAutoApprove,greetingText,normalizeCandidates,normalizeComments,normalizeCampaignInput,object,prospectHash,prospectToken,safeProspectError,scoreComment,scoreCommentIntent,text,PROSPECT_LEASE_MS,PROSPECT_SEND_INTERVAL_MS} from './prospecting-domain.ts';
 import type {AnalyzedComment,CampaignInput} from './prospecting-domain.ts';
 import type {ProspectBridgeJob,ProspectCampaign,ProspectDeviceView,ProspectJobView,ProspectLead} from './prospecting-types.ts';
 import {createProspectingChatStore,isProspectChatJob,prospectReplyPolicyGate,prospectContactAllowedSql,prospectReplyCountsSql} from './prospecting-chat-store.ts';
@@ -12,7 +14,7 @@ export interface ProspectJobRow {id:string;owner_id:string;member_id:string;devi
 const conflict=()=>new DomainError('线索已更新或状态已改变，请刷新后重新审核',409);
 const readOnlyAccount=(accountId:string|null|undefined)=>accountId?.startsWith('dy-readonly-')===true;
 const readOnlyMessage=()=>new DomainError('当前登录身份仅支持发现账号和采集评论，尚不能发送私信。请确认可用于私信的抖音账号身份后重新配对',409);
-const publicCampaign=(r:CampaignRow):ProspectCampaign=>({...JSON.parse(r.data_json),id:r.id,memberId:r.member_id,status:r.status,createdAt:r.created_at,updatedAt:r.updated_at});
+const publicCampaign=(r:CampaignRow):ProspectCampaign=>({dailyDiscovery:{enabled:false,time:'09:00',timeZone:'Asia/Shanghai',includeNewCandidates:true},...JSON.parse(r.data_json),id:r.id,memberId:r.member_id,status:r.status,createdAt:r.created_at,updatedAt:r.updated_at});
 function publicJob(r:ProspectJobRow):ProspectJobView{
  const result=r.result_json?object(JSON.parse(r.result_json)):{};
  const warnings=Array.isArray(result.warnings)?result.warnings.slice(0,10).map(warning=>text(safeProspectError(warning),500)).filter(Boolean):[];
@@ -23,10 +25,15 @@ function publicLead(r:LeadRow):ProspectLead{
   if(r.job_status==='cancelled'&&r.job_input){const retry=object(object(JSON.parse(r.job_input)).retry);if(typeof retry.previousJobId==='string')status=retry.checkSince?'unknown':'failed';}
   return {...JSON.parse(r.data_json),id:r.id,campaignId:r.campaign_id,version:r.version,status,updatedAt:r.updated_at,...(r.job_error?{error:r.job_error}:{})};
 }
+const duplicateCommentSql=`NOT EXISTS (SELECT 1 FROM workbench_prospect_leads old WHERE old.campaign_id=? AND (
+ old.id=? OR ((old.id LIKE 'dom:%' OR ? LIKE 'dom:%') AND json_extract(old.data_json,'$.videoId')=? AND json_extract(old.data_json,'$.text')=? AND
+ COALESCE(NULLIF(json_extract(old.data_json,'$.recipientId'),''),json_extract(old.data_json,'$.nickname'))=?)))`;
+const duplicateValues=(campaignId:string,c:ProspectLead|AnalyzedComment)=>[campaignId,c.id,c.id,c.videoId,c.text,c.recipientId||c.nickname];
 const leadSelect='SELECT l.*, j.status AS job_status, j.result_json AS job_result, j.error AS job_error, j.input_json AS job_input FROM workbench_prospect_leads l LEFT JOIN workbench_prospect_jobs j ON j.id=l.job_id';
 
 export function createProspectingStore(db:D1Database,now:()=>number=Date.now){
  const chat=createProspectingChatStore(db,now);
+ const discovery=createDiscoveryPersistence(db,now);
  const stamp=()=>new Date(now()).toISOString();
  const member=async(ownerId:string,memberId:string)=>{const found=await db.prepare("SELECT account_id FROM workbench_member_accounts WHERE owner_id=? AND account_id=? AND enabled=1 AND role IN ('sales','manager')").bind(ownerId,memberId).first();if(!found)throw new DomainError('业务账号已停用或无权操作',403);};
  const findDevice=(id:string)=>db.prepare("SELECT d.* FROM workbench_prospect_devices d JOIN workbench_member_accounts a ON a.owner_id=d.owner_id AND a.account_id=d.member_id WHERE d.id=? AND d.enabled=1 AND a.enabled=1 AND a.role IN ('sales','manager')").bind(id).first<DeviceRow>();
@@ -34,7 +41,10 @@ export function createProspectingStore(db:D1Database,now:()=>number=Date.now){
  const online=(d:DeviceRow)=>!!d.last_seen_at&&now()-Date.parse(d.last_seen_at)<90000;
  function deviceView(d:DeviceRow|null):ProspectDeviceView{return d?{id:d.id,label:d.label,online:online(d),authenticated:!!d.authenticated,...(d.account_id?{accountId:d.account_id}:{}),...(d.account_name?{accountName:d.account_name}:{}),...(d.last_seen_at?{lastSeenAt:d.last_seen_at}:{}),...(d.message?{message:d.message}:{})}:{online:false,authenticated:false};}
  async function device(ownerId:string,memberId:string){await member(ownerId,memberId);const d=await currentDevice(ownerId,memberId);if(d)await expire(d.id);return deviceView(d);}
- async function authenticate(id:string,token:string):Promise<DeviceRow>{const d=await findDevice(id);if(!d||!/^[a-f0-9]{64}$/.test(token)||d.token_hash!==await prospectHash(token))throw new DomainError('设备凭证无效或已停用',401);return d;}
+ async function authenticate(id:string,token:string,cancelRevoked=false):Promise<DeviceRow>{const d=await findDevice(id);if(!d||!/^[a-f0-9]{64}$/.test(token)||d.token_hash!==await prospectHash(token)){
+  if(cancelRevoked&&/^[a-f0-9]{64}$/.test(token)){const raw=await db.prepare('SELECT * FROM workbench_prospect_devices WHERE id=? AND token_hash=?').bind(id,await prospectHash(token)).first<DeviceRow>();if(raw&&!d){const rows=await db.prepare("SELECT id FROM workbench_prospect_campaigns WHERE owner_id=? AND member_id=?").bind(raw.owner_id,raw.member_id).all<{id:string}>();for(const row of rows.results)await discovery.cancel(raw.owner_id,raw.member_id,row.id);}}
+  throw new DomainError('设备凭证无效或已停用',401);
+ }return d;}
  // Liveness is independent of browser verification and job/lease processing.
  // Keep the member guard in the write so a revoked member cannot stay online.
  async function touchDevice(id:string){
@@ -48,7 +58,10 @@ export function createProspectingStore(db:D1Database,now:()=>number=Date.now){
   const d=await currentDevice(ownerId,memberId);
   const safeText=(value:string|null,accountIds:string[]=[])=>{
    if(!value)return null;
-   let safe=redactChatText(safeProspectError(value)).replace(/["']?\b(?:api[_-]?key|token|cookie|session(?:id)?|secret|password|authorization|senderAccountId|recipientId|accountId)["']?\s*[=:]\s*(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi,'[凭证已隐藏]');
+   // Remove credential tails before truncation or other redaction can split a
+   // quoted, multiline, or incomplete value and leave secret fragments behind.
+   const secretStart=value.search(/\bBearer\s+|["']?\b(?:api[_-]?key|token|cookie|session(?:id)?|secret|password|authorization|senderAccountId|recipientId|accountId)["']?\s*[=:]/i);
+   let safe=redactChatText(safeProspectError(secretStart<0?value:`${value.slice(0,secretStart)}[凭证已隐藏]`));
    for(const id of [ownerId,memberId,d?.account_id,...accountIds])if(id)safe=safe.replaceAll(id,'[账号]');
    return safe;
   };
@@ -92,6 +105,7 @@ export function createProspectingStore(db:D1Database,now:()=>number=Date.now){
  }
  async function disconnect(ownerId:string,memberId:string){
   await member(ownerId,memberId);const time=stamp();
+  const activeRuns=await db.prepare("SELECT DISTINCT campaign_id FROM workbench_prospect_discovery_runs WHERE owner_id=? AND member_id=? AND status IN ('discovering','collecting','queued')").bind(ownerId,memberId).all<{campaign_id:string}>();for(const run of activeRuns.results)await discovery.cancel(ownerId,memberId,run.campaign_id);
   await db.batch([chat.waitingCancellation(ownerId,memberId),
    db.prepare('UPDATE workbench_prospect_devices SET enabled=0,authenticated=0 WHERE owner_id=? AND member_id=?').bind(ownerId,memberId),
    db.prepare("UPDATE workbench_prospect_jobs SET status=CASE WHEN kind IN ('send','reply') THEN 'unknown' ELSE 'failed' END,error='设备已断开，执行结果待核对',active_key=NULL,updated_at=? WHERE owner_id=? AND member_id=? AND status='running'").bind(time,ownerId,memberId),
@@ -124,14 +138,14 @@ export function createProspectingStore(db:D1Database,now:()=>number=Date.now){
  }
  async function createCampaign(ownerId:string,memberId:string,input:CampaignInput):Promise<ProspectCampaign>{
   await member(ownerId,memberId);const normalized=normalizeCampaignInput(input),time=stamp(),id=`pc-${crypto.randomUUID()}`;
-  const c={...normalized,candidates:[],selectedCandidateIds:[]};await db.prepare('INSERT INTO workbench_prospect_campaigns(id,owner_id,member_id,status,data_json,created_at,updated_at) VALUES (?,?,?,\'active\',?,?,?)').bind(id,ownerId,memberId,JSON.stringify(c),time,time).run();return {...c,id,memberId,status:'active',createdAt:time,updatedAt:time};
+  const c={...normalized,dailyDiscovery:{enabled:false,time:'09:00',timeZone:'Asia/Shanghai' as const,includeNewCandidates:true as const},candidates:[],selectedCandidateIds:[]};await db.prepare('INSERT INTO workbench_prospect_campaigns(id,owner_id,member_id,status,data_json,created_at,updated_at) VALUES (?,?,?,\'active\',?,?,?)').bind(id,ownerId,memberId,JSON.stringify(c),time,time).run();return {...c,id,memberId,status:'active',createdAt:time,updatedAt:time};
  }
  async function campaigns(ownerId:string,memberId:string){await member(ownerId,memberId);const r=await db.prepare('SELECT * FROM workbench_prospect_campaigns WHERE owner_id=? AND member_id=? ORDER BY created_at DESC,id DESC LIMIT 50').bind(ownerId,memberId).all<CampaignRow>();return r.results.map(publicCampaign);}
  async function campaign(ownerId:string,memberId:string,id:string):Promise<ProspectCampaign>{await member(ownerId,memberId);const r=await db.prepare('SELECT * FROM workbench_prospect_campaigns WHERE owner_id=? AND member_id=? AND id=?').bind(ownerId,memberId,id).first<CampaignRow>();if(!r)throw new DomainError('获客任务不存在',404);return publicCampaign(r);}
- async function leads(ownerId: string, memberId: string, campaignId: string) {
+ async function leads(ownerId: string, memberId: string, campaignId: string,page?:number,runId?:string) {
   const task = await campaign(ownerId, memberId, campaignId);
-  const rows = await db.prepare(`${leadSelect} WHERE l.owner_id=? AND l.member_id=? AND l.campaign_id=? ORDER BY json_extract(l.data_json,'$.intentScore') DESC,l.id LIMIT ${MAX_PROSPECT_COMMENTS}`)
-   .bind(ownerId, memberId, campaignId).all<LeadRow>();
+  const rows = await db.prepare(`${leadSelect} WHERE l.owner_id=? AND l.member_id=? AND l.campaign_id=? ${runId?"AND json_extract(l.data_json,'$.firstRunId')=?":''} ORDER BY json_extract(l.data_json,'$.intentScore') DESC,l.id ${page?'LIMIT 30 OFFSET ?':''}`)
+   .bind(ownerId, memberId, campaignId,...(runId?[runId]:[]),...(page?[(page-1)*30]:[])).all<LeadRow>();
   // Apply current rules to older comments in the view, without rewriting their review records.
   return rows.results.map(row => {
    const lead = publicLead(row);
@@ -139,11 +153,36 @@ export function createProspectingStore(db:D1Database,now:()=>number=Date.now){
    return lead;
   }).sort((left, right) => right.intentScore - left.intentScore);
  }
+ async function leadCount(ownerId:string,memberId:string,campaignId:string,runId?:string){await campaign(ownerId,memberId,campaignId);return (await db.prepare(`SELECT COUNT(*) AS n FROM workbench_prospect_leads WHERE owner_id=? AND member_id=? AND campaign_id=? ${runId?"AND json_extract(data_json,'$.firstRunId')=?":''}`).bind(ownerId,memberId,campaignId,...(runId?[runId]:[])).first<{n:number}>())?.n??0;}
+ async function selectCandidates(ownerId:string,memberId:string,id:string,ids:string[]){
+  const c=await campaign(ownerId,memberId,id);if(!Array.isArray(ids)||ids.some(id=>typeof id!=='string'||!c.candidates.some(c=>c.id===id)))throw new DomainError('请选择有效的竞品账号');
+  await db.prepare("UPDATE workbench_prospect_campaigns SET data_json=json_set(data_json,'$.selectedCandidateIds',json(?)),updated_at=? WHERE id=? AND owner_id=? AND member_id=?").bind(JSON.stringify([...new Set(ids)]),stamp(),id,ownerId,memberId).run();
+ }
+ async function discoverySchedule(ownerId:string,memberId:string,id:string,value:unknown){
+  await campaign(ownerId,memberId,id);const schedule={...normalizeDiscoverySchedule(value,now()),generation:crypto.randomUUID()};
+  await db.prepare("UPDATE workbench_prospect_campaigns SET data_json=json_set(data_json,'$.dailyDiscovery',json(?)),updated_at=? WHERE id=? AND owner_id=? AND member_id=?").bind(JSON.stringify(schedule),stamp(),id,ownerId,memberId).run();await discovery.cancel(ownerId,memberId,id);
+ }
+ async function discoveryRun(ownerId:string,memberId:string,campaignId:string,trigger:'manual'|'daily'='manual',scheduledFor=stamp()){
+  const c=await campaign(ownerId,memberId,campaignId);const d=await readyDevice(ownerId,memberId);if(c.status!=='active')throw new DomainError('请先恢复任务',409);
+  const id=`pdr-${crypto.randomUUID()}`,time=stamp(),dailyKey=trigger==='daily'?new Date(Date.parse(scheduledFor)+8*3600000).toISOString().slice(0,10):null;
+  const data={trigger,scheduleGeneration:object(c.dailyDiscovery).generation??'',discoveredAccounts:0,newAccounts:0,readComments:0,newComments:0,newLeads:0,pendingJobs:Math.min(c.keywords.length,10),completedJobs:0,totalJobs:Math.min(c.keywords.length,10),startedAt:time};
+  const statements=[db.prepare("INSERT OR IGNORE INTO workbench_prospect_discovery_runs(id,owner_id,member_id,campaign_id,daily_key,scheduled_for,status,data_json,created_at,updated_at) SELECT ?,?,?,?,?,?,'discovering',?,?,? WHERE EXISTS (SELECT 1 FROM workbench_prospect_campaigns c JOIN workbench_member_accounts m ON m.owner_id=c.owner_id AND m.account_id=c.member_id WHERE c.id=? AND c.status='active' AND m.enabled=1 AND m.role IN ('sales','manager') AND (?='manual' OR (json_extract(c.data_json,'$.dailyDiscovery.enabled')=1 AND json_extract(c.data_json,'$.dailyDiscovery.nextRunAt')=?))) AND EXISTS (SELECT 1 FROM workbench_prospect_devices WHERE id=? AND enabled=1 AND authenticated=1)").bind(id,ownerId,memberId,campaignId,dailyKey,scheduledFor,JSON.stringify(data),time,time,campaignId,trigger,c.dailyDiscovery?.nextRunAt??null,d.id)];
+  for(const [index,keyword] of c.keywords.slice(0,10).entries())statements.push(db.prepare("INSERT OR IGNORE INTO workbench_prospect_jobs(id,owner_id,member_id,device_id,campaign_id,kind,status,input_json,active_key,created_at,updated_at) SELECT ?,?,?,?,?,'discover','queued',?,?,?,? WHERE EXISTS (SELECT 1 FROM workbench_prospect_discovery_runs WHERE id=?)").bind(`${id}-d${index}`,ownerId,memberId,d.id,campaignId,JSON.stringify({keywords:[keyword],requirements:c.requirements,discoveryRunId:id}),`${id}:d${index}`,time,time,id));
+  await db.batch(statements);
+  if(trigger==='daily')await db.prepare("UPDATE workbench_prospect_campaigns SET data_json=json_set(data_json,'$.dailyDiscovery.nextRunAt',?) WHERE id=? AND json_extract(data_json,'$.dailyDiscovery.enabled')=1 AND json_extract(data_json,'$.dailyDiscovery.nextRunAt')=?").bind(nextDiscoveryAt(c.dailyDiscovery?.time??'09:00',now()),campaignId,c.dailyDiscovery?.nextRunAt??null).run();
+ }
+ async function scheduleDiscovery(deviceId:string){
+  const d=await findDevice(deviceId);if(!d?.authenticated)return;
+  const interrupted=await db.prepare("SELECT j.* FROM workbench_prospect_discovery_runs run JOIN workbench_prospect_jobs j ON j.id=(SELECT last.id FROM workbench_prospect_jobs last WHERE json_extract(last.input_json,'$.discoveryRunId')=run.id AND last.kind='discover' ORDER BY last.created_at DESC,last.id DESC LIMIT 1) WHERE run.owner_id=? AND run.member_id=? AND run.status IN ('discovering','collecting') LIMIT 5").bind(d.owner_id,d.member_id).all<ProspectJobRow>();
+  for(const job of interrupted.results)await reconcileDiscovery(job);
+  const rows=await db.prepare("SELECT * FROM workbench_prospect_campaigns WHERE owner_id=? AND member_id=? AND status='active' AND json_extract(data_json,'$.dailyDiscovery.enabled')=1 AND json_extract(data_json,'$.dailyDiscovery.nextRunAt')<=? LIMIT 5").bind(d.owner_id,d.member_id,stamp()).all<CampaignRow>();
+  for(const row of rows.results){const c=publicCampaign(row);await discoveryRun(d.owner_id,d.member_id,c.id,'daily',latestDiscoveryAt(c.dailyDiscovery?.time??'09:00',now()));}
+ }
  async function jobs(ownerId:string,memberId:string,campaignId:string){await campaign(ownerId,memberId,campaignId);const r=await db.prepare("SELECT * FROM workbench_prospect_jobs WHERE owner_id=? AND member_id=? AND campaign_id=? AND kind!='readConversation' ORDER BY created_at DESC,id DESC LIMIT 100").bind(ownerId,memberId,campaignId).all<ProspectJobRow>();return r.results.map(publicJob);}
  async function setPaused(ownerId:string,memberId:string,id:string,paused:boolean){
   await campaign(ownerId,memberId,id);const statements=[db.prepare('UPDATE workbench_prospect_campaigns SET status=?,updated_at=? WHERE id=? AND owner_id=? AND member_id=?').bind(paused?'paused':'active',stamp(),id,ownerId,memberId)];
-  if(paused){statements.push(chat.waitingCancellation(ownerId,memberId,id),db.prepare("UPDATE workbench_prospect_jobs SET status='cancelled',active_key=NULL,recipient_key=CASE WHEN json_type(input_json,'$.retry')='object' THEN recipient_key ELSE NULL END,error='任务已暂停',updated_at=? WHERE campaign_id=? AND owner_id=? AND member_id=? AND status='queued'").bind(stamp(),id,ownerId,memberId),...cancelledLeads(ownerId,memberId,stamp(),id));}
-  await db.batch(statements);
+  if(paused){await discovery.cancel(ownerId,memberId,id);statements.push(chat.waitingCancellation(ownerId,memberId,id),db.prepare("UPDATE workbench_prospect_jobs SET status='cancelled',active_key=NULL,recipient_key=CASE WHEN json_type(input_json,'$.retry')='object' THEN recipient_key ELSE NULL END,error='任务已暂停',updated_at=? WHERE campaign_id=? AND owner_id=? AND member_id=? AND status='queued'").bind(stamp(),id,ownerId,memberId),...cancelledLeads(ownerId,memberId,stamp(),id));}
+  await db.batch(statements);if(paused)await discovery.cancel(ownerId,memberId,id);
  }
  async function readyDevice(ownerId:string,memberId:string){const d=await currentDevice(ownerId,memberId);if(!d||!online(d))throw new DomainError('请先连接并启动本机抖音助手',503);if(!d.authenticated||!d.account_id)throw new DomainError('请在本机浏览器登录绑定的抖音账号',409);return d;}
  async function createJob(ownerId:string,memberId:string,campaignId:string,kind:'discover'|'collect',candidateIds:string[]=[]){
@@ -156,14 +195,15 @@ export function createProspectingStore(db:D1Database,now:()=>number=Date.now){
   if(!result.meta.changes)throw new DomainError('同类任务已在运行或任务已暂停，请等待结果',409);
   if(kind==='collect')await db.prepare("UPDATE workbench_prospect_campaigns SET data_json=json_set(data_json,'$.selectedCandidateIds',json(?)),updated_at=? WHERE id=? AND owner_id=? AND member_id=?").bind(JSON.stringify(selected.map(x=>x.id)),time,campaignId,ownerId,memberId).run();
  }
- async function insertComments(ownerId:string,memberId:string,campaignId:string,comments:AnalyzedComment[]){
-  const c=await campaign(ownerId,memberId,campaignId);const existing=await leads(ownerId,memberId,campaignId);const keys=new Set(existing.map(x=>`${x.videoId}:${x.id}`));const statements:D1PreparedStatement[]=[];
-  for(const comment of comments){if(keys.has(`${comment.videoId}:${comment.id}`))continue;if(keys.size>=MAX_PROSPECT_COMMENTS)break;keys.add(`${comment.videoId}:${comment.id}`);const status=comment.recipientId&&comment.profileUrl?'pending':'unreachable';
-   statements.push(db.prepare('INSERT OR IGNORE INTO workbench_prospect_leads(id,campaign_id,owner_id,member_id,status,data_json,updated_at) SELECT ?,?,?,?,?,?,? WHERE (SELECT COUNT(*) FROM workbench_prospect_leads WHERE campaign_id=?)<300').bind(comment.id,campaignId,ownerId,memberId,status,JSON.stringify(comment),stamp(),campaignId));
+ async function insertComments(ownerId:string,memberId:string,campaignId:string,comments:AnalyzedComment[],firstRunId?:string){
+  await campaign(ownerId,memberId,campaignId);const keys=new Set<string>();const statements:D1PreparedStatement[]=[];
+  for(const comment of comments){const identity=prospectCommentIdentity(comment);if(keys.has(identity))continue;keys.add(identity);const status=comment.recipientId&&comment.profileUrl?'pending':'unreachable';
+   statements.push(db.prepare(`INSERT OR IGNORE INTO workbench_prospect_leads(id,campaign_id,owner_id,member_id,status,data_json,updated_at) SELECT ?,?,?,?,?,?,? WHERE ${duplicateCommentSql}`).bind(comment.id,campaignId,ownerId,memberId,status,JSON.stringify({...comment,firstSeenAt:stamp(),...(firstRunId?{firstRunId}:{})}),stamp(),...duplicateValues(campaignId,comment)));
   }
-  for(let i=0;i<statements.length;i+=40)await db.batch(statements.slice(i,i+40));
+  let inserted=0;for(let i=0;i<statements.length;i+=40){const results=await db.batch(statements.slice(i,i+40));inserted+=results.reduce((n,r)=>n+(r.meta.changes||0),0);}
+  return inserted;
   // Automatic approval is applied only to saved model analysis, never raw crawler output.
-  void c;
+
  }
  async function review(ownerId:string,memberId:string,campaignId:string,leadId:string,version:number,decision:'approve'|'reject',greeting:string,reviewer:string,automatic=false){
   const c=await campaign(ownerId,memberId,campaignId);if(c.status!=='active')throw new DomainError('任务已暂停，请恢复后再审核',409);
@@ -240,6 +280,7 @@ export function createProspectingStore(db:D1Database,now:()=>number=Date.now){
   const row=await db.prepare(`UPDATE workbench_prospect_jobs SET status='running',lease_hash=?,lease_until=?,started_at=?,updated_at=? WHERE id=(
     SELECT j.id FROM workbench_prospect_jobs j JOIN workbench_prospect_campaigns c ON c.id=j.campaign_id
     WHERE j.device_id=? AND j.owner_id=? AND j.member_id=? AND j.status='queued' AND c.status='active'
+    AND NOT EXISTS (SELECT 1 FROM workbench_prospect_discovery_runs run WHERE run.id=json_extract(j.input_json,'$.discoveryRunId') AND (run.status='cancelled' OR COALESCE(json_extract(run.data_json,'$.scheduleGeneration'),'')<>COALESCE(json_extract(c.data_json,'$.dailyDiscovery.generation'),'')))
     AND (json_type(j.input_json,'$.retry') IS NULL OR ?=1)
     AND (j.kind NOT IN ('send','reply') OR ${prospectContactAllowedSql('j')})
     AND ${policyGate.sql}
@@ -251,7 +292,7 @@ export function createProspectingStore(db:D1Database,now:()=>number=Date.now){
       AND NOT EXISTS (SELECT 1 FROM workbench_prospect_jobs other WHERE other.owner_id=j.owner_id AND other.sender_id=j.sender_id AND other.status='running')
       AND NOT EXISTS (SELECT 1 FROM workbench_prospect_jobs recent WHERE recent.owner_id=j.owner_id AND recent.sender_id=j.sender_id AND recent.kind IN ('send','reply') AND recent.started_at>?)
       AND (j.kind='reply' OR (SELECT COUNT(*) FROM workbench_prospect_jobs day WHERE day.owner_id=j.owner_id AND day.sender_id=j.sender_id AND day.kind='send' AND day.started_at>=?)<CAST(json_extract(c.data_json,'$.dailyLimit') AS INTEGER))))
-    ORDER BY CASE WHEN j.kind='readConversation' AND json_extract(j.input_json,'$.manualSync')=1 THEN 0 WHEN j.kind='reply' THEN 1 WHEN j.kind='readConversation' THEN 2 ELSE 3 END,
+    ORDER BY CASE WHEN (j.kind='readConversation' AND json_extract(j.input_json,'$.manualSync')=1) OR (j.kind='reply' AND json_extract(j.input_json,'$.actor')='human') THEN 0 WHEN j.kind IN ('discover','collect') AND (SELECT COUNT(*) FROM workbench_prospect_jobs recent WHERE recent.device_id=j.device_id AND recent.kind IN ('readConversation','reply') AND recent.started_at IS NOT NULL AND recent.started_at>COALESCE((SELECT MAX(bg.started_at) FROM workbench_prospect_jobs bg WHERE bg.device_id=j.device_id AND bg.kind IN ('discover','collect')),'') )>=4 THEN 1 WHEN j.kind='reply' THEN 2 WHEN j.kind='readConversation' THEN 3 ELSE 4 END,
       j.created_at,j.id LIMIT 1) RETURNING *`).bind(await prospectHash(leaseToken),new Date(now()+PROSPECT_LEASE_MS).toISOString(),time,time,deviceId,d.owner_id,d.member_id,allowSendRetry?1:0,...policyGate.values,allowConversation?1:0,d.account_id,new Date(now()-PROSPECT_SEND_INTERVAL_MS).toISOString(),dayStart).first<ProspectJobRow>();
   return row?{id:row.id,campaignId:row.campaign_id,kind:row.kind,leaseToken,input:JSON.parse(row.input_json)}:null;
  }
@@ -285,28 +326,62 @@ export function createProspectingStore(db:D1Database,now:()=>number=Date.now){
   if(!renewed.meta.changes)throw new DomainError('执行凭证已失效，请重新连接',409);
  }
  async function complete(deviceId:string,id:string,token:string,result:unknown,error?:string){
-  const r=await leased(deviceId,id,token,true);if(['done','failed','unknown'].includes(r.status))return;
+  const r=await leased(deviceId,id,token,true);if(['done','failed','unknown'].includes(r.status)){await reconcileDiscovery(r);return;}
   if(!r.lease_until||r.lease_until<=stamp()){await expire(deviceId);throw new DomainError('任务已过期，发送结果需核对',409);}
   if(isProspectChatJob(r.kind)){await chat.complete(r,result,error);return;}
+  const effects:D1PreparedStatement[]=[];
+  const liveSql="EXISTS (SELECT 1 FROM workbench_prospect_jobs live JOIN workbench_prospect_campaigns p ON p.id=live.campaign_id JOIN workbench_prospect_devices d ON d.id=live.device_id JOIN workbench_member_accounts m ON m.owner_id=live.owner_id AND m.account_id=live.member_id WHERE live.id=? AND live.status='running' AND live.lease_hash=? AND live.lease_until>? AND p.status='active' AND d.enabled=1 AND d.authenticated=1 AND m.enabled=1 AND m.role IN ('sales','manager') AND NOT EXISTS (SELECT 1 FROM workbench_prospect_discovery_runs run WHERE run.id=json_extract(live.input_json,'$.discoveryRunId') AND (run.status='cancelled' OR COALESCE(json_extract(run.data_json,'$.scheduleGeneration'),'')<>COALESCE(json_extract(p.data_json,'$.dailyDiscovery.generation'),''))))";
+  const liveValues=[r.id,r.lease_hash,stamp()];
   let status:ProspectJobView['status']='done',summary='',safeResult:unknown={};let problem=safeProspectError(error);
   if(problem){status=r.kind==='send'?'unknown':'failed';}
   else if(r.kind==='send'){
    const v=object(result);if(!['submitted','unknown','failed'].includes(String(v.outcome)))throw new DomainError('私信执行结果格式不正确');
    status=v.outcome==='submitted'?'done':v.outcome as 'unknown'|'failed';problem=safeProspectError(v.error);summary=v.outcome==='submitted'?'已提交，未验证送达或已读':v.outcome==='unknown'?'结果待核对，不自动重发':'提交失败';safeResult={outcome:v.outcome,evidence:text(v.evidence,500),summary};
   }else if(r.kind==='discover'){
-   const candidates=normalizeCandidates(object(result).candidates);summary=`发现${candidates.length}个相关账号`;
-   await db.prepare("UPDATE workbench_prospect_campaigns SET data_json=json_set(data_json,'$.candidates',json(?),'$.selectedCandidateIds',json('[]')),updated_at=? WHERE id=? AND owner_id=? AND member_id=?").bind(JSON.stringify(candidates),stamp(),r.campaign_id,r.owner_id,r.member_id).run();safeResult={summary};
+   let candidates=normalizeCandidates(object(result).candidates);summary=`发现${candidates.length}个相关账号`;
+   const c=await campaign(r.owner_id,r.member_id,r.campaign_id);const runId=object(JSON.parse(r.input_json)).discoveryRunId;
+   if(typeof runId==='string'){const prior=await db.prepare("SELECT COALESCE(SUM(json_extract(result_json,'$.discoveredAccounts')),0) AS n FROM workbench_prospect_jobs WHERE json_extract(input_json,'$.discoveryRunId')=? AND status='done'").bind(runId).first<{n:number}>();candidates=candidates.slice(0,Math.max(0,30-(prior?.n??0)));}
+   const merged=mergeDiscoveryCandidates(c.candidates,candidates,c.selectedCandidateIds,stamp(),typeof runId==='string'?runId:undefined);
+   effects.push(db.prepare(`UPDATE workbench_prospect_campaigns SET data_json=json_set(data_json,'$.candidates',json(?),'$.selectedCandidateIds',json((SELECT json_group_array(value) FROM (SELECT value FROM json_each(json_extract(data_json,'$.selectedCandidateIds')) UNION SELECT value FROM json_each(?))))),updated_at=? WHERE id=? AND owner_id=? AND member_id=? AND ${liveSql}`).bind(JSON.stringify(merged.candidates),JSON.stringify(candidates.filter(candidate=>!c.candidates.some(previous=>previous.id===candidate.id)).map(candidate=>candidate.id)),stamp(),r.campaign_id,r.owner_id,r.member_id,...liveValues));safeResult={summary,newAccounts:merged.newAccounts,discoveredAccounts:candidates.length};
   }else{
    const comments=normalizeComments(object(result).comments,'browser');const input=JSON.parse(r.input_json) as ProspectBridgeJob['input'];const allowed=new Set(input.videos?.map(v=>v.id));if(comments.some(c=>!allowed.has(c.videoId)))throw new DomainError('采集结果包含未选择的视频',403);
-   const c=await campaign(r.owner_id,r.member_id,r.campaign_id);await insertComments(r.owner_id,r.member_id,r.campaign_id,comments.map(x=>scoreComment(x,c)));summary=`读取${comments.length}条评论（每个任务最多保留${MAX_PROSPECT_COMMENTS}条）`;safeResult={summary,warnings:Array.isArray(object(result).warnings)?(object(result).warnings as unknown[]).slice(0,10).map(safeProspectError):[]};
+   const c=await campaign(r.owner_id,r.member_id,r.campaign_id);const runId=object(JSON.parse(r.input_json)).discoveryRunId;
+   for(const comment of comments){const scored=scoreComment(comment,c);effects.push(db.prepare(`INSERT OR IGNORE INTO workbench_prospect_leads(id,campaign_id,owner_id,member_id,status,data_json,updated_at) SELECT ?,?,?,?,?,?,? WHERE ${liveSql} AND ${duplicateCommentSql}`).bind(scored.id,c.id,r.owner_id,r.member_id,scored.recipientId&&scored.profileUrl?'pending':'unreachable',JSON.stringify({...scored,firstSeenAt:stamp(),firstRunId:runId,firstJobId:r.id}),stamp(),...liveValues,...duplicateValues(c.id,scored)));}
+   const seenVideos=[...new Set([...(Array.isArray(object(c).collectedVideoIds)?object(c).collectedVideoIds as string[]:[]),...(input.videos??[]).map(v=>v.id)])];
+   effects.push(db.prepare(`UPDATE workbench_prospect_campaigns SET data_json=json_set(data_json,'$.collectedVideoIds',json(?)) WHERE id=? AND ${liveSql}`).bind(JSON.stringify(seenVideos),c.id,...liveValues));
+   summary=`读取${comments.length}条评论`;safeResult={summary,readComments:comments.length,warnings:Array.isArray(object(result).warnings)?(object(result).warnings as unknown[]).slice(0,10).map(safeProspectError):[]};
   }
-  await db.prepare("UPDATE workbench_prospect_jobs SET status=?,result_json=?,error=?,active_key=NULL,updated_at=? WHERE id=? AND device_id=? AND status='running' AND lease_hash=?").bind(status,JSON.stringify(safeResult),problem||null,stamp(),id,deviceId,r.lease_hash).run();
+  effects.push(db.prepare(`UPDATE workbench_prospect_jobs SET status=?,result_json=json_set(json(?),'$.newComments',(SELECT COUNT(*) FROM workbench_prospect_leads WHERE campaign_id=? AND json_extract(data_json,'$.firstJobId')=?)),error=?,active_key=NULL,updated_at=? WHERE id=? AND device_id=? AND ${liveSql}`).bind(status,JSON.stringify(safeResult),r.campaign_id,r.id,problem||null,stamp(),id,deviceId,...liveValues));
+  const committed=await db.batch(effects);if(!committed[committed.length-1].meta.changes){const current=await leased(deviceId,id,token,true);if(!['done','failed','unknown'].includes(current.status))throw new DomainError('执行凭证已失效',409);}
+
+  await reconcileDiscovery(r);
+ }
+ async function reconcileDiscovery(r:ProspectJobRow){
+  const runId=object(JSON.parse(r.input_json)).discoveryRunId;
+  if(typeof runId==='string'){
+   await db.prepare("UPDATE workbench_prospect_discovery_runs SET data_json=json_set(data_json,'$.readComments',COALESCE((SELECT SUM(COALESCE(json_extract(result_json,'$.readComments'),0)) FROM workbench_prospect_jobs WHERE json_extract(input_json,'$.discoveryRunId')=?),0),'$.newComments',COALESCE((SELECT SUM(COALESCE(json_extract(result_json,'$.newComments'),0)) FROM workbench_prospect_jobs WHERE json_extract(input_json,'$.discoveryRunId')=?),0),'$.newAccounts',COALESCE((SELECT SUM(COALESCE(json_extract(result_json,'$.newAccounts'),0)) FROM workbench_prospect_jobs WHERE json_extract(input_json,'$.discoveryRunId')=?),0),'$.discoveredAccounts',COALESCE((SELECT SUM(COALESCE(json_extract(result_json,'$.discoveredAccounts'),0)) FROM workbench_prospect_jobs WHERE json_extract(input_json,'$.discoveryRunId')=?),0)) WHERE id=?").bind(runId,runId,runId,runId,runId).run();
+   const pending=await db.prepare("SELECT COUNT(*) AS count FROM workbench_prospect_jobs WHERE json_extract(input_json,'$.discoveryRunId')=? AND kind='discover' AND status IN ('queued','running')").bind(runId).first<{count:number}>();
+   if(r.kind==='discover'&&!pending?.count){
+    const c=await campaign(r.owner_id,r.member_id,r.campaign_id);const slices=discoveryVideoSlices(c.candidates,c.selectedCandidateIds,Math.floor(now()/86400000),Array.isArray(object(c).collectedVideoIds)?object(c).collectedVideoIds as string[]:[],runId);
+    const time=stamp();const statements=slices.map((videos,i)=>db.prepare("INSERT OR IGNORE INTO workbench_prospect_jobs(id,owner_id,member_id,device_id,campaign_id,kind,status,input_json,active_key,created_at,updated_at) SELECT ?,?,?,?,?,'collect','queued',?,?,?,? WHERE EXISTS (SELECT 1 FROM workbench_prospect_discovery_runs WHERE id=? AND status='discovering')").bind(`${runId}-c${i}`,r.owner_id,r.member_id,r.device_id,r.campaign_id,JSON.stringify({videos,maxCommentsPerVideo:c.maxCommentsPerVideo,discoveryRunId:runId}),`${runId}:c${i}`,time,time,runId));
+    if(statements.length)await db.batch(statements);
+    await db.prepare("UPDATE workbench_prospect_discovery_runs SET status='collecting',updated_at=? WHERE id=? AND status='discovering'").bind(time,runId).run();
+   }
+   await db.prepare(`UPDATE workbench_prospect_discovery_runs SET data_json=json_set(data_json,'$.newLeads',(
+    SELECT COUNT(DISTINCT COALESCE(json_extract(l.data_json,'$.recipientId'),json_extract(l.data_json,'$.nickname'))) FROM workbench_prospect_leads l
+    WHERE l.campaign_id=workbench_prospect_discovery_runs.campaign_id AND json_extract(l.data_json,'$.firstRunId')=? AND NOT EXISTS (
+     SELECT 1 FROM workbench_prospect_leads older WHERE older.campaign_id=l.campaign_id AND older.rowid<l.rowid AND COALESCE(json_extract(older.data_json,'$.recipientId'),json_extract(older.data_json,'$.nickname'))=COALESCE(json_extract(l.data_json,'$.recipientId'),json_extract(l.data_json,'$.nickname')) AND COALESCE(json_extract(older.data_json,'$.firstRunId'),'')<>?))) WHERE id=?`).bind(runId,runId,runId).run();
+   await db.prepare(`UPDATE workbench_prospect_discovery_runs SET
+    data_json=json_set(data_json,'$.totalJobs',(SELECT COUNT(*) FROM workbench_prospect_jobs WHERE json_extract(input_json,'$.discoveryRunId')=?),'$.completedJobs',(SELECT COUNT(*) FROM workbench_prospect_jobs WHERE json_extract(input_json,'$.discoveryRunId')=? AND status='done'),'$.pendingJobs',(SELECT COUNT(*) FROM workbench_prospect_jobs WHERE json_extract(input_json,'$.discoveryRunId')=? AND status IN ('queued','running'))),updated_at=?
+    WHERE id=? AND status IN ('discovering','collecting')`).bind(runId,runId,runId,stamp(),runId).run();
+   await db.prepare("UPDATE workbench_prospect_discovery_runs SET status=CASE WHEN EXISTS (SELECT 1 FROM workbench_prospect_jobs WHERE json_extract(input_json,'$.discoveryRunId')=? AND status='failed') THEN CASE WHEN json_extract(data_json,'$.completedJobs')=0 THEN 'failed' ELSE 'partial' END ELSE 'completed' END,data_json=json_set(data_json,'$.finishedAt',?,'$.error',(SELECT error FROM workbench_prospect_jobs WHERE json_extract(input_json,'$.discoveryRunId')=workbench_prospect_discovery_runs.id AND status='failed' AND error IS NOT NULL LIMIT 1)),updated_at=? WHERE id=? AND status='collecting' AND json_extract(data_json,'$.pendingJobs')=0").bind(runId,stamp(),stamp(),runId).run();
+  }
  }
  async function pendingAnalysis(ownerId:string,memberId:string,campaignId?:string,limit=10){
   await member(ownerId,memberId);const rows=await db.prepare(`${leadSelect} JOIN workbench_prospect_campaigns c ON c.id=l.campaign_id WHERE l.owner_id=? AND l.member_id=? AND l.analysis_attempted=0 AND l.status IN ('pending','unreachable') AND l.job_id IS NULL AND c.status='active' ${campaignId?'AND l.campaign_id=?':''} ORDER BY l.updated_at,l.id LIMIT ?`).bind(ownerId,memberId,...(campaignId?[campaignId]:[]),limit).all<LeadRow>();return rows.results.map(publicLead);
  }
  async function saveAnalysis(ownerId:string,memberId:string,lead:ProspectLead,analysis:AnalyzedComment,modelError?:string){
-  const c=await campaign(ownerId,memberId,lead.campaignId);const next={...analysis,autoSuppressed:object(lead).autoSuppressed?1:0,...(modelError?{error:safeProspectError(modelError)}:{})};
+  const c=await campaign(ownerId,memberId,lead.campaignId);const next={...analysis,firstSeenAt:lead.firstSeenAt,firstRunId:lead.firstRunId,autoSuppressed:object(lead).autoSuppressed?1:0,...(modelError?{error:safeProspectError(modelError)}:{})};
   const saved=await db.prepare("UPDATE workbench_prospect_leads SET data_json=?,analysis_attempted=1,version=version+1,updated_at=? WHERE campaign_id=? AND id=? AND owner_id=? AND member_id=? AND version=? AND job_id IS NULL AND status IN ('pending','unreachable')").bind(JSON.stringify(next),stamp(),lead.campaignId,lead.id,ownerId,memberId,lead.version).run();
   if(saved.meta.changes&&canAutoApprove(next,c)){if(readOnlyAccount((await currentDevice(ownerId,memberId))?.account_id))return;try{await review(ownerId,memberId,c.id,lead.id,lead.version+1,'approve',analysis.greeting,'自动策略',true);}catch(error){if(!(error instanceof DomainError))throw error;await db.prepare("UPDATE workbench_prospect_leads SET data_json=json_set(data_json,'$.error',?),updated_at=? WHERE campaign_id=? AND id=? AND job_id IS NULL").bind(error.message,stamp(),c.id,lead.id).run();}}
  }
@@ -323,5 +398,5 @@ export function createProspectingStore(db:D1Database,now:()=>number=Date.now){
    catch(error){if(!(error instanceof DomainError))throw error;const terminal=/已安排|已触达|停止联系/.test(error.message);await db.prepare("UPDATE workbench_prospect_leads SET data_json=json_set(data_json,'$.error',?,'$.autoSuppressed',?),updated_at=? WHERE campaign_id=? AND id=? AND job_id IS NULL AND version=?").bind(error.message,terminal?1:0,stamp(),c.id,lead.id,lead.version).run();}
   }
  }
- return{chat,enqueueAutomatic,connect,disconnect,authenticate,touchDevice,diagnostics,device,seen,createCampaign,campaigns,campaign,leads,jobs,setPaused,createJob,insertComments,review,retrySend,claim,leased,renew,complete,pendingAnalysis,saveAnalysis,retryAnalysis};
+ return{leadCount,discoveryRun,scheduleDiscovery,discovery,discoverySchedule,selectCandidates,chat,enqueueAutomatic,connect,disconnect,authenticate,touchDevice,diagnostics,device,seen,createCampaign,campaigns,campaign,leads,jobs,setPaused,createJob,insertComments,review,retrySend,claim,leased,renew,complete,pendingAnalysis,saveAnalysis,retryAnalysis};
 }

@@ -377,6 +377,15 @@ browserTest('collection reads ordinary body text and emoji between verified auth
   ]);
 });
 
+browserTest('fallback comment identity stays stable when relative date text rolls over', async t => {
+  let day = '3天前';
+  const { adapter } = await fixture(t, { videoDetails: () => `<main><div data-e2e="comment-list"><div data-e2e="comment-item"><a href="/user/stable-reader">稳定读者</a><span data-e2e="comment-content">这条评论跨天保持相同</span><time>${day}</time></div></div></main>` });
+  const first = await adapter.collect({ videos: [{ id: '10001', url: 'https://www.douyin.com/video/10001' }] });
+  day = '4天前';
+  const second = await adapter.collect({ videos: [{ id: '10001', url: 'https://www.douyin.com/video/10001' }] });
+  assert.equal(first.comments[0].id, second.comments[0].id);
+});
+
 browserTest('collection reads the observed info-body-time structure without treating comment subparts as rows', async t => {
   const { adapter } = await fixture(t, { videoDetails: () => '<main><h2>全部评论</h2><div data-e2e="comment-list">' +
     '<div data-e2e="comment-item" data-comment-id="observed-parent"><div class="comment-item-avatar"><a href="/user/parent-reader"><img alt="问租甲头像" width="20" height="20"></a></div><div><div>' +

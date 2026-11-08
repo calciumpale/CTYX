@@ -1,3 +1,4 @@
+import {isQuietProspectAcknowledgement} from './prospecting-chat-agent.ts';
 import {DomainError} from './domain.ts';
 import {normalizeChatPolicy,withinChatHours,normalizeChatMemory,isChatOptOut} from './prospecting-chat-policy.ts';
 import {object,prospectHash,safeProspectError,text} from './prospecting-domain.ts';
@@ -304,6 +305,16 @@ export function createProspectingChatStore(db:D1Database,now:()=>number=Date.now
    const unanswered=index>=0&&latest&&latest.processed===1&&(!confirmedOut||(latest.row_order??0)>(confirmedOut.row_order??0))&&!newerOutgoingInRead;
    if(unanswered&&!durableDraft)statements.push(db.prepare(`UPDATE workbench_prospect_messages SET processed=0 WHERE id=? AND EXISTS (${guard}) AND EXISTS (SELECT 1 FROM workbench_prospect_conversations WHERE id=? AND version=? AND ${recoverableReadPauseSql})`).bind(latest.id,...values,c.id,c.version));
   }
+  // Legacy decisions had no audit marker: reconsider only the current last inbound once.
+  const audit=object(JSON.parse(c.memory_json||'{}'));
+  const legacyLast=last?.direction==='inbound'?bySource.get(last.id):undefined;
+  if(automatic&&read.reliable&&c.status==='active'&&c.mode==='agent'&&!c.handoff_reason&&!unresolved&&!stopObserved&&c.has_baseline&&legacyLast?.eligible===1&&!isQuietProspectAcknowledgement(legacyLast.text,existing.filter(m=>m.direction==='outbound'&&(m.row_order??0)<(legacyLast.row_order??0)).at(-1)?.text)&&legacyLast.processed===1&&!audit.lastDecision&&audit.legacyRecoveredInboundId!==legacyLast.id&&
+    !existing.some(m=>m.direction==='outbound'&&(m.row_order??0)>(legacyLast.row_order??0))){
+   const legacyGuard=`EXISTS (${guard}) AND EXISTS (SELECT 1 FROM workbench_prospect_conversations live JOIN workbench_prospect_campaigns task ON task.id=live.campaign_id WHERE live.id=? AND live.version=? AND live.mode='agent' AND live.status='active' AND live.handoff_reason IS NULL AND task.status='active' AND json_extract(task.data_json,'$.chatEnabled')=1 AND EXISTS (SELECT 1 FROM workbench_prospect_devices d WHERE d.owner_id=live.owner_id AND d.member_id=live.member_id AND d.enabled=1 AND d.authenticated=1 AND d.account_id=live.sender_id))`;
+   const legacyValues=[...values,c.id,c.version];
+   statements.push(db.prepare(`UPDATE workbench_prospect_messages SET processed=0 WHERE id=? AND ${legacyGuard}`).bind(legacyLast.id,...legacyValues));
+   statements.push(db.prepare(`UPDATE workbench_prospect_conversations SET memory_json=json_set(memory_json,'$.legacyRecoveredInboundId',?) WHERE id=? AND ${legacyGuard}`).bind(legacyLast.id,c.id,...legacyValues));
+  }
   let resumeVerified=false;
   const resumeGuard=`EXISTS (${guard}) AND EXISTS (SELECT 1 FROM workbench_prospect_conversations WHERE id=? AND version=? AND mode='agent' AND handoff_reason=? AND ${recoverableReadPauseSql})`;
   if(recovering&&resuming&&last?.direction==='outbound'){
@@ -416,7 +427,7 @@ export function createProspectingChatStore(db:D1Database,now:()=>number=Date.now
   const memory=normalizeChatMemory(syncPause?JSON.parse(c.memory_json||'{}'):decision.memory??JSON.parse(c.memory_json||'{}'));
   if(decision.close)statements.push(...closeStatements(c,text(safeProspectError(decision.reason),500)||'客户要求停止联系',memory,guard,values));
   const handoff=decision.action==='handoff'||unresolved;if(handoff&&!decision.close)memory.stage='handoff';if(captured||c.contact_captured)memory.contactCaptured=true;if(unresolved)decision.reason='上一条回复结果待确认，已保留人工接管';
-  statements.push(db.prepare(`UPDATE workbench_prospect_conversations SET memory_json=?,status=CASE WHEN ?=1 THEN 'closed' ELSE status END,close_reason=CASE WHEN ?=1 THEN ? ELSE close_reason END,mode=CASE WHEN ?=1 THEN 'human' ELSE mode END,handoff_reason=CASE WHEN ?=1 THEN ? ELSE handoff_reason END,version=version+1,processing_token=NULL,processing_until=NULL,updated_at=? WHERE id=? AND version=? AND processing_token=?`).bind(JSON.stringify(memory),decision.close?1:0,decision.close?1:0,text(safeProspectError(decision.reason),500)||'客户要求停止联系',handoff?1:0,handoff?1:0,text(safeProspectError(decision.reason),500)||'已转交销售',stamp(),...values));
+  statements.push(db.prepare(`UPDATE workbench_prospect_conversations SET memory_json=?,status=CASE WHEN ?=1 THEN 'closed' ELSE status END,close_reason=CASE WHEN ?=1 THEN ? ELSE close_reason END,mode=CASE WHEN ?=1 THEN 'human' ELSE mode END,handoff_reason=CASE WHEN ?=1 THEN ? ELSE handoff_reason END,version=version+1,processing_token=NULL,processing_until=NULL,updated_at=? WHERE id=? AND version=? AND processing_token=?`).bind(JSON.stringify({...memory,...(object(JSON.parse(c.memory_json||'{}')).legacyRecoveredInboundId?{legacyRecoveredInboundId:object(JSON.parse(c.memory_json||'{}')).legacyRecoveredInboundId}:{}),lastDecision:{action:decision.action,inboundId:inbound.id,queued:!!replyJobId,snapshotId:c.last_snapshot_id,at:stamp()}}),decision.close?1:0,decision.close?1:0,text(safeProspectError(decision.reason),500)||'客户要求停止联系',handoff?1:0,handoff?1:0,text(safeProspectError(decision.reason),500)||'已转交销售',stamp(),...values));
   try{const results=await db.batch(statements);if(!results.at(-1)?.meta.changes)return true;
    if(replyJobId){const queued=await db.prepare('SELECT id FROM workbench_prospect_jobs WHERE id=?').bind(replyJobId).first();if(!queued)await db.prepare("UPDATE workbench_prospect_conversations SET mode='human',memory_json=json_set(memory_json,'$.stage','handoff'),handoff_reason='助手身份已改变，未排队回复',version=version+1 WHERE id=?").bind(c.id).run();}
    return true;

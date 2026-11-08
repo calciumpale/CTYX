@@ -124,6 +124,31 @@ test('diagnostic reasons redact account identifiers and quoted credentials',asyn
  const serialized=JSON.stringify(body);for(const forbidden of ['owner-a','member-a','MS4w','private-'])assert.ok(!serialized.includes(forbidden),`reason leaked ${forbidden}`);
 });
 
+test('diagnostic credential redaction discards complete raw tails before truncation',async t=>{
+ const f=await diagnosticsFixture();t.after(()=>f.sqlite.close());
+ const cases=[
+  {name:'quoted space',tail:'secret="alpha beta" 后续内容'},
+  {name:'quoted semicolon',tail:'cookie="a=b; c=d" 后续内容'},
+  {name:'single quote',tail:"password='alpha beta; gamma' 后续内容"},
+  {name:'unterminated quote',tail:'api_key="alpha beta; gamma'},
+  {name:'multiline quote',tail:'authorization="alpha\nbeta; gamma" 后续内容'},
+  {name:'JSON credential',tail:'{"secret":"alpha beta; gamma"} 后续内容'},
+  {name:'bearer credential',tail:'Bearer alpha beta; gamma 后续内容'},
+  {name:'long value',tail:`secret="alpha ${'beta; '.repeat(200)}gamma" 后续内容`},
+  {name:'quote crosses truncation boundary',prefix:`${'前'.repeat(478)} `,tail:'cookie="a=b; c=d" 后续内容'},
+ ];
+ for(const entry of cases){
+  const prefix=entry.prefix??'连接失败 ';
+  f.sqlite.prepare('UPDATE workbench_prospect_conversations SET handoff_reason=?').run(prefix+entry.tail);
+  f.sqlite.prepare("UPDATE workbench_prospect_jobs SET error=? WHERE id='pj-6'").run(prefix+entry.tail);
+  const response=await f.service.deviceStatus(f.request());assert.equal(response.status,200);const body=await readDiagnostics(response);const c=body.diagnostics.conversations[0];
+  const expected=prefix+(entry.name==='JSON credential'?'{':'')+'[凭证已隐藏]';
+  assert.equal(c.handoff_reason,expected,`${entry.name}: handoff reason leaked a credential fragment`);
+  assert.equal(c.jobs[0].error,expected,`${entry.name}: job error leaked a credential fragment`);
+ }
+ assert.equal(f.writes(),0);
+});
+
 test('ordinary status requests still only touch device liveness',async t=>{
  const f=await diagnosticsFixture();t.after(()=>f.sqlite.close());
  for(const diagnostics of [undefined,false,'true']){

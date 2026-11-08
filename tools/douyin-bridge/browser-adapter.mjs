@@ -625,7 +625,7 @@ export class DouyinBrowserAdapter {
         for (const row of rows) {
           if (!row.text || row.text.length > 5000) continue;
           let target; try { target = profileIdentity(row.profileUrl); } catch { /* preserve anonymous source, never guess identity */ }
-          const commentId = /^[a-zA-Z0-9_.:-]{1,140}$/.test(row.nativeId) ? row.nativeId : `dom:${digest(`${source.id}\n${target?.id || row.nickname}\n${row.text}\n${row.postedAt}`)}`;
+          const commentId = /^[a-zA-Z0-9_.:-]{1,140}$/.test(row.nativeId) ? row.nativeId : `dom:${digest(`${source.id}\n${target?.id || row.nickname}\n${row.text}`)}`;
           if (videoComments.has(commentId)) continue;
           if (videoComments.size >= limit || comments.size >= 300) break;
           const item = { id: commentId, videoId: source.id, videoUrl: source.url, text: row.text, nickname: row.nickname.slice(0, 100), ...(target ? { recipientId: target.id, profileUrl: target.url } : {}), ...(row.postedAt ? { postedAt: row.postedAt } : {}), source: 'browser' };

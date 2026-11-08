@@ -17,10 +17,11 @@ export function createProspectingService(deps:Dependencies){
  const store=createProspectingStore(deps.db);
  const getModel=async(ownerId:string,origin:string)=>{try{return await deps.readModel(ownerId,origin);}catch{return null;}};
  const generator=(model:EffectiveModel)=>(messages:Parameters<typeof requestModelText>[1])=>requestModelText(model,messages,{timeoutMs:25000});
- async function snapshot(ownerId:string,memberId:string,origin:string,campaignId?:string):Promise<ProspectSnapshot>{
+ async function snapshot(ownerId:string,memberId:string,origin:string,campaignId?:string,leadPage=1,runId?:string):Promise<ProspectSnapshot>{
   const campaigns=await store.campaigns(ownerId,memberId);const selected=campaignId||campaigns[0]?.id;
   const device=await store.device(ownerId,memberId);const campaign=selected?await store.campaign(ownerId,memberId,selected):undefined;
-  return{campaigns,campaign,device,leads:selected?await store.leads(ownerId,memberId,selected):[],jobs:selected?await store.jobs(ownerId,memberId,selected):[],modelReady:!!await getModel(ownerId,origin)};
+  const page=Math.max(1,Math.floor(leadPage)||1);
+  return{discoveryRuns:selected?await store.discovery.runs(ownerId,memberId,selected):[],leadPagination:{page,pageSize:30,total:selected?await store.leadCount(ownerId,memberId,selected,runId):0},campaigns,campaign,device,leads:selected?await store.leads(ownerId,memberId,selected,page,runId):[],jobs:selected?await store.jobs(ownerId,memberId,selected):[],modelReady:!!await getModel(ownerId,origin)};
  }
  /** Each poll processes a small durable batch, so work continues with the page closed. */
  async function analyzeBatch(ownerId:string,memberId:string,origin:string,campaignId?:string):Promise<number>{
@@ -36,7 +37,7 @@ export function createProspectingService(deps:Dependencies){
   try{
    const role=requireMemberRole(request);assertMemberApi(role,'/api/prospecting',request.method);
    const ownerId=outerOwnerId(request),memberId=request.headers.get('x-ctai-member-account-id')!,origin=new URL(request.url).origin;
-   if(request.method==='GET'){const query=new URL(request.url).searchParams;if(query.get('mode')==='chat')return json(await store.chat.snapshot(ownerId,memberId,role,query.get('campaignId')||undefined,query.get('conversationId')||undefined));return json(await snapshot(ownerId,memberId,origin,query.get('campaignId')||undefined));}
+   if(request.method==='GET'){const query=new URL(request.url).searchParams;if(query.get('mode')==='chat')return json(await store.chat.snapshot(ownerId,memberId,role,query.get('campaignId')||undefined,query.get('conversationId')||undefined));return json(await snapshot(ownerId,memberId,origin,query.get('campaignId')||undefined,Number(query.get('leadPage')||1),query.get('runId')||undefined));}
    assertMemberOrigin(request);const input=await readMeetingBody(request,1600000);const action=input.action;
    let campaignId=typeof input.campaignId==='string'?prospectId(input.campaignId):undefined;let message='操作已保存';let deviceCredentials:Awaited<ReturnType<typeof store.connect>>|undefined;
    if(['chatSettings','chatTakeover','chatResume','chatReply','chatSync'].includes(String(action))){
@@ -57,7 +58,10 @@ export function createProspectingService(deps:Dependencies){
     const campaign=await store.createCampaign(ownerId,memberId,normalizeCampaignInput({...input,keywords}));campaignId=campaign.id;message='需求已保存，连接后点击发现竞品账号';
    }else{
     if(!campaignId)throw new DomainError('请选择获客任务');
-    if(action==='discover'){await store.createJob(ownerId,memberId,campaignId,'discover');message='账号发现已排队，结果会自动刷新';}
+    if(action==='discoverySchedule'){await store.discoverySchedule(ownerId,memberId,campaignId,input.dailyDiscovery);message='每日发现计划已保存';}
+    else if(action==='selectCandidates'){if(!Array.isArray(input.candidateIds))throw new DomainError('请选择有效账号');await store.selectCandidates(ownerId,memberId,campaignId,input.candidateIds as string[]);}
+    else if(action==='discoveryRun'){await store.discoveryRun(ownerId,memberId,campaignId);message='完整发现轮次已排队';}
+    else if(action==='discover'){await store.createJob(ownerId,memberId,campaignId,'discover');message='账号发现已排队，结果会自动刷新';}
     else if(action==='collect'){
      if(!Array.isArray(input.candidateIds)||input.candidateIds.length>30||input.candidateIds.some(x=>typeof x!=='string'))throw new DomainError('请选择有效的竞品账号');
      await store.createJob(ownerId,memberId,campaignId,'collect',input.candidateIds as string[]);message='评论采集已排队，保持本机助手在线即可';
@@ -94,11 +98,12 @@ export function createProspectingService(deps:Dependencies){
    if(request.method!=='POST')throw new DomainError('只允许POST请求',405);
    if(request.headers.has('origin')||request.headers.get('sec-fetch-site')==='cross-site')throw new DomainError('设备接口不接受浏览器跨站请求',403);
    const input=await readMeetingBody(request,action==='complete'?1600000:16000);
-   const deviceId=prospectId(input.deviceId);const device=await store.authenticate(deviceId,request.headers.get('authorization')?.replace(/^Bearer /,'')??'');
+   const deviceId=prospectId(input.deviceId);const device=await store.authenticate(deviceId,request.headers.get('authorization')?.replace(/^Bearer /,'')??'',true);
    if(action==='poll'){
     await store.seen(deviceId,{authenticated:input.authenticated===true,accountId:typeof input.accountId==='string'?input.accountId:undefined,accountName:text(input.accountName,100),message:text(input.message,500),verifiedReadOnlyAccountId:typeof input.verifiedReadOnlyAccountId==='string'?input.verifiedReadOnlyAccountId:undefined});
     const current=await store.device(device.owner_id,device.member_id);
     if(!current.authenticated)return json({job:null});
+    await store.scheduleDiscovery(deviceId);
     const supportsConversations=input.conversationVersion===1;
     const verifiedAccountId=typeof input.verifiedReadOnlyAccountId==='string'&&/^dy-readonly-[a-f0-9]{24}$/.test(input.verifiedReadOnlyAccountId)&&current.accountId===input.accountId&&!current.accountId?.startsWith('dy-readonly-')?current.accountId:undefined;
     const acknowledgement=verifiedAccountId?{verifiedAccountId}:{};

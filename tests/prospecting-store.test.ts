@@ -9,9 +9,10 @@ function fixture(){
  const sqlite=new DatabaseSync(':memory:');
  for(const file of readdirSync(new URL('../drizzle/',import.meta.url)).filter(x=>x.endsWith('.sql')).sort())sqlite.exec(readFileSync(new URL(`../drizzle/${file}`,import.meta.url),'utf8'));
  sqlite.exec("INSERT INTO workbench_member_accounts VALUES ('member-a','owner-a','sales','销售','sales','sales-1',1,'salt','hash',100000,'now','now'),('member-b','owner-a','manager','管理者','manager',NULL,1,'salt','hash',100000,'now','now'),('member-c','owner-b','sales','销售','sales','sales-2',1,'salt','hash',100000,'now','now')");
+ let intercept:(()=>Promise<void>)|undefined;
  let batches:Promise<unknown>=Promise.resolve();
- const db={prepare(sql:string){let values:unknown[]=[];return{bind(...args:unknown[]){values=args;return this;},async first(){return sqlite.prepare(sql).get(...values as never[])??null;},async all(){return{results:sqlite.prepare(sql).all(...values as never[])};},async run(){return{meta:{changes:Number(sqlite.prepare(sql).run(...values as never[]).changes)}};}};},batch(items:{run:()=>Promise<unknown>}[]){const execute=async()=>{sqlite.exec('BEGIN');try{const out=[];for(const x of items)out.push(await x.run());sqlite.exec('COMMIT');return out;}catch(e){sqlite.exec('ROLLBACK');throw e;}};const next=batches.then(execute,execute);batches=next.catch(()=>{});return next;}} as unknown as D1Database;
- let time=Date.parse('2026-11-05T02:00:00Z');return{sqlite,store:createProspectingStore(db,()=>time),advance:(ms:number)=>{time+=ms;}};
+ const db={prepare(sql:string){let values:unknown[]=[];return{bind(...args:unknown[]){values=args;return this;},async first(){return sqlite.prepare(sql).get(...values as never[])??null;},async all(){return{results:sqlite.prepare(sql).all(...values as never[])};},async run(){return{meta:{changes:Number(sqlite.prepare(sql).run(...values as never[]).changes)}};}};},batch(items:{run:()=>Promise<unknown>}[]){const execute=async()=>{const hook=intercept;intercept=undefined;if(hook)await hook();sqlite.exec('BEGIN');try{const out=[];for(const x of items)out.push(await x.run());sqlite.exec('COMMIT');return out;}catch(e){sqlite.exec('ROLLBACK');throw e;}};const next=batches.then(execute,execute);batches=next.catch(()=>{});return next;}} as unknown as D1Database;
+ let time=Date.parse('2026-11-05T02:00:00Z');return{interceptNextBatch:(hook:()=>Promise<void>)=>{intercept=hook;},sqlite,store:createProspectingStore(db,()=>time),advance:(ms:number)=>{time+=ms;}};
 }
 const campaignInput=normalizeCampaignInput({requirements:'为中小企业提供销售培训工具',keywords:['销售培训'],greetingTemplate:'你好，可以介绍产品的试用方式。'});
 const readOnlyAccountId='dy-readonly-0123456789abcdef01234567';
@@ -356,11 +357,11 @@ test('one sender is rate limited across campaigns and daily quotas survive faile
  await f.store.insertComments('owner-a','member-a',c.id,[scoreComment(comment,c)]);const l=(await f.store.leads('owner-a','member-a',c.id))[0];
  await f.store.review('owner-a','member-a',c.id,l.id,1,'approve',l.greeting,'销售');assert.equal(await f.store.claim(x.device.deviceId),null);f.advance(61000);assert.equal(await f.store.claim(x.device.deviceId),null);
 });
-test('concurrent comment imports enforce the stored capacity without hidden overflow',async t=>{
+test('concurrent comment imports retain leads beyond lifetime 300 cap',async t=>{
  const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);
  const batch=(prefix:string)=>Array.from({length:300},(_,i)=>scoreComment({...x.lead,id:`${prefix}-${i}`},x.campaign));
  await Promise.all([f.store.insertComments('owner-a','member-a',x.campaign.id,batch('a')),f.store.insertComments('owner-a','member-a',x.campaign.id,batch('b'))]);
- assert.equal(f.sqlite.prepare('SELECT count(*) AS n FROM workbench_prospect_leads WHERE campaign_id=?').get(x.campaign.id)?.n,300);
+ assert.equal(f.sqlite.prepare('SELECT count(*) AS n FROM workbench_prospect_leads WHERE campaign_id=?').get(x.campaign.id)?.n,601);
 });
 test('automatic model-qualified leads resume when device reconnects without repeating analysis',async t=>{
  const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);
@@ -420,4 +421,125 @@ test('an opted out recipient cannot be explicitly retried and failed history rem
  const f=fixture();t.after(()=>f.sqlite.close());const x=await completedSend(f);const prior=f.sqlite.prepare('SELECT * FROM workbench_prospect_jobs WHERE id=?').get(x.job.id);
  f.sqlite.prepare('INSERT INTO workbench_prospect_contact_optouts VALUES (?,?,?,?,?)').run('owner-a','MS4wSender001','MS4wTarget001','停止联系','2026-11-05T02:00:00.000Z');
  await assert.rejects(f.store.retrySend('owner-a','member-a',x.campaign.id,x.lead.id,x.lead.version,'审核员'),/停止联系/);assert.deepEqual(f.sqlite.prepare('SELECT * FROM workbench_prospect_jobs WHERE id=?').get(x.job.id),prior);assert.equal((await f.store.jobs('owner-a','member-a',x.campaign.id)).length,1);
+});
+test('daily schedule is opt-in and parallel due polls enqueue one daily run',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);
+ await f.store.scheduleDiscovery(x.device.deviceId);
+ assert.equal((await f.store.discovery.runs('owner-a','member-a',x.campaign.id)).length,0);
+ await f.store.discoverySchedule('owner-a','member-a',x.campaign.id,{enabled:true,time:'09:00'});
+ f.advance(86400000);await f.store.touchDevice(x.device.deviceId);
+ await Promise.all([f.store.scheduleDiscovery(x.device.deviceId),f.store.scheduleDiscovery(x.device.deviceId)]);
+ const runs=await f.store.discovery.runs('owner-a','member-a',x.campaign.id);assert.equal(runs.length,1);
+ assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM workbench_prospect_jobs WHERE json_extract(input_json,'$.discoveryRunId')=?").get(runs[0].id)?.n,1);
+ await f.store.discoverySchedule('owner-a','member-a',x.campaign.id,{enabled:false,time:'09:00'});
+ assert.equal((await f.store.discovery.runs('owner-a','member-a',x.campaign.id))[0].status,'cancelled');
+});
+for(const scenario of [
+ {name:'keeps the next Beijing day when changing 09:00 to 00:30',firstTime:'09:00',firstAt:'2026-11-08T01:00:00.000Z',editAt:'2026-11-08T02:00:00.000Z',secondTime:'00:30',secondAt:'2026-11-08T16:30:00.000Z',scheduled:['2026-11-08T01:00:00.000Z','2026-11-08T16:30:00.000Z'],days:['2026-11-08','2026-11-09']},
+ {name:'does not run twice on one Beijing day when changing 00:30 to 09:00',firstTime:'00:30',firstAt:'2026-11-07T16:30:00.000Z',editAt:'2026-11-07T17:00:00.000Z',secondTime:'09:00',secondAt:'2026-11-08T01:00:00.000Z',scheduled:['2026-11-07T16:30:00.000Z'],days:['2026-11-08']},
+])test(`daily schedule ${scenario.name}`,async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);
+ f.advance(Date.parse(scenario.firstAt)-Date.parse('2026-11-05T02:00:00.000Z')-60000);
+ await f.store.discoverySchedule('owner-a','member-a',x.campaign.id,{enabled:true,time:scenario.firstTime});
+ f.advance(60000);await f.store.touchDevice(x.device.deviceId);await f.store.scheduleDiscovery(x.device.deviceId);
+ const first=await f.store.claim(x.device.deviceId);assert.equal(first?.kind,'discover');
+ await f.store.complete(x.device.deviceId,first!.id,first!.leaseToken,{candidates:[]});
+ f.advance(Date.parse(scenario.editAt)-Date.parse(scenario.firstAt));
+ await f.store.discoverySchedule('owner-a','member-a',x.campaign.id,{enabled:true,time:scenario.secondTime});
+ assert.equal((await f.store.campaign('owner-a','member-a',x.campaign.id)).dailyDiscovery?.nextRunAt,scenario.secondAt);
+ f.advance(Date.parse(scenario.secondAt)-Date.parse(scenario.editAt));await f.store.touchDevice(x.device.deviceId);
+ await Promise.all([f.store.scheduleDiscovery(x.device.deviceId),f.store.scheduleDiscovery(x.device.deviceId)]);
+ const runs=f.sqlite.prepare('SELECT daily_key,scheduled_for FROM workbench_prospect_discovery_runs WHERE campaign_id=? ORDER BY scheduled_for').all(x.campaign.id);
+ assert.deepEqual(runs.map(run=>run.scheduled_for),scenario.scheduled);
+ assert.deepEqual(runs.map(run=>run.daily_key),scenario.days);
+ assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM workbench_prospect_jobs WHERE campaign_id=? AND kind='discover'").get(x.campaign.id)?.n,scenario.scheduled.length);
+});
+test('run completion is idempotent and cancelled running discovery cannot mutate candidates',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);
+ await f.store.discoveryRun('owner-a','member-a',x.campaign.id);
+ const job=await f.store.claim(x.device.deviceId);assert.equal(job?.kind,'discover');
+ const candidate={id:'fresh',nickname:'fresh',profileUrl:'https://www.douyin.com/user/MS4wFresh001',description:'',reason:'匹配',videos:[]};
+ await Promise.all([f.store.complete(x.device.deviceId,job!.id,job!.leaseToken,{candidates:[candidate]}),f.store.complete(x.device.deviceId,job!.id,job!.leaseToken,{candidates:[candidate]})]);
+ assert.equal((await f.store.campaign('owner-a','member-a',x.campaign.id)).candidates.filter(c=>c.id==='MS4wFresh001').length,1);
+ const before=await f.store.discovery.runs('owner-a','member-a',x.campaign.id);await f.store.complete(x.device.deviceId,job!.id,job!.leaseToken,{candidates:[candidate]});
+ assert.deepEqual(await f.store.discovery.runs('owner-a','member-a',x.campaign.id),before);
+ await f.store.discoveryRun('owner-a','member-a',x.campaign.id);const pending=await f.store.claim(x.device.deviceId);await f.store.setPaused('owner-a','member-a',x.campaign.id,true);
+ await assert.rejects(()=>f.store.complete(x.device.deviceId,pending!.id,pending!.leaseToken,{candidates:[{...candidate,profileUrl:'https://www.douyin.com/user/MS4wCancelled001'}]}));
+ assert.equal((await f.store.campaign('owner-a','member-a',x.campaign.id)).candidates.some(c=>c.id==='MS4wCancelled001'),false);
+});
+test('SQL pagination keeps 30 rows and run scope after model updates',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);
+ await f.store.insertComments('owner-a','member-a',x.campaign.id,Array.from({length:65},(_,i)=>scoreComment({...x.lead,id:`page-${i}`},x.campaign)),'run-page');
+ assert.equal(await f.store.leadCount('owner-a','member-a',x.campaign.id,'run-page'),65);
+ assert.equal((await f.store.leads('owner-a','member-a',x.campaign.id,2,'run-page')).length,30);
+ assert.equal((await f.store.leads('owner-a','member-a',x.campaign.id,3,'run-page')).length,5);
+});
+test('four automatic conversation reads yield one background slice, manual sync remains first',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);const time='2026-11-05T02:00:00.000Z';
+ await f.store.chat.settings('owner-a','member-a',x.campaign.id,true);
+ f.sqlite.prepare("INSERT INTO workbench_prospect_conversations(id,owner_id,member_id,campaign_id,lead_id,sender_id,recipient_id,profile_url,nickname,opened_at,last_message_at,updated_at) VALUES ('thread','owner-a','member-a',?,?,?,?,?,'客户',?,?,?)").run(x.campaign.id,x.lead.id,'MS4wSender001','MS4wTarget001',x.lead.profileUrl!,time,time,time);
+ const input={conversationId:'thread',recipientId:'MS4wTarget001',profileUrl:x.lead.profileUrl,senderAccountId:'MS4wSender001'};
+ for(let i=0;i<4;i++)f.sqlite.prepare("INSERT INTO workbench_prospect_jobs(id,owner_id,member_id,device_id,campaign_id,kind,status,input_json,sender_id,started_at,created_at,updated_at) VALUES (?,'owner-a','member-a',?,?,'readConversation','done',?,'MS4wSender001',?,?,?)").run(`history-${i}`,x.device.deviceId,x.campaign.id,JSON.stringify(input),time,time,time);
+ f.sqlite.prepare("INSERT INTO workbench_prospect_jobs(id,owner_id,member_id,device_id,campaign_id,kind,status,input_json,sender_id,created_at,updated_at) VALUES ('auto-read','owner-a','member-a',?,?,'readConversation','queued',?,'MS4wSender001',?,?)").run(x.device.deviceId,x.campaign.id,JSON.stringify(input),time,time);
+ await f.store.discoveryRun('owner-a','member-a',x.campaign.id);
+ f.sqlite.prepare("INSERT INTO workbench_prospect_jobs(id,owner_id,member_id,device_id,campaign_id,kind,status,input_json,sender_id,created_at,updated_at) VALUES ('manual-read','owner-a','member-a',?,?,'readConversation','queued',?,'MS4wSender001',?,?)").run(x.device.deviceId,x.campaign.id,JSON.stringify({...input,manualSync:true}),time,time);
+ const manual=await f.store.claim(x.device.deviceId,false,true);assert.equal(manual?.id,'manual-read');f.sqlite.prepare("UPDATE workbench_prospect_jobs SET status='done' WHERE id='manual-read'").run();
+ const bg=await f.store.claim(x.device.deviceId,false,true);assert.equal(bg?.kind,'discover');
+ await f.store.complete(x.device.deviceId,bg!.id,bg!.leaseToken,{candidates:[]});
+ const read=await f.store.claim(x.device.deviceId,false,true);assert.equal(read?.id,'auto-read');
+});
+test('complete daily discovery collects small slices and counts actual unique customer inserts',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.store.discoveryRun('owner-a','member-a',x.campaign.id);
+ const discovery=await f.store.claim(x.device.deviceId);const videoId='7654321234567891';
+ await f.store.complete(x.device.deviceId,discovery!.id,discovery!.leaseToken,{candidates:[{profileUrl:'https://www.douyin.com/user/MS4wFresh001',nickname:'账号',videos:[{id:videoId,title:'来源'}]}]});
+ const collect=await f.store.claim(x.device.deviceId);assert.equal(collect?.kind,'collect');assert.ok(collect!.input.videos!.length<=2);
+ const comments=[{id:'new-1',videoId,text:'想购买',nickname:'客户',profileUrl:'https://www.douyin.com/user/MS4wNewUser001'},{id:'new-2',videoId,text:'需要试用',nickname:'客户',profileUrl:'https://www.douyin.com/user/MS4wNewUser001'}];
+ await f.store.complete(x.device.deviceId,collect!.id,collect!.leaseToken,{comments});
+ const run=(await f.store.discovery.runs('owner-a','member-a',x.campaign.id))[0];assert.equal(run.status,'completed');assert.equal(run.readComments,2);assert.equal(run.newComments,2);assert.equal(run.newLeads,1);
+ assert.equal((await f.store.leads('owner-a','member-a',x.campaign.id,1,run.id)).length,2);
+ await f.store.complete(x.device.deviceId,collect!.id,collect!.leaseToken,{comments});assert.equal((await f.store.discovery.runs('owner-a','member-a',x.campaign.id))[0].newComments,2);
+});
+test('poll resumes phase propagation after interrupted terminal completion and expired jobs',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.store.discoveryRun('owner-a','member-a',x.campaign.id);
+ const job=await f.store.claim(x.device.deviceId);f.sqlite.prepare("UPDATE workbench_prospect_jobs SET status='done',active_key=NULL,result_json='{}' WHERE id=?").run(job!.id);
+ await f.store.scheduleDiscovery(x.device.deviceId);assert.equal((await f.store.discovery.runs('owner-a','member-a',x.campaign.id))[0].status,'completed');
+});
+test('bridge credential rejection cancels revoked discovery but status authentication stays read-only',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.store.discoveryRun('owner-a','member-a',x.campaign.id);
+ f.sqlite.exec("UPDATE workbench_member_accounts SET enabled=0 WHERE account_id='member-a'");
+ await assert.rejects(()=>f.store.authenticate(x.device.deviceId,x.device.deviceToken));
+ assert.equal(f.sqlite.prepare("SELECT status FROM workbench_prospect_discovery_runs LIMIT 1").get()?.status,'discovering');
+ await assert.rejects(()=>f.store.authenticate(x.device.deviceId,x.device.deviceToken,true));
+ assert.equal(f.sqlite.prepare("SELECT status FROM workbench_prospect_discovery_runs LIMIT 1").get()?.status,'cancelled');
+});
+test('legacy DOM comments deduplicate across relative timestamps without resetting review/model state',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);const old=scoreComment({...x.lead,id:'dom:legacy',text:'新的咨询',postedAt:'3分钟前'},x.campaign);
+ await f.store.insertComments('owner-a','member-a',x.campaign.id,[old],'old-run');
+ f.sqlite.prepare("UPDATE workbench_prospect_leads SET status='rejected',analysis_attempted=1,version=7 WHERE id='dom:legacy'").run();
+ assert.equal(await f.store.insertComments('owner-a','member-a',x.campaign.id,[{...old,id:'dom:newhash',postedAt:'昨天'}],'new-run'),0);
+ assert.equal(await f.store.insertComments('owner-a','member-a',x.campaign.id,[{...old,id:'native-upgrade'}],'new-run'),0);
+ const row=f.sqlite.prepare("SELECT status,analysis_attempted,version,data_json FROM workbench_prospect_leads WHERE id='dom:legacy'").get()!;assert.equal(row.status,'rejected');assert.equal(row.analysis_attempted,1);assert.equal(row.version,7);assert.equal(JSON.parse(String(row.data_json)).firstRunId,'old-run');
+ assert.equal(await f.store.insertComments('owner-a','member-a',x.campaign.id,[{...old,id:'native-independent',text:'另一个问题'}],'new-run'),1);
+});
+test('keyword slices enforce one shared thirty-account discovery budget',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);const c=await f.store.createCampaign('owner-a','member-a',{...campaignInput,keywords:['词一','词二']});await f.store.discoveryRun('owner-a','member-a',c.id);
+ for(let round=0;round<2;round++){const job=await f.store.claim(x.device.deviceId);assert.equal(job?.input.keywords?.length,1);await f.store.complete(x.device.deviceId,job!.id,job!.leaseToken,{candidates:Array.from({length:30},(_,i)=>({profileUrl:`https://www.douyin.com/user/Account${round}_${i}`,nickname:'账号',videos:[]}))});}
+ assert.equal((await f.store.campaign('owner-a','member-a',c.id)).candidates.length,30);assert.equal((await f.store.discovery.runs('owner-a','member-a',c.id))[0].discoveredAccounts,30);
+});
+test('offline catch-up creates only latest occurrence and schedule edits apply strictly in future',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.store.discoverySchedule('owner-a','member-a',x.campaign.id,{enabled:true,time:'09:00'});
+ f.advance(4*86400000);await f.store.touchDevice(x.device.deviceId);await f.store.scheduleDiscovery(x.device.deviceId);await f.store.scheduleDiscovery(x.device.deviceId);
+ const runs=await f.store.discovery.runs('owner-a','member-a',x.campaign.id);assert.equal(runs.length,1);assert.equal(runs[0].scheduledFor,'2026-11-09T01:00:00.000Z');
+ await f.store.discoverySchedule('owner-a','member-a',x.campaign.id,{enabled:true,time:'08:00'});await f.store.scheduleDiscovery(x.device.deviceId);
+ assert.equal((await f.store.discovery.runs('owner-a','member-a',x.campaign.id)).length,1);assert.equal((await f.store.campaign('owner-a','member-a',x.campaign.id)).dailyDiscovery?.nextRunAt,'2026-11-10T00:00:00.000Z');
+});
+
+test('discovery completion preserves a selection cancelled after its JS read',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);
+ const candidate={profileUrl:'https://www.douyin.com/user/AccountOld',nickname:'old',videos:[]};
+ await f.store.createJob('owner-a','member-a',x.campaign.id,'discover');let job=await f.store.claim(x.device.deviceId);await f.store.complete(x.device.deviceId,job!.id,job!.leaseToken,{candidates:[candidate]});
+ await f.store.createJob('owner-a','member-a',x.campaign.id,'discover');job=await f.store.claim(x.device.deviceId);
+ f.interceptNextBatch(()=>f.store.selectCandidates('owner-a','member-a',x.campaign.id,[]));
+ await f.store.complete(x.device.deviceId,job!.id,job!.leaseToken,{candidates:[candidate,{...candidate,profileUrl:'https://www.douyin.com/user/AccountNew'}]});
+ const current=await f.store.campaign('owner-a','member-a',x.campaign.id);assert.deepEqual(current.selectedCandidateIds,['AccountNew']);assert.equal(current.candidates.length,2);
 });

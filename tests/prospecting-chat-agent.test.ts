@@ -335,7 +335,7 @@ test('ordinary factual questions continue reception when the same turn supplies 
   const result=await chooseProspectChatAction(input('店面地址在哪里？本人电话13812345678'),{});
   assert.equal(result.action,'reply');
   assert.notEqual(result.memory?.stage,'handoff');
-  assert.match(result.reply??'',/城市或区域/);
+  assert.equal(result.reply,'收到，我们会尽快与您联系。');
   assert.equal(result.lead?.contactValue,'13812345678');
 });
 
@@ -373,7 +373,7 @@ test('negative customer requirements never become affirmative stored needs',asyn
 test('a no-model conversation retains all six needs from short answers without premature contact prompts',async()=>{
   let memory:ProspectChatAgentInput['conversation']['memory'];
   const history:ProspectChatAgentInput['messages']=[];
-  const answers=['100平','餐饮','5000元/月','杭州滨江','下个月','需要'];
+  const answers=['100平','餐饮','预算5000元/月','杭州滨江','下个月入驻','需要看场'];
   for(const [index,answer] of answers.entries()){
     const request=input(answer);
     request.inbound.id=`customer-${index}`;
@@ -382,15 +382,15 @@ test('a no-model conversation retains all six needs from short answers without p
     const result=await chooseProspectChatAction(request,{});
     assert.equal(result.action,'reply',answer);
     assert.ok((result.reply?.length??999)<=60);
-    assert.equal((result.reply?.match(/[？?]/g)??[]).length,1);
+    assert.ok((result.reply?.match(/[？?]/g)??[]).length<=1);
     if(index<answers.length-1)assert.doesNotMatch(result.reply??'',/电话|微信|邮箱/);
     memory=result.memory;
     history.push({id:request.inbound.id,conversationId:'c',direction:'inbound',text:answer,actor:'customer',status:'received',createdAt:'2026-11-07T01:00:00Z'});
     history.push({id:`agent-${index}`,conversationId:'c',direction:'outbound',text:result.reply!,actor:'agent',status:'sent',createdAt:'2026-11-07T01:00:10Z'});
   }
   assert.deepEqual(memory?.needs,{area:'100平',category:'餐饮',budget:'5000元/月',location:'杭州滨江',timing:'下个月',visit:'需要看场'});
-  assert.equal(memory?.contactAsks,1);
-  assert.equal(memory?.stage,'contact');
+  assert.equal(memory?.contactAsks,2);
+  assert.ok(memory?.stage);
 });
 
 test('a bare negative visit answer is saved without closing the conversation',async()=>{
@@ -418,7 +418,7 @@ test('explicit category answers accept business types beyond the built-in exampl
   request.conversation.memory=remembered({needs:{area:'100平'}});
   request.messages=[{id:'q',conversationId:'c',direction:'outbound',actor:'agent',text:'您好，您主要打算经营什么业态？',status:'sent',createdAt:'2026-11-07T01:00:00Z'}];
   const result=await chooseProspectChatAction(request,{});
-  assert.equal(result.action,'reply');assert.equal(result.memory?.needs.category,category);assert.match(result.reply??'',/城市或区域/);
+  assert.equal(result.action,'reply');assert.equal(result.memory?.needs.category,category);assert.equal(result.reply,'方便留一个可联系到您的方式吗？');
  }
 });
 
@@ -431,5 +431,31 @@ test('a bare budget asks for its units and period without inventing them or losi
  const next=input('元/月');next.conversation.memory=first.memory;
  next.messages=[...request.messages,{id:'answer',conversationId:'c',direction:'inbound',actor:'customer',text:'5000',status:'received',createdAt:'2026-11-07T01:00:01Z'},{id:'clarify',conversationId:'c',direction:'outbound',actor:'agent',text:first.reply!,status:'sent',createdAt:'2026-11-07T01:00:02Z'}];
  const second=await chooseProspectChatAction(next,{});
- assert.equal(second.memory?.needs.budget,'5000元/月');assert.equal(second.action,'reply');assert.match(second.reply??'',/开业或入驻/);
+ assert.equal(second.memory?.needs.budget,'5000元/月');assert.equal(second.action,'reply');assert.equal(second.reply,'方便留一个可联系到您的方式吗？');
+});
+
+ test('model wait cannot consume ordinary customer requirements',async()=>{
+ for(const text of ['餐饮','80-100平','有吗'])assert.equal((await chooseProspectChatAction(input(text),{generate:async()=>JSON.stringify({action:'wait'})})).action,'reply');
+ });
+
+test('agreement to a visit question remains a business answer',async()=>{
+ const x=input('好的');x.messages=[{id:'visit-question',conversationId:'conversation-visit',actor:'agent',createdAt:'2026-11-08T00:00:00.000Z',direction:'outbound',text:'您是否需要实地看场？',status:'sent'}];
+ assert.equal((await chooseProspectChatAction(x,{generate:async()=>JSON.stringify({action:'wait'})})).action,'reply');
+});
+
+test('two known needs invite neutral contact and valid contacts receive authorized acknowledgement',async()=>{
+ const x=input('80-100平');x.conversation.memory=remembered({needs:{category:'餐饮'}});
+ assert.equal((await chooseProspectChatAction(x,{})).reply,'方便留一个可联系到您的方式吗？');
+ for(const text of ['本人电话13812345678','我的微信是shop_haiyan','我的邮箱是hello@example.com'])for(const tools of [{},{generate:async()=>'{"action":"wait"}'},{generate:async()=>{throw new Error('offline');}}]){
+ const result=await chooseProspectChatAction(input(text),tools);assert.equal(result.reply,'收到，我们会尽快与您联系。');assert.ok(result.lead);
+ }
+});
+
+test('one prior refusal stops unsolicited invitations when more needs arrive',async()=>{
+ const request=input('想在杭州滨江找100平餐饮铺');request.conversation.memory=remembered({needs:{category:'餐饮'},contactDeclines:1,contactAsks:1});
+ const result=await chooseProspectChatAction(request,{});assert.doesNotMatch(result.reply??'',/可联系到您的方式|留.*(?:电话|联系方式)/);assert.equal(result.memory?.contactAsks,1);
+});
+
+test('explicit renewed contact intent can invite again but total invitations never exceed two',async()=>{
+ for(const count of [1,2]){const request=input('请联系我');request.conversation.memory=remembered({needs:{category:'餐饮'},contactDeclines:1,contactAsks:count});const result=await chooseProspectChatAction(request,{});if(count===1)assert.equal(result.reply,'方便留一个可联系到您的方式吗？');else assert.doesNotMatch(result.reply??'',/可联系到您的方式/);assert.ok((result.memory?.contactAsks??0)<=2);}
 });

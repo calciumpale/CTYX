@@ -231,3 +231,13 @@
   .prospect-task-picker { flex-wrap: wrap; }
   .prospect-task-picker > select { width: 100%; }
 }
+
+.prospect-daily { padding: 14px 0; border-bottom: 1px solid var(--border); font-size: 12px; }
+.prospect-daily form, .prospect-daily label, .prospect-daily [role="status"] { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.prospect-daily input[type="time"], .prospect-daily button { height: 36px; min-height: 36px; }
+.prospect-daily input[type="time"] { padding: 0 10px; border: 1px solid var(--border); border-radius: 6px; background: transparent; }
+.prospect-daily p { margin: 8px 0 0; color: var(--text-secondary); }
+
+@media (max-width: 640px) {
+  .prospect-daily input[type="time"], .prospect-daily button { height: 44px; min-height: 44px; }
+}

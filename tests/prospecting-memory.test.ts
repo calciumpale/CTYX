@@ -4,6 +4,13 @@ import {emptyTaskMemory,advanceTaskMemory,projectTaskMemory,taskMemoryContext,ed
 import type {TaskMemoryMessage} from '../app/lib/prospecting-memory-types.ts';
 const now='2026-11-08T08:00:00Z';
 const msg=(id:string,text:string,extra:Partial<TaskMemoryMessage>={}):TaskMemoryMessage=>({id,text,conversationId:'c',direction:'inbound',actor:'customer',status:'received',createdAt:now,...extra});
+test('typed image placeholders never become customer facts, questions, contacts or invitations',async()=>{
+ const image=msg('opaque','预算8000元/月，希望一楼，电话13812345678？',{contentType:'image'});
+ const state=await understandTaskMemory(emptyTaskMemory(),[image],{now},async()=>{throw new Error('no image semantic extraction');});
+ assert.deepEqual(state.facts,[]);assert.deepEqual(state.events,[]);assert.equal(state.contact.captured,false);
+ assert.equal(projectTaskMemory(state).contactAsks,0);assert.ok(state.processedSourceIds?.includes('opaque'));
+ assert.deepEqual(state.pendingSourceIds??[],[]);
+});
 test('new explicit corrections supersede old values and retract category',()=>{
  const first=advanceTaskMemory(emptyTaskMemory(),[msg('1','预算5000元/月，区域在滨江，想做餐饮')],{now});
  const state=advanceTaskMemory(first,[msg('2','预算改成8000元/月，不看滨江了，换到萧山，不做餐饮了')],{now});

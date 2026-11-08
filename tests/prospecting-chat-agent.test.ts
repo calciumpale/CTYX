@@ -11,6 +11,32 @@ const input=(text:string):ProspectChatAgentInput=>({
 });
 const source={id:'approved-1',title:'预约看铺',content:'可预约工作日下午看铺，具体时间由专员确认。'};
 
+test('an opaque image gets a deterministic request for text without invoking a model or inventing its contents',async()=>{
+ const request=input('[图片消息，内容未识别]');request.inbound={...request.inbound,contentType:'image'};
+ const unexpected=async()=>{throw new Error('image-only turns must not invoke generation or retrieval');};
+ const result=await chooseProspectChatAction(request,{generate:unexpected,retrieve:unexpected,answerKnowledge:unexpected});
+ assert.equal(result.action,'reply');assert.equal(result.reply,'收到图片了，请用文字说一下您想了解的问题。');
+ assert.deepEqual(result.evidenceIds,[]);assert.deepEqual(result.answeredMessageIds,[]);
+ assert.equal(result.memory?.contactAsks,0);assert.deepEqual(result.memory?.needs,{});
+});
+
+test('a previous opaque image does not replace the latest text question or block grounded memory recall',async()=>{
+ const request=input('我之前说的面积是多少？');request.conversation.memory={needs:{area:'80-100平'},stage:'qualifying',contactCaptured:false,contactDeclines:0,contactAsks:1,summary:''};
+ request.pending=[{id:'image-before',text:'[图片消息，内容未识别]',contentType:'image'},request.inbound];
+ const result=await chooseProspectChatAction(request,{});
+ assert.equal(result.action,'reply');assert.doesNotMatch(result.reply??'',/收到图片|图中|图片上/);
+ assert.equal(result.memory?.needs.area,'80-100平');assert.equal(result.memory?.contactAsks,1);
+});
+
+test('a text question after an opaque image still receives only authorized knowledge evidence',async()=>{
+ const request=input('你们可租面积是多少？');request.pending=[{id:'earlier-image',text:'[图片消息，内容未识别]',contentType:'image'},request.inbound];
+ const knowledge={id:'area-source',title:'面积资料',content:'可租面积为100平，空置情况需确认。'};
+ const result=await chooseProspectChatAction(request,{answerKnowledge:async value=>{
+  assert.equal(value.question,'你们可租面积是多少？');return{action:'answer',answer:knowledge.content,evidenceIds:[knowledge.id],knowledge:[knowledge],route:'retrieved'};
+ }});
+ assert.equal(result.action,'reply');assert.equal(result.reply,knowledge.content);assert.deepEqual(result.evidenceIds,['area-source']);assert.deepEqual(result.answeredMessageIds,['in-1']);
+});
+
 test('area questions without exact inventory facts clarify the required area instead of handing off',async()=>{
   const cases=[
     {},

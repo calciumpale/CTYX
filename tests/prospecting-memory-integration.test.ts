@@ -28,7 +28,7 @@ async function prepared(f:ReturnType<typeof fixture>){
  const snapshot=await f.chat.snapshot('owner-a','member-a','sales',campaign.id);
  return{device,campaign,lead,conversation:snapshot.conversations[0]};
 }
-async function readConversation(f:ReturnType<typeof fixture>,x:Awaited<ReturnType<typeof prepared>>,messages:{id:string;direction:'inbound'|'outbound';text:string;postedAt?:string}[],snapshotId='snapshot-1'){
+async function readConversation(f:ReturnType<typeof fixture>,x:Awaited<ReturnType<typeof prepared>>,messages:{id:string;direction:'inbound'|'outbound';text:string;contentType?:'text'|'image';postedAt?:string}[],snapshotId='snapshot-1'){
  await f.store.seen(x.device.deviceId,{authenticated:true,accountId:'MS4wSender001'});
  await f.chat.schedule(x.device.deviceId);const job=(await f.store.claim(x.device.deviceId,false,true))!;assert.equal(job.kind,'readConversation');
  await f.store.complete(x.device.deviceId,job.id,job.leaseToken,{senderAccountId:'MS4wSender001',recipientId:'MS4wRecipient001',observedAt:f.now(),snapshotId,reliable:true,messages});
@@ -36,6 +36,59 @@ async function readConversation(f:ReturnType<typeof fixture>,x:Awaited<ReturnTyp
 }
 
 const current=async(f:ReturnType<typeof fixture>,x:Awaited<ReturnType<typeof prepared>>,campaignId=x.campaign.id)=>(await f.chat.snapshot('owner-a','member-a','sales',campaignId,x.conversation.id)).conversations.find(c=>c.id===x.conversation.id)!;
+
+test('a verified image round-trips its type, queues one safe clarification and permits a subsequent text turn',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.chat.settings('owner-a','member-a',x.campaign.id,true);await readConversation(f,x,[]);f.advance(61000);
+ const question={id:'question-before-image',direction:'inbound' as const,text:'有什么房源？',postedAt:f.now()};const image={id:'real-image-shape',direction:'inbound' as const,text:'[图片消息，内容未识别]',contentType:'image' as const,postedAt:f.now()};await readConversation(f,x,[question,image],'opaque-image');await f.chat.rememberOne('owner-a','member-a','https://example.test');
+ const before=await current(f,x);assert.equal(before.taskMemory?.ready,true);assert.deepEqual(before.taskMemory?.state.facts,[]);
+ const decide=(_o:string,_r:string,input:Parameters<typeof chooseProspectChatAction>[0])=>chooseProspectChatAction(input,{});
+ assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',decide),true);
+ const response=(await f.store.claim(x.device.deviceId,false,true))!;assert.equal(response.kind,'reply');assert.equal(response.input.message,'收到图片了，请用文字说一下您想了解的问题。');
+ const snapshot=await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id,x.conversation.id);assert.equal(snapshot.messages.find(m=>m.text===image.text)?.contentType,'image');
+ assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',decide),false);
+ await f.store.complete(x.device.deviceId,response.id,response.leaseToken,{outcome:'submitted'});await f.chat.rememberOne('owner-a','member-a','https://example.test');
+ const after=await current(f,x);assert.equal(after.taskMemory?.state.contact.submittedInvites,0);assert.deepEqual(after.taskMemory?.state.facts,[]);assert.equal(after.taskMemory?.state.events.find(e=>e.type==='customer_question')?.status,'open');f.advance(61000);
+ const text={id:'text-after-image',direction:'inbound' as const,text:'想做餐饮，需要80平',postedAt:f.now()};await readConversation(f,x,[question,image,text],'image-then-text');await f.chat.rememberOne('owner-a','member-a','https://example.test');
+ assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',decide),true);assert.equal((await current(f,x)).taskMemory?.state.facts.find(v=>v.key==='area'&&v.status==='confirmed')?.value,'80平');
+});
+
+test('AI resume recognizes a newer opaque image after a known row when platform timestamps and greeting are absent',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.chat.settings('owner-a','member-a',x.campaign.id,true);await readConversation(f,x,[]);f.advance(61000);
+ const prior={id:'resume-known-text',direction:'inbound' as const,text:'可以回答我吗'};await readConversation(f,x,[prior],'known-before-image');
+ f.sqlite.prepare("UPDATE workbench_prospect_messages SET processed=1 WHERE source_key='resume-known-text'").run();
+ const c=await current(f,x);await f.chat.resume('owner-a','member-a',c.id,c.version);f.advance(31000);
+ const image={id:'resume-new-image',direction:'inbound' as const,text:'[图片消息，内容未识别]',contentType:'image' as const};await readConversation(f,x,[prior,image],'new-image-after-known-row');await f.chat.rememberOne('owner-a','member-a','https://example.test');
+ const resumed=await current(f,x);assert.equal(resumed.handoffReason,undefined);
+ assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',(_o,_r,input)=>chooseProspectChatAction(input,{})),true);
+ const queued=f.sqlite.prepare("SELECT input_json FROM workbench_prospect_jobs WHERE kind='reply' AND status='queued'").get();assert.equal(JSON.parse(String(queued?.input_json)).message,'收到图片了，请用文字说一下您想了解的问题。');
+});
+
+for(const boundary of ['already-processed-last-row','no-known-anchor','another-task-anchor'])test(`AI resume preserves its wait at the ${boundary} boundary`,async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.chat.settings('owner-a','member-a',x.campaign.id,true);await readConversation(f,x,[]);f.advance(61000);
+ const prior={id:'resume-boundary-known',direction:'inbound' as const,text:'可以回答我吗'};await readConversation(f,x,[prior],'boundary-known');f.sqlite.prepare("UPDATE workbench_prospect_messages SET processed=1 WHERE source_key='resume-boundary-known'").run();
+ let active=x;let c=await current(f,x);
+ if(boundary==='another-task-anchor'){
+  const b=await f.store.createCampaign('owner-a','member-a',normalizeCampaignInput({requirements:'另一个独立商铺任务',keywords:['商铺']}));await f.chat.settings('owner-a','member-a',b.id,true);await f.chat.switchTask('owner-a','member-a',c.id,b.id,c.version,c.taskMemory!.bindingVersion);active={...x,campaign:b};f.advance(31000);await readConversation(f,active,[],'new-task-baseline');c=await current(f,active);
+ }
+ await f.chat.resume('owner-a','member-a',c.id,c.version);f.advance(31000);
+ const image={id:'resume-boundary-image',direction:'inbound' as const,text:'[图片消息，内容未识别]',contentType:'image' as const};
+ await readConversation(f,active,boundary==='already-processed-last-row'?[prior]:boundary==='no-known-anchor'?[image]:[prior,image],'boundary-read');await f.chat.rememberOne('owner-a','member-a','https://example.test');
+ assert.equal((await current(f,active)).handoffReason,'已恢复AI，等待同步核实最新未回复消息');assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',(_o,_r,input)=>chooseProspectChatAction(input,{})),false);
+ assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM workbench_prospect_jobs WHERE kind='reply'").get()?.n,0);
+});
+
+test('three untimed historical snapshots never promote an unproven resume row into a freshness anchor',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.chat.settings('owner-a','member-a',x.campaign.id,true);
+ const old={id:'pre-open-baseline',direction:'inbound' as const,text:'历史咨询'};await readConversation(f,x,[old],'historical-baseline');assert.equal(f.sqlite.prepare("SELECT eligible FROM workbench_prospect_messages WHERE source_key='pre-open-baseline'").get()?.eligible,0);
+ const c=await current(f,x);await f.chat.resume('owner-a','member-a',c.id,c.version);f.advance(61000);
+ const image={id:'more-untimed-history',direction:'inbound' as const,text:'[图片消息，内容未识别]',contentType:'image' as const};await readConversation(f,x,[old,image],'more-history');await f.chat.rememberOne('owner-a','member-a','https://example.test');
+ assert.equal((await current(f,x)).handoffReason,'已恢复AI，等待同步核实最新未回复消息');f.advance(31000);
+ const another={id:'third-untimed-history',direction:'inbound' as const,text:'想了解商铺面积'};await readConversation(f,x,[old,image,another],'third-history');await f.chat.rememberOne('owner-a','member-a','https://example.test');
+ const processed=await f.chat.processOne('owner-a','member-a','https://example.test',(_o,_r,input)=>chooseProspectChatAction(input,{}));
+ const rows=f.sqlite.prepare("SELECT source_key,eligible FROM workbench_prospect_messages WHERE source_key IN ('pre-open-baseline','more-untimed-history','third-untimed-history') ORDER BY rowid").all();
+ assert.deepEqual(rows.map(row=>({source:row.source_key,eligible:row.eligible})),[{source:'pre-open-baseline',eligible:0},{source:'more-untimed-history',eligible:0},{source:'third-untimed-history',eligible:0}]);
+ assert.equal((await current(f,x)).handoffReason,'已恢复AI，等待同步核实最新未回复消息');assert.equal(processed,false);assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM workbench_prospect_jobs WHERE kind='reply'").get()?.n,0);
+});
 
 test('reliable conversation memory absorbs corrections and extra constraints across turns',async t=>{
  const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.chat.settings('owner-a','member-a',x.campaign.id,true);

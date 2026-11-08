@@ -114,9 +114,10 @@ export function boundConversationResult(value, input) {
   const seen = new Set();
   const messages = value.messages.slice(0, input.limit).map(message => {
     if (!object(message) || !id(message.id) || seen.has(message.id) || !['inbound', 'outbound'].includes(message.direction) || typeof message.text !== 'string' || !message.text.trim()) fail('会话消息缺少唯一标识、明确方向或正文。', 'INVALID_CONVERSATION_RESULT');
+    if (message.contentType !== undefined && !['text', 'image'].includes(message.contentType) || message.contentType === 'image' && message.text !== '[图片消息，内容未识别]') fail('会话非文本消息缺少可信的类型或占位信息。', 'INVALID_CONVERSATION_RESULT');
     seen.add(message.id);
     const text = clipText(message.text, 2000); if (text !== message.text) reliable = false;
-    return { id: message.id, direction: message.direction, text, ...(typeof message.postedAt === 'string' && message.postedAt.length <= 100 ? { postedAt: message.postedAt } : {}) };
+    return { id: message.id, direction: message.direction, text, ...(message.contentType ? { contentType: message.contentType } : {}), ...(typeof message.postedAt === 'string' && message.postedAt.length <= 100 ? { postedAt: message.postedAt } : {}) };
   });
   return { senderAccountId: input.senderAccountId, recipientId: input.recipientId, observedAt: value.observedAt, snapshotId: value.snapshotId, messages, reliable,
     ...(typeof value.covered === 'boolean' ? { covered: value.covered } : {}) };

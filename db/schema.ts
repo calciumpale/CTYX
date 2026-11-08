@@ -130,7 +130,7 @@ export const workbenchProspectContactOptouts=sqliteTable('workbench_prospect_con
 },table=>[primaryKey({columns:[table.ownerId,table.senderId,table.recipientId]})]);
 
 export const workbenchProspectMessages=sqliteTable('workbench_prospect_messages',{
- id:text('id').primaryKey(),conversationId:text('conversation_id').notNull(),ownerId:text('owner_id').notNull(),memberId:text('member_id').notNull(),sourceKey:text('source_key').notNull(),direction:text('direction').notNull(),actor:text('actor').notNull(),text:text('text').notNull(),status:text('status').notNull(),postedAt:text('posted_at'),createdAt:text('created_at').notNull(),error:text('error'),jobId:text('job_id'),eligible:integer('eligible').notNull().default(0),processed:integer('processed').notNull().default(0),
+ id:text('id').primaryKey(),conversationId:text('conversation_id').notNull(),ownerId:text('owner_id').notNull(),memberId:text('member_id').notNull(),sourceKey:text('source_key').notNull(),direction:text('direction').notNull(),actor:text('actor').notNull(),text:text('text').notNull(),contentType:text('content_type').notNull().default('text'),status:text('status').notNull(),postedAt:text('posted_at'),createdAt:text('created_at').notNull(),error:text('error'),jobId:text('job_id'),eligible:integer('eligible').notNull().default(0),processed:integer('processed').notNull().default(0),
 },table=>[uniqueIndex('workbench_prospect_message_source').on(table.conversationId,table.sourceKey),index('workbench_prospect_message_thread').on(table.conversationId,table.createdAt),index('workbench_prospect_message_pending').on(table.ownerId,table.memberId,table.eligible,table.processed)]);
 
 export const workbenchProspectLeadPool=sqliteTable('workbench_prospect_lead_pool',{

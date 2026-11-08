@@ -43,8 +43,12 @@ export async function readConversationTranscript(root, { senderAccountId, recipi
         const body = candidates.filter(node => !candidates.some(other => other !== node && other.contains(node)));
         const content = body.length === 1 ? body[0] : row;
         const text = textFrom(content);
-        const media = [...content.querySelectorAll('img, video, audio')].filter(node => visible(node) && !node.closest(avatarSelector) && !(node instanceof HTMLImageElement && node.alt && node.width <= 40 && node.height <= 40));
+        const media = [...(content.matches('img, video, audio') ? [content] : []), ...content.querySelectorAll('img, video, audio')].filter(node => visible(node) && !node.closest(avatarSelector) && !(node instanceof HTMLImageElement && node.alt && node.width <= 40 && node.height <= 40));
         const unsupported = media.length > 0;
+        // A single image has an observable author and presence, but no inferred
+        // meaning. Keep that distinction instead of poisoning later text turns.
+        const opaqueImage = media.length === 1 && media[0] instanceof HTMLImageElement && text === media[0].alt.trim();
+        const readableText = opaqueImage ? '[图片消息，内容未识别]' : text;
         const indicators = [...row.querySelectorAll('[data-message-status], [data-status], [aria-label="发送失败"], [aria-label="发送中"], [title="发送失败"], [data-e2e="message-failed"], [data-e2e="message-pending"]')].filter(visible);
         const state = [row.getAttribute('data-message-status') || row.getAttribute('data-status') || '', ...indicators.map(node => node.getAttribute('data-message-status') || node.getAttribute('data-status') || node.getAttribute('aria-label') || node.getAttribute('title') || node.getAttribute('data-e2e') || '')].join(' ');
         const directions = new Set();
@@ -65,7 +69,7 @@ export async function readConversationTranscript(root, { senderAccountId, recipi
         // Stack chat wraps this row in a block containing the timestamp.
         const contentRows = [...row.querySelectorAll('.messageMessageBoxcontentBox')].filter(visible);
         const layoutRow = contentRows.length === 1 ? contentRows[0] : row;
-        const layoutBodies = body.length ? body : [...layoutRow.children].filter(node => visible(node) && !node.matches(excluded) && !node.querySelector(avatarSelector) && textFrom(node));
+        const layoutBodies = body.length ? body : [...layoutRow.children].filter(node => visible(node) && !node.matches(excluded) && !node.querySelector(avatarSelector) && (textFrom(node) || opaqueImage && node.contains(media[0])));
         const placeholders = [...layoutRow.children].filter(node => node.matches('.messageMessageBoxstackLayoutHideAvatar'));
         const reserved = placeholders.length === 1 ? placeholders[0] : null;
         const reservedBox = reserved?.getBoundingClientRect();
@@ -88,8 +92,8 @@ export async function readConversationTranscript(root, { senderAccountId, recipi
         const direction = directions.size === 1 ? [...directions][0] : 'unknown';
         const time = row.querySelector('time[datetime]') || slot?.querySelector('time[datetime]');
         const postedAt = time && visible(time) && Number.isFinite(Date.parse(time.getAttribute('datetime'))) ? new Date(time.getAttribute('datetime')).toISOString() : undefined;
-        if (!system && (direction === 'unknown' || !text || unsupported || /pending|sending|failed|error|发送失败|发送中/.test(state))) reliable = false;
-        return { nativeId: row.getAttribute('data-message-id') || row.getAttribute('data-msg-id') || '', direction, text, system, state, unsupported,
+        if (!system && (direction === 'unknown' || !readableText || unsupported && !opaqueImage || /pending|sending|failed|error|发送失败|发送中/.test(state))) reliable = false;
+        return { nativeId: row.getAttribute('data-message-id') || row.getAttribute('data-msg-id') || '', direction, text: readableText, system, state, unsupported, ...(opaqueImage ? { contentType: 'image' } : {}),
           media: media.map(node => (node.currentSrc || node.getAttribute('src') || '').slice(0, 1000)), postedAt, index, order };
       });
       const indexed = rows.filter(row => row.index !== null);
@@ -117,13 +121,13 @@ export async function readConversationTranscript(root, { senderAccountId, recipi
     const rowOccurrence = (rowOccurrences.get(rowBase) || 0) + 1; rowOccurrences.set(rowBase, rowOccurrence);
     const rowKey = row.nativeId ? `native:${digest(`${identity}\n${row.nativeId}`).slice(0, 40)}` : `visible:${digest(`${rowBase}\n${rowOccurrence}`).slice(0, 40)}`;
     rowKeys.push(rowKey);
-    if (row.system || row.direction === 'unknown' || !row.text || row.unsupported || /pending|sending|failed|error|发送失败|发送中/.test(row.state)) continue;
-    const base = `${identity}\n${row.direction}\n${row.text}\n${row.postedAt || ''}`;
+    if (row.system || row.direction === 'unknown' || !row.text || row.unsupported && row.contentType !== 'image' || /pending|sending|failed|error|发送失败|发送中/.test(row.state)) continue;
+    const base = `${identity}\n${row.direction}\n${row.text}\n${row.postedAt || ''}${row.contentType === 'image' ? '\n' + row.media.join('\n') : ''}`;
     const occurrence = (occurrences.get(base) || 0) + 1; occurrences.set(base, occurrence);
     const id = row.nativeId ? `native:${digest(`${identity}\n${row.nativeId}`).slice(0, 40)}` : `dom:${digest(`${base}\n${occurrence}`).slice(0, 40)}`;
     if (usedIds.has(id)) { reliable = false; continue; } usedIds.add(id);
     messageKeys[id] = rowKey;
-    messages.push({ id, direction: row.direction, text: row.text, ...(row.postedAt ? { postedAt: row.postedAt } : {}) });
+    messages.push({ id, direction: row.direction, text: row.text, ...(row.contentType ? { contentType: row.contentType } : {}), ...(row.postedAt ? { postedAt: row.postedAt } : {}) });
   }
   const maximum = Math.max(1, Math.min(100, Number(limit) || 50));
   if (messages.length > maximum) reliable = false;

@@ -10,6 +10,7 @@ async function fixture(t, content) {
   const { chromium } = await import('../tools/douyin-bridge/node_modules/playwright/index.mjs');
   const browser = await chromium.launch({ headless: true }); t.after(() => browser.close());
   const page = await browser.newPage();
+  await page.route('**/*', route => route.abort());
   await page.setContent(`<section role="dialog"><div class="messageMessageListwrapper"><div class="messageMessageListlist">${content}</div></div></section>`);
   const root = page.getByRole('dialog');
   return { page, root, read: overrides => readConversationTranscript(root, { ...identity, timeoutMs: 800, ...overrides }) };
@@ -156,4 +157,54 @@ browserTest('missing latest rows cannot grant manual-reply coverage even when th
   const { read } = await fixture(t, row(2, 'incoming', '较早的可见消息'));
   const result = await read({ includeProof: true });
   assert.equal(result.covered, false); assert.equal(result.proof.covered, false);
+});
+
+browserTest('a prior image preserves its unknown content without blocking a newer text message', async t => {
+  const image = '<div data-index="1"><div class="messageMessageBoxmessageBox" data-message-direction="incoming"><div data-e2e="msg-item-content"><img width="120" height="120" src="https://example.test/customer-image.png"></div></div></div>';
+  const { read } = await fixture(t, row(0, 'incoming', '想了解商铺面积') + image);
+  const result = await read({ includeProof: true });
+  assert.equal(result.reliable, true);
+  assert.equal(result.covered, true);
+  assert.deepEqual(result.messages.map(m => [m.direction, m.text]), [
+    ['inbound', '[图片消息，内容未识别]'], ['inbound', '想了解商铺面积'],
+  ]);
+  assert.equal(result.proof.rowKeys.length, 2);
+});
+
+browserTest('a latest image is represented opaquely for a safe clarification and never described from its URL', async t => {
+  const image = '<div data-index="0"><div class="messageMessageBoxmessageBox" data-message-direction="incoming"><div data-e2e="msg-item-content"><img width="120" height="120" src="https://example.test/sticker-hi.png"></div></div></div>';
+  const { read } = await fixture(t, image + row(1, 'incoming', '可以回答我吗'));
+  const result = await read({ includeProof: true });
+  assert.equal(result.reliable, true);
+  assert.equal(result.covered, true);
+  assert.equal(result.messages.at(-1)?.text, '[图片消息，内容未识别]');
+  assert.equal(result.messages.at(-1)?.contentType, 'image');
+  assert.doesNotMatch(result.messages.at(-1)?.text ?? '', /hi|嗨|你好/);
+});
+
+browserTest('mixed media, pending images and missing latest indices remain unsafe after a text message', async t => {
+  const image = '<div data-index="1"><div class="messageMessageBoxmessageBox" data-message-direction="incoming"><div data-e2e="msg-item-content"><img width="120" height="120" src="https://example.test/customer-image.png"></div></div></div>';
+  for (const content of [image.replace('<img', '图中预算8000元/月<img'), image.replace('<img', '<video></video><img'), image.replace('data-message-direction="incoming"', 'data-message-direction="incoming" data-message-status="pending"'), image.replace('data-index="1"', 'data-index="2"')]) {
+    const { read } = await fixture(t, row(0, 'incoming', '想了解商铺面积') + content);
+    assert.equal((await read()).reliable, false);
+  }
+});
+
+browserTest('an image with an unproved author still blocks the transcript after newer text arrives', async t => {
+  const image = '<div data-index="1"><div class="messageMessageBoxmessageBox"><div data-e2e="msg-item-content"><img width="120" height="120" src="https://example.test/unknown-author.png"></div></div></div>';
+  const { read } = await fixture(t, row(0, 'incoming', '想了解商铺面积') + image);
+  const result = await read();
+  assert.equal(result.reliable, false);
+  assert.deepEqual(result.messages.map(m => m.text), ['想了解商铺面积']);
+});
+
+for (const outgoing of [false, true]) browserTest(`a grouped stack image retains its own proven ${outgoing ? 'outbound' : 'inbound'} direction`, async t => {
+  const image=groupedStackRow(outgoing,'').replace('<span class="TextMessageTextpureText"></span>','<img width="120" height="120" src="https://example.test/opaque.png">');
+  const {read}=await fixture(t,image);
+  const result=await read();assert.equal(result.reliable,true);assert.equal(result.messages[0].direction,outgoing?'outbound':'inbound');assert.equal(result.messages[0].contentType,'image');
+});
+
+browserTest('an image that is itself the marked content node keeps its opaque type',async t=>{
+ const content='<div data-index="0"><div class="messageMessageBoxmessageBox" data-message-direction="incoming"><img data-e2e="msg-item-content" width="120" height="120" src="https://example.test/content-image.png"></div></div>';
+ const {read}=await fixture(t,content);const result=await read();assert.equal(result.reliable,true);assert.equal(result.messages[0].contentType,'image');
 });

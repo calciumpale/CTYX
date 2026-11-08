@@ -50,6 +50,7 @@ export interface ProspectChatMessage {
   conversationId: string;
   direction: ProspectChatDirection;
   text: string;
+  contentType?: 'text' | 'image';
   actor: ProspectChatActor;
   status: 'received' | 'queued' | 'waiting' | 'sending' | 'sent' | 'failed' | 'unknown' | 'cancelled';
   /** True only when the attempt is confirmed to have stopped before dispatch. */
@@ -93,9 +94,9 @@ export interface ProspectChatAgentInput {
   conversation: Pick<ProspectChatConversation, 'nickname'> & Partial<Pick<ProspectChatConversation, 'mode' | 'memory' | 'taskMemory'>>;
   policy?: ProspectChatPolicy;
   messages: ProspectChatMessage[];
-  inbound: Pick<ProspectChatMessage, 'id' | 'text'>;
+  inbound: Pick<ProspectChatMessage, 'id' | 'text' | 'contentType'>;
   now?: string;
-  pending?: Pick<ProspectChatMessage, 'id' | 'text'>[];
+  pending?: Pick<ProspectChatMessage, 'id' | 'text' | 'contentType'>[];
 }
 
 export interface ProspectChatDecision {
@@ -124,6 +125,6 @@ export interface ProspectChatReadResult {
   snapshotId: string;
   reliable: boolean;
   covered?: boolean;
-  messages: { id: string; direction: ProspectChatDirection; text: string; postedAt?: string }[];
+  messages: { id: string; direction: ProspectChatDirection; text: string; contentType?: 'text' | 'image'; postedAt?: string }[];
 }
 import type { ProspectJobStatus } from './prospecting-types.ts';

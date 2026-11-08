@@ -98,6 +98,20 @@ test('runner preserves stable-window coverage independently of automatic reply r
   }
 });
 
+test('runner retains the typed opaque image without forwarding image content as text', async t => {
+ const journal=await journalFor(t);
+ const result={senderAccountId:'sender-1',recipientId:'recipient-1',observedAt:'2026-11-06T05:00:00.000Z',snapshotId:'snapshot-image',reliable:true,covered:true,messages:[{id:'image-1',direction:'inbound',text:'[图片消息，内容未识别]',contentType:'image'}]};
+ const {completed}=await execute(journal,job('image-read','readConversation'),{readConversation:async()=>result});
+ assert.deepEqual(completed.result,result);
+});
+
+test('runner rejects invented image text and unsupported content types before reporting a readable turn', async t => {
+ for(const message of [{id:'image',direction:'inbound',text:'预算8000元/月',contentType:'image'},{id:'other',direction:'inbound',text:'未识别内容',contentType:'video'}]){
+  const journal=await journalFor(t);const result={senderAccountId:'sender-1',recipientId:'recipient-1',observedAt:'2026-11-06T05:00:00.000Z',snapshotId:'snapshot-image',reliable:true,messages:[message]};
+  const {completed}=await execute(journal,job('invalid-image-read','readConversation'),{readConversation:async()=>result});assert.ok(completed.error);assert.equal(completed.result,undefined);
+ }
+});
+
 test('conversation output cannot reassign sender, recipient, or silently label ambiguous rows as inbound', async t => {
   for (const patch of [{ recipientId: 'another-user' }, { senderAccountId: 'another-account' }, { covered: 'true' }, { messages: [{ id: 'unknown', direction: 'unknown', text: '不能猜方向' }] }]) {
     const journal = await journalFor(t);

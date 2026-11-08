@@ -101,6 +101,7 @@ export function advanceTaskMemory(original:TaskMemoryState,messages:TaskMemoryMe
  const ordered=[...messages].sort((a,b)=>(a.rowOrder??0)-(b.rowOrder??0)||at(a).localeCompare(at(b)));
  for(const m of ordered){
   if(state.ignoredSourceIds.includes(m.id))continue;
+  if(m.contentType==='image'){if(!state.processedSourceIds.includes(m.id))state.processedSourceIds.push(m.id);state.sourceWatermark=Math.max(state.sourceWatermark,m.rowOrder??0);continue;}
   const text=safe(m.text);
   const event=(type:TaskMemoryEvent['type'],key?:string)=>{state.events.push({id:`event:${m.id}:${type}`,type,sourceMessageId:m.id,sourceText:text.slice(0,500),actor:m.actor,sourceAt:at(m),updatedAt:options.now,...(key?{key}:{}),...(m.legacyBudgetCovered?{legacyBudgetCovered:true}:{}),...(type==='customer_question'?{status:'open' as const}:{}),...(type==='submitted_verified'&&m.answeredMessageIds?.length?{answeredMessageIds:[...new Set(m.answeredMessageIds)].slice(0,100)}:{})});};
   // Outbound status can progress without changing source ID; replace its provisional event.
@@ -174,7 +175,7 @@ export function editTaskMemory(original:TaskMemoryState,edit:TaskMemoryEdit):Tas
 }
 export async function understandTaskMemory(original:TaskMemoryState,messages:TaskMemoryMessage[],options:TaskMemoryOptions,generate?:(messages:ModelMessage[])=>Promise<string>):Promise<TaskMemoryState>{
  const state=advanceTaskMemory(original,messages,options);
- const eligible=messages.filter(m=>m.actor==='customer'&&m.direction==='inbound'&&(!original.processedSourceIds?.includes(m.id)||original.pendingSourceIds?.includes(m.id))&&!original.ignoredSourceIds.includes(m.id)&&!thirdParty.test(m.text));
+ const eligible=messages.filter(m=>m.contentType!=='image'&&m.actor==='customer'&&m.direction==='inbound'&&(!original.processedSourceIds?.includes(m.id)||original.pendingSourceIds?.includes(m.id))&&!original.ignoredSourceIds.includes(m.id)&&!thirdParty.test(m.text));
  // Deterministic explicit fields need no extra model call; free-form conditions may.
  const semantic=eligible.filter(m=>m.text.split(/[，。！？；,!?;\n]|并且|而且|另外/).some(clause=>/条件|必须|希望|最好|不能|不要|只要|偏好/.test(clause)&&!state.facts.some(f=>f.sourceMessageId===m.id&&f.status==='confirmed'&&clause.includes(f.value))));
  if(!semantic.length)return state;

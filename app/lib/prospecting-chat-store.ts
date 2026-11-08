@@ -10,7 +10,7 @@ import type {ProspectJobRow} from './prospecting-store.ts';
 import type {ProspectCapturedLead,ProspectChatAgentInput,ProspectChatConversation,ProspectChatDecision,ProspectChatMessage,ProspectChatReadResult,ProspectChatSnapshot} from './prospecting-chat-types.ts';
 
 interface ConversationRow {id:string;owner_id:string;member_id:string;campaign_id:string;lead_id:string;sender_id:string;recipient_id:string;profile_url:string;nickname:string;mode:'agent'|'human';status:'active'|'closed';version:number;opened_at:string;last_read_at:string|null;last_snapshot_id:string|null;has_baseline:number;last_message_at:string;last_message_preview:string;handoff_reason:string|null;memory_json:string;close_reason:string|null;processing_token:string|null;processing_until:string|null;updated_at:string;contact_captured?:number;last_synced_at?:string|null}
-interface MessageRow {id:string;conversation_id:string;owner_id:string;member_id:string;source_key:string;direction:'inbound'|'outbound';actor:ProspectChatMessage['actor'];text:string;status:ProspectChatMessage['status'];posted_at:string|null;created_at:string;error:string|null;job_id:string|null;eligible:number;processed:number;row_order?:number;job_status?:string;job_error?:string|null;job_started_at?:string|null;job_result_json?:string|null}
+interface MessageRow {id:string;conversation_id:string;owner_id:string;member_id:string;source_key:string;direction:'inbound'|'outbound';actor:ProspectChatMessage['actor'];text:string;content_type?:'text'|'image';status:ProspectChatMessage['status'];posted_at:string|null;created_at:string;error:string|null;job_id:string|null;eligible:number;processed:number;row_order?:number;job_status?:string;job_error?:string|null;job_started_at?:string|null;job_result_json?:string|null}
 interface PoolRow {id:string;conversation_id:string;nickname:string;contact_type:ProspectCapturedLead['contactType'];contact_value:string;grade:ProspectCapturedLead['grade'];score:number;reason:string;assigned_member_id:string|null;assigned_name:string|null;status:ProspectCapturedLead['status'];updated_at:string}
 interface DeviceRow {id:string;owner_id:string;member_id:string;account_id:string|null;enabled:number;authenticated:number;last_seen_at:string|null}
 interface CampaignRow {id:string;owner_id:string;member_id:string;status:string;data_json:string}
@@ -21,7 +21,7 @@ function publicMessage(r:MessageRow):ProspectChatMessage{
  const metadata=r.job_result_json?object(JSON.parse(r.job_result_json)):{};
  const retryable=r.job_status==='failed'&&retryableResult(metadata);
  const status=r.status==='waiting'||r.status==='cancelled'?r.status:r.job_status==='running'?'sending':r.job_status==='done'?'sent':r.job_status&&['failed','unknown','cancelled'].includes(r.job_status)?r.job_status as ProspectChatMessage['status']:r.status;
- return{id:r.id,conversationId:r.conversation_id,direction:r.direction,text:r.text,actor:r.actor,status,...(r.posted_at?{postedAt:r.posted_at}:{}),createdAt:r.created_at,...(r.job_error||r.error?{error:r.job_error||r.error!}:{}),...(retryable?{retryable:true,...(typeof metadata.retryAt==='string'?{retryAt:metadata.retryAt}:{}),...(typeof metadata.retryExhausted==='boolean'?{retryExhausted:metadata.retryExhausted}:{})}:{})};
+ return{id:r.id,conversationId:r.conversation_id,direction:r.direction,text:r.text,...(r.content_type==='image'?{contentType:'image' as const}:{}),actor:r.actor,status,...(r.posted_at?{postedAt:r.posted_at}:{}),createdAt:r.created_at,...(r.job_error||r.error?{error:r.job_error||r.error!}:{}),...(retryable?{retryable:true,...(typeof metadata.retryAt==='string'?{retryAt:metadata.retryAt}:{}),...(typeof metadata.retryExhausted==='boolean'?{retryExhausted:metadata.retryExhausted}:{})}:{})};
 }
 const publicPool=(r:PoolRow):ProspectCapturedLead=>({id:r.id,conversationId:r.conversation_id,nickname:r.nickname,contactType:r.contact_type,contactValue:r.contact_value,grade:r.grade,score:r.score,reason:r.reason,assignedMemberId:r.assigned_member_id,assignedName:r.assigned_name,status:r.status,updatedAt:r.updated_at});
 const capturedContactSql="EXISTS (SELECT 1 FROM workbench_prospect_lead_pool captured WHERE captured.owner_id=c.owner_id AND captured.conversation_id=c.id) AS contact_captured";
@@ -253,7 +253,7 @@ export function createProspectingChatStore(db:D1Database,now:()=>number=Date.now
   const v=object(value),input=object(JSON.parse(row.input_json));
   if(v.senderAccountId!==row.sender_id||v.recipientId!==input.recipientId)throw new DomainError('会话读取身份与绑定账号不一致',409);
   if(typeof v.observedAt!=='string'||!Number.isFinite(Date.parse(v.observedAt))||Math.abs(Date.parse(v.observedAt)-now())>300000||typeof v.snapshotId!=='string'||!v.snapshotId||v.snapshotId.length>256||typeof v.reliable!=='boolean'||v.covered!==undefined&&typeof v.covered!=='boolean'||!Array.isArray(v.messages)||v.messages.length>100)throw new DomainError('会话读取结果格式不正确');
-  const ids=new Set<string>();const messages=v.messages.map(raw=>{const m=object(raw);if(typeof m.id!=='string'||!m.id||m.id.length>256||ids.has(m.id)||!['inbound','outbound'].includes(String(m.direction))||typeof m.text!=='string'||!m.text.trim()||m.text.length>4000)throw new DomainError('会话消息格式不正确');ids.add(m.id);if(m.postedAt!==undefined&&(typeof m.postedAt!=='string'||!Number.isFinite(Date.parse(m.postedAt))||Date.parse(m.postedAt)>Date.parse(v.observedAt as string)+300000))throw new DomainError('会话消息时间无效');return{id:m.id,direction:m.direction as 'inbound'|'outbound',text:m.text,...(typeof m.postedAt==='string'?{postedAt:new Date(m.postedAt).toISOString()}:{})};});
+  const ids=new Set<string>();const messages=v.messages.map(raw=>{const m=object(raw);if(typeof m.id!=='string'||!m.id||m.id.length>256||ids.has(m.id)||!['inbound','outbound'].includes(String(m.direction))||typeof m.text!=='string'||!m.text.trim()||m.text.length>4000)throw new DomainError('会话消息格式不正确');if(m.contentType!==undefined&&!['text','image'].includes(String(m.contentType))||m.contentType==='image'&&m.text!=='[图片消息，内容未识别]')throw new DomainError('非文本消息类型或占位信息不正确');ids.add(m.id);if(m.postedAt!==undefined&&(typeof m.postedAt!=='string'||!Number.isFinite(Date.parse(m.postedAt))||Date.parse(m.postedAt)>Date.parse(v.observedAt as string)+300000))throw new DomainError('会话消息时间无效');return{id:m.id,direction:m.direction as 'inbound'|'outbound',text:m.text,...(m.contentType==='image'?{contentType:'image' as const}:{}),...(typeof m.postedAt==='string'?{postedAt:new Date(m.postedAt).toISOString()}:{})};});
   return{senderAccountId:String(v.senderAccountId),recipientId:String(v.recipientId),observedAt:new Date(v.observedAt).toISOString(),snapshotId:v.snapshotId,reliable:v.reliable,...(typeof v.covered==='boolean'?{covered:v.covered}:{}),messages};
  }
  async function complete(row:ProspectJobRow,result:unknown,error?:string){
@@ -292,13 +292,28 @@ export function createProspectingChatStore(db:D1Database,now:()=>number=Date.now
   const greeting=existing.find(m=>m.source_key.startsWith('greeting:'));
   const anchors=greeting?read.messages.flatMap((m,index)=>m.direction==='outbound'&&m.text===greeting.text?[index]:[]):[];
   const anchor=anchors.length===1?anchors[0]:-1;
+  // Resume insertion and resume authorization must use the same proof. A plain
+  // baseline cannot promote untimed history into tomorrow's "known" anchor.
+  const resumeFreshness=new Map<string,boolean>();
+  if(resuming){
+   const currentAfter=Date.parse(taskView.bindingVersion===1?c.opened_at:binding.updated_at);
+   const knownCurrentSources=new Set(existing.filter(message=>message.direction==='inbound'&&message.eligible===1||message.direction==='outbound'&&!!message.job_id&&(message.status==='sent'||message.job_status==='done')&&Date.parse(message.created_at)>=currentAfter).map(message=>message.source_key));
+   let knownBefore=false;
+   for(const [index,m] of read.messages.entries()){
+    const previous=bySource.get(m.id),postedAt=m.postedAt??previous?.posted_at;
+    const currentSource=!previous||sessionIds.has(previous.id);
+    const newlyObserved=(!previous||previous.processed===0&&[1,UNVERIFIED_AUTO_INBOUND].includes(previous.eligible))&&knownBefore;
+    resumeFreshness.set(m.id,currentSource&&(postedAt?Date.parse(postedAt)>=currentAfter:anchor>=0&&index>anchor||newlyObserved));
+    if(knownCurrentSources.has(m.id))knownBefore=true;
+   }
+  }
   let precedingOutbound=existing.filter(m=>m.direction==='outbound'&&(m.status==='sent'||m.job_status==='done')).at(-1)?.text??'',stopObserved=false;
   for(const [index,m] of read.messages.entries()){if(m.direction==='outbound')precedingOutbound=m.text;const previous=bySource.get(m.id);
-   if(previous&&(previous.direction!==m.direction||previous.text!==m.text))throw new DomainError('已记录消息的身份或正文发生变化，请重新同步',409);
+   if(previous&&(previous.direction!==m.direction||previous.text!==m.text||(previous.content_type??'text')!==(m.contentType??'text')))throw new DomainError('已记录消息的身份或正文发生变化，请重新同步',409);
    const stopped=isChatOptOut(m.text,precedingOutbound),postedAt=m.postedAt??previous?.posted_at;
    const physicalFresh=postedAt?Date.parse(postedAt)>=Date.parse(c.opened_at):anchor>=0&&index>anchor||Boolean(previous?previous.eligible===1||previous.eligible===UNVERIFIED_STOP||previous.eligible===UNVERIFIED_AUTO_INBOUND:c.has_baseline);
    const knownAnchor=Math.max(-1,...read.messages.flatMap((item,i)=>bySource.has(item.id)?[i]:[]));
-   const fresh=taskView.bindingVersion===1?physicalFresh:postedAt?Date.parse(postedAt)>=Date.parse(binding.updated_at):Boolean(c.has_baseline&&knownAnchor>=0&&index>knownAnchor);
+   const fresh=resuming?resumeFreshness.get(m.id)===true:taskView.bindingVersion===1?physicalFresh:postedAt?Date.parse(postedAt)>=Date.parse(binding.updated_at):Boolean(c.has_baseline&&knownAnchor>=0&&index>knownAnchor);
    const eligible=(automatic||stopped)&&read.reliable&&m.direction==='inbound'&&fresh;
    // A previously unreliable observation must not permanently hide a later
    // verified stop. Other existing messages keep their original replay gates.
@@ -312,7 +327,7 @@ export function createProspectingChatStore(db:D1Database,now:()=>number=Date.now
    if(localMatches.length===1&&read.messages.filter(other=>other.direction==='outbound'&&other.text===m.text).length===1){const local=localMatches[0];statements.push(db.prepare(`UPDATE workbench_prospect_messages SET source_key=?,posted_at=COALESCE(?,posted_at),status='sent' WHERE id=? AND EXISTS (${guard})`).bind(m.id,m.postedAt??null,local.id,...values));continue;}
    const id=`pcm-${(await prospectHash(`${c.id}\0${m.id}`)).slice(0,32)}`;
    const eligibility=eligible?1:!read.reliable&&m.direction==='inbound'&&fresh?(stopped?UNVERIFIED_STOP:automatic?UNVERIFIED_AUTO_INBOUND:0):0;
-   statements.push(db.prepare(`INSERT INTO workbench_prospect_messages(id,conversation_id,owner_id,member_id,source_key,direction,actor,text,status,posted_at,created_at,eligible) SELECT ?,?,?,?,?,?,?,?,'received',?,?,? WHERE EXISTS (${guard}) ON CONFLICT(conversation_id,source_key) DO NOTHING`).bind(id,c.id,c.owner_id,c.member_id,m.id,m.direction,m.direction==='inbound'?'customer':'human',m.text,m.postedAt??null,read.observedAt,eligibility,...values));
+   statements.push(db.prepare(`INSERT INTO workbench_prospect_messages(id,conversation_id,owner_id,member_id,source_key,direction,actor,text,content_type,status,posted_at,created_at,eligible) SELECT ?,?,?,?,?,?,?,?,?,'received',?,?,? WHERE EXISTS (${guard}) ON CONFLICT(conversation_id,source_key) DO NOTHING`).bind(id,c.id,c.owner_id,c.member_id,m.id,m.direction,m.direction==='inbound'?'customer':'human',m.text,m.contentType??'text',m.postedAt??null,read.observedAt,eligibility,...values));
   }
   statements.push(...sourceStatements);
   const changed=read.snapshotId!==c.last_snapshot_id;const last=read.messages.at(-1);
@@ -349,7 +364,7 @@ export function createProspectingChatStore(db:D1Database,now:()=>number=Date.now
   }
   if(recovering&&resuming&&last?.direction==='inbound'){
    const previous=bySource.get(last.id),postedAt=last.postedAt??previous?.posted_at;
-   const fresh=postedAt?Date.parse(postedAt)>=Date.parse(c.opened_at):anchor>=0&&read.messages.length-1>anchor;
+   const fresh=resumeFreshness.get(last.id)===true;
    const confirmedOut=existing.filter(m=>m.direction==='outbound'&&(m.status==='sent'||m.job_status==='done'||!m.job_id&&m.status==='received'&&c.last_read_at&&m.created_at<=c.last_read_at)).at(-1);
    const answered=!!confirmedOut&&(previous?(confirmedOut.row_order??0)>(previous.row_order??0):!!postedAt&&!!confirmedOut.posted_at&&Date.parse(confirmedOut.posted_at)>Date.parse(postedAt));
    if(answered)statements.push(db.prepare(`UPDATE workbench_prospect_messages SET processed=1 WHERE conversation_id=? AND direction='inbound' AND eligible=1 AND source_key IN (SELECT value FROM json_each(?)) AND ${resumeGuard}`).bind(c.id,JSON.stringify(read.messages.filter(m=>m.direction==='inbound').map(m=>m.id)),...values,c.id,c.version,RESUME_PENDING));
@@ -455,7 +470,7 @@ export function createProspectingChatStore(db:D1Database,now:()=>number=Date.now
   if(!inbound){await db.prepare('UPDATE workbench_prospect_conversations SET processing_token=NULL,processing_until=NULL WHERE id=? AND processing_token=?').bind(c.id,token).run();return false;}
   const task=await campaign(ownerId,memberId,c.campaign_id),campaignData=object(JSON.parse(task.data_json));const history=await memoryStore.messages(ownerId,memberId,taskView.sessionId,100);
   let decision:ProspectChatDecision;
-  try{decision=stopRequested?{action:'wait',close:true,reason:'客户明确要求停止联系'}:decide?await decide(ownerId,origin,{policy:normalizeChatPolicy(campaignData.chatPolicy),campaign:{name:String(campaignData.name||''),requirements:String(campaignData.requirements||''),minIntentScore:Number(campaignData.minIntentScore||70)},now:stamp(),conversation:{nickname:c.nickname,taskMemory:taskView,memory:projectTaskMemory(taskView.state,stamp()),mode:!unresolved&&campaignData.chatEnabled===true&&task.status==='active'?c.mode:'human'},messages:history,inbound:{id:inbound.id,text:inbound.text},pending:pending.map(m=>({id:m.id,text:m.text}))}):{action:'handoff',reason:'尚未配置可用的会话模型，已转交销售'};if(!decision||!['reply','handoff','wait'].includes(decision.action))throw new Error('invalid decision');if(decision.action==='reply')sendText(decision.reply);}
+  try{decision=stopRequested?{action:'wait',close:true,reason:'客户明确要求停止联系'}:decide?await decide(ownerId,origin,{policy:normalizeChatPolicy(campaignData.chatPolicy),campaign:{name:String(campaignData.name||''),requirements:String(campaignData.requirements||''),minIntentScore:Number(campaignData.minIntentScore||70)},now:stamp(),conversation:{nickname:c.nickname,taskMemory:taskView,memory:projectTaskMemory(taskView.state,stamp()),mode:!unresolved&&campaignData.chatEnabled===true&&task.status==='active'?c.mode:'human'},messages:history,inbound:{id:inbound.id,text:inbound.text,contentType:inbound.content_type},pending:pending.map(m=>({id:m.id,text:m.text,contentType:m.content_type}))}):{action:'handoff',reason:'尚未配置可用的会话模型，已转交销售'};if(!decision||!['reply','handoff','wait'].includes(decision.action))throw new Error('invalid decision');if(decision.action==='reply')sendText(decision.reply);}
   catch{decision={action:'handoff',reason:'会话判断暂时不可用，原消息已保留并转交销售'};}
   if(decision.action==='wait'&&!decision.close&&decision.reason&&!decision.taskMemoryState?.pendingSourceIds?.length)decision={...decision,action:'handoff'};
   const guard='SELECT 1 FROM workbench_prospect_conversations live JOIN workbench_prospect_memory_sessions s ON s.thread_id=live.id JOIN workbench_prospect_memory_bindings b ON b.thread_id=live.id AND b.active_session_id=s.id WHERE live.id=? AND live.version=? AND live.processing_token=? AND s.id=? AND s.write_token=? AND b.version=?',values=[c.id,c.version,token,taskView.sessionId,token,taskView.bindingVersion],statements:D1PreparedStatement[]=[db.prepare(`UPDATE workbench_prospect_memory_sessions SET write_token=? WHERE id=? AND version=? AND source_version=? AND EXISTS (SELECT 1 FROM workbench_prospect_memory_bindings WHERE thread_id=? AND active_session_id=? AND version=?) AND EXISTS (SELECT 1 FROM workbench_prospect_conversations WHERE id=? AND version=? AND processing_token=?) AND EXISTS (SELECT 1 FROM workbench_member_accounts WHERE owner_id=? AND account_id=? AND enabled=1 AND role IN ('sales','manager'))`).bind(token,taskView.sessionId,taskView.sessionVersion,taskView.sourceVersion,c.id,taskView.sessionId,taskView.bindingVersion,c.id,c.version,token,ownerId,memberId)];

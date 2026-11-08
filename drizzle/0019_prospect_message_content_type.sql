@@ -1,0 +1,1 @@
+ALTER TABLE `workbench_prospect_messages` ADD `content_type` text DEFAULT 'text' NOT NULL;

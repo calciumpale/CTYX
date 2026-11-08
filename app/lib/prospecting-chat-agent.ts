@@ -184,14 +184,14 @@ function summarize(memory:ProspectChatMemory):string {
 export async function chooseProspectChatAction(input:ProspectChatAgentInput,tools:ChatAgentTools):Promise<ProspectChatDecision> {
   const pending=(input.pending?.length?input.pending:[input.inbound]).slice(-100);
   const pendingIds=new Set(pending.map(message=>message.id));
-  const inbound=pending.map(message=>message.text).join('\n');
+  const inbound=pending.filter(message=>message.contentType!=='image').map(message=>message.text).join('\n');
   const history=input.messages.filter(message=>message.status==='received'||message.status==='sent').slice(-12);
   const previous=history.filter(message=>!pendingIds.has(message.id));
-  const previousInbound=previous.filter(message=>message.direction==='inbound');
+  const previousInbound=previous.filter(message=>message.direction==='inbound'&&message.contentType!=='image');
   const customerContext=[...previousInbound.map(message=>message.text),inbound].join('\n');
   const now=input.now??new Date().toISOString();
   const taskView=input.conversation.taskMemory;
-  const taskMessages=[...input.messages,...pending.filter(p=>!input.messages.some(m=>m.id===p.id)).map(p=>({id:p.id,text:p.text,conversationId:'current',direction:'inbound' as const,actor:'customer' as const,status:'received' as const,createdAt:now}))];
+  const taskMessages=[...input.messages,...pending.filter(p=>!input.messages.some(m=>m.id===p.id)).map(p=>({id:p.id,text:p.text,contentType:p.contentType,conversationId:'current',direction:'inbound' as const,actor:'customer' as const,status:'received' as const,createdAt:now}))];
   const taskState=taskView?await understandTaskMemory(taskView.state,taskMessages,{now},tools.understandMemory):undefined;
   const memory=taskState?projectTaskMemory(taskState,now):normalizeChatMemory(input.conversation.memory);
   const tentativeBudget=taskState?.facts.findLast(f=>f.key==='budget'&&f.status==='tentative');
@@ -245,6 +245,7 @@ export async function chooseProspectChatAction(input:ProspectChatAgentInput,tool
     return finish({action:'handoff',reason,...base});
   };
   if(handoff.test(inbound))return transfer(handoffTopics.find(([pattern])=>pattern.test(inbound))?.[1]??modelHandoffReasons.human_confirmation);
+  if(pending.at(-1)?.contentType==='image')return finish({action:'reply',reply:'收到图片了，请用文字说一下您想了解的问题。',evidenceIds:[],answeredMessageIds:[],route:'direct',...base});
   if(taskState&&lead)taskState.contact.captured=true;
   if(lead)return finish({action:'reply',reply:'收到，我们会尽快与您联系。',evidenceIds:[],...base});
   if(taskState&&/(?:我|本人|您).{0,10}(?:之前|以前|刚才|说过|提过)|之前说|我的(?:面积|预算|区域|业态|需求)/.test(inbound)){

@@ -63,3 +63,39 @@ test('all material draft inputs trigger the parent leave guard and defaults norm
  await page.goto(origin);await page.getByLabel('目标受众',{exact:true}).fill('   ');await page.getByRole('tab',{name:'营销图片',exact:true}).click();await page.locator('.material-options select').first().selectOption('2:3');await page.locator('.material-options select').first().selectOption('1:1');await page.getByRole('button',{name:'离开素材',exact:true}).click();await page.getByText('已离开',{exact:true}).waitFor();assert.equal(writes,0);
  }finally{await browser?.close();await server.close();await rm(cacheDir,{recursive:true,force:true});}
 });
+
+test('automatic queries stop on save errors, recover the same task and stop after unmount',{timeout:60000},async()=>{
+ const source=`import React,{useState} from 'react';import {createRoot} from 'react-dom/client';import MarketingMaterials from '/app/components/MarketingMaterials.tsx';function Parent(){const [open,setOpen]=useState(true);return <><button onClick={()=>setOpen(false)}>离开素材</button>{open&&<MarketingMaterials notify={()=>{}}/>}</>};createRoot(document.getElementById('root')).render(<Parent/>);`;
+ const {chromium}=await import(pathToFileURL(path.join(root,'tools/douyin-bridge/node_modules/playwright/index.mjs')).href);
+ const {server,origin,cacheDir}=await createFixture(source);let browser;
+ try{
+  browser=await chromium.launch({headless:true});const page=await browser.newPage();
+  await page.clock.install();
+  let kind='image',queries=0;const actions=[];
+  const task=()=>({id:'accepted-'+kind,requestId:'original-'+kind,version:1,status:'queued',input:{kind,prompt:'已有'+kind+'任务'},progress:0,files:[],slides:[],createdAt:'2026-11-08T00:00:00Z',updatedAt:'2026-11-08T00:00:00Z',pollAt:0});
+  await page.route('**/api/marketing-materials',async route=>{
+   if(route.request().method()==='GET')return route.fulfill({json:{tasks:[task()],availability:{presentation:true,image:true,video:true}}});
+   const body=route.request().postDataJSON();actions.push(body);assert.equal(body.action,'refresh');assert.equal(body.taskId,'accepted-'+kind);queries++;
+   const next={...task(),version:queries+1,status:queries===1?'saving':'completed',progress:queries===1?95:100,...(queries===1?{error:'结果暂未安全保存（download_type）'}:{files:[{type:kind==='image'?'image/png':'video/mp4',name:kind==='image'?'图片.png':'视频.mp4',url:'/api/marketing-materials/result?taskId=accepted-'+kind+'&fileIndex=0'}]})};
+   return route.fulfill({json:{task:next}});
+  });
+  await page.route('**/api/marketing-materials/result?*',route=>route.fulfill({contentType:kind==='image'?'image/png':'video/mp4',body:Buffer.from([137,80,78,71])}));
+  for(kind of ['image','video']){
+   queries=0;await page.goto(origin);await page.getByRole('tab',{name:kind==='image'?'营销图片':'营销视频',exact:true}).click();
+   await page.getByRole('button',{name:new RegExp('已有'+kind+'任务')}).click();
+   await page.clock.runFor(6100);await page.getByRole('button',{name:'重试保存',exact:true}).waitFor();
+   assert.equal(queries,1);
+   await page.clock.runFor(24000);assert.equal(queries,1,'a failed save must not poll forever');
+   await page.getByRole('button',{name:'重试保存',exact:true}).click();
+   await page.locator(kind==='image'?'.material-detail img':'.material-detail video').waitFor();
+   const result=page.locator(kind==='image'?'.material-detail img':'.material-detail video');
+   assert.match(await result.getAttribute('src'),/^\/api\/marketing-materials\/result\?/);
+   assert.equal(queries,2);await page.clock.runFor(18000);assert.equal(queries,2);
+  }
+  await page.goto(origin);await page.getByRole('tab',{name:'营销视频',exact:true}).click();
+  await page.getByRole('button',{name:/已有video任务/}).waitFor();
+  const before=actions.length;await page.getByRole('button',{name:'离开素材',exact:true}).click();
+  await page.clock.runFor(60000);assert.equal(actions.length,before);
+  assert.equal(actions.some(action=>action.action==='generate'),false);
+ }finally{await browser?.close();await server.close();await rm(cacheDir,{recursive:true,force:true});}
+});

@@ -929,3 +929,32 @@ test('legacy agreement following a visit question recovers and queues once',asyn
  assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',async(_owner,_origin,input)=>chooseProspectChatAction(input,{generate:async()=>JSON.stringify({action:'wait'})})),true);
  assert.equal(f.sqlite.prepare("SELECT COUNT(*) n FROM workbench_prospect_jobs WHERE kind='reply' AND status='queued'").get()?.n,1);
 });
+
+test('department library picker and policy reject YY and cross-owner libraries for ZS',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);
+ for(const [id,owner,department] of [['zs-only','owner-a','zs'],['yy-only','owner-a','yy'],['shared-all','owner-a','shared'],['other-tenant','owner-z','zs'],['unassigned','owner-a','unassigned']])f.sqlite.prepare('INSERT INTO workbench_knowledge_libraries(id,owner_id,name,department_id,created_at) VALUES (?,?,?,?,?)').run(id,owner,id,department,f.now());
+ const snapshot=await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id);
+ assert.deepEqual(new Set(snapshot.libraries!.map(l=>l.id)),new Set(['zs-only','shared-all']));
+ const policy={libraryIds:[],replyDailyLimit:2,conversationReplyLimit:2,workStart:'08:30',workEnd:'21:30'};
+ for(const id of ['yy-only','other-tenant','unassigned'])await assert.rejects(f.chat.settings('owner-a','member-a',x.campaign.id,true,{...policy,libraryIds:[id]}),/所属部门|共享知识库/);
+ await f.chat.settings('owner-a','member-a',x.campaign.id,true,policy);
+ await f.chat.settings('owner-a','member-a',x.campaign.id,true,{...policy,libraryIds:['zs-only','shared-all']});
+});
+
+test('failed mandatory lookup records failure and never queues an automatic reply',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.chat.settings('owner-a','member-a',x.campaign.id,true);
+ await readConversation(f,x,[{id:'lookup-inbound',direction:'inbound',text:'您好',postedAt:f.now()}]);
+ await f.chat.processOne('owner-a','member-a','https://example.test',async(_owner,_origin,input)=>{
+  assert.equal(input.memberId,'member-a');return chooseProspectChatAction(input,{preflightKnowledge:async()=>({department:'zs',libraryIds:[],sourceIds:[],status:'failed'})});
+ });
+ const count=f.sqlite.prepare("SELECT COUNT(*) AS n FROM workbench_prospect_jobs WHERE kind='reply' AND json_extract(input_json,'$.actor')='agent'").get() as {n:number};assert.equal(count.n,0);
+ const row=f.sqlite.prepare('SELECT mode,memory_json FROM workbench_prospect_conversations WHERE id=?').get(x.conversation.id) as {mode:string;memory_json:string};assert.equal(row.mode,'human');assert.equal(JSON.parse(row.memory_json).lastDecision.knowledgeLookup.status,'failed');assert.equal(JSON.parse(row.memory_json).lastDecision.knowledgeLookup.department,'zs');
+});
+
+test('successful mandatory lookup is retained in the durable reply job input',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.chat.settings('owner-a','member-a',x.campaign.id,true);
+ await readConversation(f,x,[{id:'lookup-ok',direction:'inbound',text:'您好',postedAt:f.now()}]);
+ const audit={department:'zs' as const,libraryIds:['zs-library','shared-library'],sourceIds:['approved-source'],status:'ok' as const};
+ await f.chat.processOne('owner-a','member-a','https://example.test',async(_owner,_origin,input)=>chooseProspectChatAction(input,{preflightKnowledge:async()=>audit}));
+ const row=f.sqlite.prepare("SELECT input_json FROM workbench_prospect_jobs WHERE kind='reply' AND json_extract(input_json,'$.actor')='agent'").get() as {input_json:string};assert.ok(row);assert.deepEqual(JSON.parse(row.input_json).knowledgeLookup,audit);
+});

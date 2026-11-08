@@ -1,3 +1,5 @@
+import {canReadLegacyKnowledge} from './knowledge-content-scope.ts';
+import {knowledgeDepartmentForSalesId} from './knowledge-department-scope.ts';
 import {scopeFor} from './sales-scope.ts';
 import { DomainError } from './domain.ts';
 import { DEFAULT_TALKTRACK_POLICY } from './talktrack-types.ts';
@@ -22,12 +24,12 @@ export async function queueFeedback(state:WorkbenchState,deal:Deal,now:string,re
   for(const job of jobs.filter(j=>j.dealId===deal.id&&['queued','running','waiting_transcript','waiting_config','failed'].includes(j.status))){job.status='done';job.message='已由更新的转写任务替代';delete job.leaseToken;delete job.leaseUntil;}
   jobs.unshift({id:id('feedback'),dealId:deal.id,status:transcripts.length?'queued':'waiting_transcript',message:transcripts.length?'等待自动提炼':'成单已确认，补充通话转写后自动提炼',sourceHash,candidateIds:[],createdAt:now,updatedAt:now});
 }
-export function approvedTracks(state:WorkbenchState,ids:unknown):TalkTrack[]{
+export function approvedTracks(state:WorkbenchState,ids:unknown,role:Role,access:Record<string,string>):TalkTrack[]{
   if(ids===undefined)return [];
   if(!Array.isArray(ids)||ids.length>5||ids.some(v=>typeof v!=='string'))fail('最多选择5条已发布话术');
-  return [...new Set(ids as string[])].map(key=>{const track=state.talkTracks?.find(t=>t.id===key&&t.status==='published'&&t.weight>0);if(!track)fail('所选话术尚未发布或已归档，请重新选择',409);return track;});
+  return [...new Set(ids as string[])].map(key=>{const track=state.talkTracks?.find(t=>t.id===key&&t.status==='published'&&t.weight>0&&(role!=='sales'||canReadLegacyKnowledge(t,access,knowledgeDepartmentForSalesId(scopeFor(state).salesId))));if(!track)fail('所选话术尚未发布或已归档，请重新选择',409);return track;});
 }
-export function talkKnowledge(track:TalkTrack):Knowledge{return {id:track.id,title:track.title,category:'实战话术',content:talkText(track),source:`销售管理者审核；成单案例提炼，统计成单率另行验证`,status:'published',updatedAt:track.updatedAt};}
+export function talkKnowledge(track:TalkTrack):Knowledge{return {id:track.id,title:track.title,category:'实战话术',content:talkText(track),employeeId:track.employeeId,departmentId:track.departmentId,conversationSource:track.conversationSource,source:track.conversationSource?'销售管理者审核；对话案例提炼，未经成单效果验证':'销售管理者审核；成单案例提炼，统计成单率另行验证',status:'published',updatedAt:track.updatedAt};}
 export function closeStats(state:WorkbenchState,trackId:string){const ids=new Set((state.talkTrackUsages??[]).filter(u=>u.trackId===trackId).map(u=>u.dealId));const closed=state.deals.filter(d=>ids.has(d.id)&&d.dataOrigin==='manual'&&['won','lost'].includes(d.outcome??''));return {closed:closed.length,won:closed.filter(d=>d.outcome==='won').length};}
 export function maintainTalkTracks(state:WorkbenchState,now:string):number{
   const policy=state.talkTrackPolicy??DEFAULT_TALKTRACK_POLICY;if(!policy.enabled)return 0;let count=0;
@@ -59,7 +61,7 @@ export async function handleTalkAction(state:WorkbenchState,role:Role,action:str
     }
     case 'talktrack_review':{if(role!=='manager')fail('需要销售管理者审核',403);const t=state.talkTracks?.find(t=>t.id===payload.id);if(!t)fail('话术不存在',404);if(t.version!==payload.version)fail('话术已更新，请刷新后重试',409);const decision=payload.decision;if(!['approve','reject','restore'].includes(String(decision)))fail('审核操作不正确');if((decision==='restore'?t.status!=='archived':t.status!=='candidate'))fail('话术状态已变更',409);
       if(payload.edits!==undefined){if(!payload.edits||typeof payload.edits!=='object'||Array.isArray(payload.edits))fail('微调格式不正确');const edits=payload.edits as Record<string,unknown>;if(Object.keys(edits).some(k=>!['topic','scenario','template','keywords','objectionLogic','steps','boundaries','leadTypes'].includes(k)))fail('不能修改来源、作者或原文证据');for(const key of ['topic','scenario','template'] as const)if(key in edits)t[key]=str(edits[key],key,key==='topic'?60:8000);for(const key of ['keywords','objectionLogic','steps','boundaries','leadTypes'] as const)if(key in edits)t[key]=strings(edits[key],key);}
-      if(decision!=='reject'){const d=state.deals.find(d=>d.id===t.dealId);if(!d||d.outcome!=='won'||d.dataOrigin!=='manual')fail('来源项目尚未确认成单');if(!approve)fail('向量服务未配置，请先在设置中连接 Embedding API',503);await approve(t);t.status='published';t.publishedAt=now;t.weight=1;}else t.status='rejected';
+      if(decision!=='reject'){const d=state.deals.find(d=>d.id===t.dealId);if(t.conversationSource){const job=state.feedbackJobs?.find(j=>j.candidateIds.includes(t.id)&&j.sourceHash===t.conversationSource?.sourceHash);if(!job||job.departmentId!==t.departmentId||!t.departmentId||!t.evidence.every(e=>e.transcriptId===`source-${job.id}`&&job.conversationSource?.messages.map(m=>`${m.direction==='inbound'?'客户':'销售'}：${m.text}`).join('\n').includes(e.quote)))fail('对话案例来源证据不完整',409);}else{if(!d||d.outcome!=='won'||d.dataOrigin!=='manual')fail('来源项目尚未确认成单');if(!approve)fail('向量服务未配置，请先在设置中连接 Embedding API',503);await approve(t);}t.status='published';t.publishedAt=now;t.weight=1;}else t.status='rejected';
       t.reviewNote=typeof payload.note==='string'?payload.note.trim().slice(0,3000):'';t.reviewer=actorName??'周予安';t.updatedAt=now;t.version++;t.title=talkTitle(t.employeeName,t.topic,t.version);
       for(const j of state.feedbackJobs??[])if(j.candidateIds.includes(t.id)&&j.candidateIds.every(key=>state.talkTracks?.find(track=>track.id===key)?.status!=='candidate')){j.status='done';j.message='候选话术已完成审核';j.updatedAt=now;}
       return decision==='reject'?'话术已打回':'话术已审核发布，可在生成时指定使用';}

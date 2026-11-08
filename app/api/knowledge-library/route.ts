@@ -3,12 +3,13 @@ import { assertSameOrigin } from '../../lib/connection-config.ts';
 import { DomainError } from '../../lib/domain.ts';
 import { requestEmbeddings } from '../../lib/embedding-client.ts';
 import { effectiveEmbedding } from '../../lib/embedding-store.ts';
-import { splitKnowledgeText } from '../../lib/knowledge-library-chunks.ts';
+import {knowledgeDepartmentForSalesId,isKnowledgeLibraryDepartment} from '../../lib/knowledge-department-scope.ts';
+import type {RechunkEmbedding} from '../../lib/knowledge-library-rechunk.ts';
 import { knowledgeModelKey } from '../../lib/knowledge-library-runtime.ts';
 import { createKnowledgeLibraryStore } from '../../lib/knowledge-library-store.ts';
-import { KNOWLEDGE_REQUEST_LIMIT, KNOWLEDGE_TEXT_LIMIT } from '../../lib/knowledge-library-types.ts';
+import { KNOWLEDGE_REQUEST_LIMIT } from '../../lib/knowledge-library-types.ts';
 import { readMeetingBody as readJsonObject } from '../../lib/meeting-import-validation.ts';
-import { assertKnowledgeLibraryAction, assertMemberApi, requireMemberRole } from '../../lib/member-policy.ts';
+import { assertKnowledgeLibraryAction, assertMemberApi, requireMemberRole, readMemberSalesScope } from '../../lib/member-policy.ts';
 import { requireUserId } from '../../lib/server.ts';
 
 export const dynamic = 'force-dynamic';
@@ -35,7 +36,7 @@ function context(request: Request) {
   assertMemberApi(role, url.pathname, request.method);
   const db = (env as Cloudflare.Env).DB;
   if (!db) throw new DomainError('资料库数据库尚未连接', 503);
-  return { ownerId, role, url, store: createKnowledgeLibraryStore(db, ownerId) };
+  return { ownerId, role, url, store: createKnowledgeLibraryStore(db, ownerId,role==='sales'?{departmentId:knowledgeDepartmentForSalesId(readMemberSalesScope(request)?.salesId)}:undefined) };
 }
 
 function text(value: unknown, name: string, max: number): string {
@@ -72,21 +73,29 @@ export async function POST(request: Request) {
     assertKnowledgeLibraryAction(role, action);
     switch (action) {
       case 'createLibrary':
-        return respond({ library: await store.createLibrary(text(input.name, '资料库名称', 60)) }, 201);
+        return respond({ library: await store.createLibrary(text(input.name, '资料库名称', 60),input.departmentId===undefined?'shared':isKnowledgeLibraryDepartment(input.departmentId)?input.departmentId:(()=>{throw new DomainError('资料库部门无效');})()) }, 201);
       case 'renameLibrary':
         await store.renameLibrary(text(input.libraryId, '资料库编号', 100), text(input.name, '资料库名称', 60));
         return respond({});
+      case 'saveLibraryChunking':
+        return respond({library:await store.saveLibraryChunking({libraryId:text(input.libraryId,'资料库编号',100),version:input.version as number,config:input.config})});
+      case 'saveLibraryDepartment':
+        if(!isKnowledgeLibraryDepartment(input.departmentId))throw new DomainError('资料库部门无效');
+        return respond({library:await store.saveLibraryDepartment({libraryId:text(input.libraryId,'资料库编号',100),version:input.version as number,departmentId:input.departmentId})});
+      case 'previewChunking':
+        return respond({preview:await store.previewChunking({config:input.config,documentId:input.documentId as string|undefined,version:input.version as number|undefined,text:input.text as string|undefined})});
       case 'upload': {
-        const { strategy } = input;
-        if (strategy !== 'flat' && strategy !== 'parent-child') throw new DomainError('请选择切块策略');
-        const libraryId = text(input.libraryId, '资料库编号', 100);
-        const title = text(input.title, '文档标题', 150);
-        const fileName = input.fileName ? text(input.fileName, '文件名', 255) : title;
-        const content = text(input.text, '文档正文', KNOWLEDGE_TEXT_LIMIT);
-        const chunks = splitKnowledgeText(content, strategy);
-        if (!chunks.length) throw new DomainError('文档未提取到可检索的文字');
-        return respond({ document: await store.addDocument({ libraryId, title, fileName, strategy, chunks }) }, 201);
+        const title=text(input.title,'文档标题',150);
+        return respond({document:await store.upload({libraryId:text(input.libraryId,'资料库编号',100),title,fileName:input.fileName?text(input.fileName,'文件名',255):title,text:input.text as string,config:input.config,strategy:input.strategy as 'flat'|'parent-child'|undefined,requestId:input.requestId as string|undefined})},201);
       }
+      case 'beginRechunk':
+      case 'continueRechunk': {
+        const connection=await effectiveEmbedding(ownerId);
+        const embedding:RechunkEmbedding|undefined=connection?{modelKey:knowledgeModelKey(connection),embed:async texts=>(await requestEmbeddings(connection,texts,{origin:url.origin,timeoutMs:20_000})).vectors,currentModelKey:async()=>{const current=await effectiveEmbedding(ownerId);return current?knowledgeModelKey(current):null;}}:undefined;
+        return respond(action==='beginRechunk'?await store.beginRechunk({documentId:text(input.documentId,'文档编号',100),version:input.version as number,config:input.config,requestId:input.requestId as string,text:input.text as string|undefined,fileName:input.fileName as string|undefined,rebuildIndex:input.rebuildIndex as boolean},embedding):await store.continueRechunk(text(input.jobId,'任务编号',150),embedding));
+      }
+      case 'cancelRechunk':
+        return respond(await store.cancelRechunk(text(input.jobId,'任务编号',150)));
       case 'index': {
         const documentId = text(input.documentId, '文档编号', 100);
         const connection = await effectiveEmbedding(ownerId);
@@ -97,7 +106,7 @@ export async function POST(request: Request) {
         return respond({ document });
       }
       case 'removeDocument':
-        await store.removeDocument(text(input.documentId, '文档编号', 100));
+        await store.removeDocument(text(input.documentId, '文档编号', 100),input.version as number|undefined);
         return respond({});
       case 'search': {
         const query = text(input.query, '检索内容', 1_500);

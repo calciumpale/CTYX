@@ -1,3 +1,4 @@
+import {knowledgeDepartmentForSalesId} from './knowledge-department-scope.ts';
 import type {SalesScope} from './sales-scope.ts';
 import {createWorkbenchKnowledgeAgent} from './knowledge-agent-runtime.ts';
 import {prepareKnowledgeContext} from './knowledge-agent.ts';
@@ -142,7 +143,7 @@ export async function processFeedback(userId:string,dealId:string,origin:string)
     const finalActive=new Set((latest.talkTracks??[]).filter(t=>['candidate','published'].includes(t.status)).map(t=>t.id));const finalExisting=await index.all((latest.talkTracks??[]).filter(t=>finalActive.has(t.id)),modelIdentity);const finalDedup=deduplicate(generated.candidates.map(c=>({...c,title:c.draft.topic})),finalExisting);generated.candidates=finalDedup.accepted;generated.duplicates.push(...finalDedup.duplicates);
     const now=new Date().toISOString();const tracks:TalkTrack[]=[];
     if((latest.talkTracks?.length??0)+generated.candidates.length>500)throw new DomainError('话术库达到内置容量，请扩容后重试',503);
-    for(const candidate of generated.candidates){const source=sources.find(t=>t.id===candidate.draft.evidence[0].transcriptId)!;const track:TalkTrack={...candidate.draft,id:`talk-${crypto.randomUUID()}`,title:talkTitle(source.employeeName,candidate.draft.topic,1),employeeId:source.employeeId,employeeName:source.employeeName,dealId,status:'candidate',version:1,weight:1,createdAt:now,updatedAt:now};await index.upsert(track,candidate.vector,candidate.model,'candidate');tracks.push(track);}
+    for(const candidate of generated.candidates){const source=sources.find(t=>t.id===candidate.draft.evidence[0].transcriptId)!;const track:TalkTrack={...candidate.draft,id:`talk-${crypto.randomUUID()}`,title:talkTitle(source.employeeName,candidate.draft.topic,1),employeeId:source.employeeId,employeeName:source.employeeName,departmentId:knowledgeDepartmentForSalesId(source.employeeId)??undefined,dealId,status:'candidate',version:1,weight:1,createdAt:now,updatedAt:now};await index.upsert(track,candidate.vector,candidate.model,'candidate');tracks.push(track);}
     (latest.talkTracks??=[]).unshift(...tracks);current.candidateIds=tracks.map(t=>t.id);current.status=tracks.length?'review':generated.duplicates.length?'duplicate':'screened_out';current.message=tracks.length?`${tracks.length}条候选等待管理者审核；${generated.duplicates.length}条重复已过滤` : generated.duplicates.length?'提炼内容与已有话术相似，已自动去重':'未找到证据充分且可复用的片段，本次未生成候选';current.updatedAt=now;delete current.leaseToken;delete current.leaseUntil;const expected=latest.revision;latest.revision++;await saveWorkspace(userId,expected,latest);
   }catch(error){
     // Safe diagnostic strings only; provider bodies/credentials never enter workspace history.

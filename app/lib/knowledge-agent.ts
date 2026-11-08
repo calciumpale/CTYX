@@ -57,7 +57,7 @@ export async function prepareKnowledgeContext(input:KnowledgeAgentRequest,tools:
  if(direct)return {route:'direct',...empty};
  query=contextualQuery(request,query);
  try{
-  const knowledge=[...new Map((await tools.retrieve(query)).slice(0,8).filter(item=>typeof item.id==='string'&&typeof item.title==='string'&&typeof item.content==='string'&&item.content.trim()).map(item=>[item.id,{id:item.id,title:redact(item.title).slice(0,200),content:redact(item.content).slice(0,6000)}])).values()];
+  const knowledge=[...new Map((await tools.retrieve(query)).slice(0,8).filter(item=>typeof item.id==='string'&&typeof item.title==='string'&&typeof item.content==='string'&&item.content.trim()).map(item=>[item.id,{id:item.id,title:redact(item.title).slice(0,200),content:redact(item.content).slice(0,6000).replace(/[\uD800-\uDBFF]$/, '')}])).values()];
   return {route:knowledge.length?(conflicts(knowledge)?'conflict':'retrieved'):'no_evidence',knowledge,evidenceIds:[],query};
  }catch{return {route:'failed',...empty,query};}
 }

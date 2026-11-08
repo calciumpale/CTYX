@@ -13,3 +13,11 @@ test('large known-length video persists as a backpressured stream and rejects ov
  const oversized=new Response(new Uint8Array(32),{headers:{'Content-Length':'16'}});
  await assert.rejects(persistMaterialResult(oversized,bucket,'oversized',16,'video/mp4'));
 });
+
+test('unknown-length video uses sequential bounded multipart and aborts oversize',async()=>{
+ const {persistMaterialResult}=await import('../app/lib/marketing-material.ts');let completed=false,aborted=false;const sizes:number[]=[];
+ const bucket={createMultipartUpload:async()=>({uploadPart:async(partNumber:number,bytes:Uint8Array)=>{sizes.push(bytes.length);return {partNumber,etag:'safe'};},complete:async()=>{completed=true;},abort:async()=>{aborted=true;}})} as unknown as R2Bucket;
+ const response=()=>new Response(new ReadableStream({start(controller){for(let i=0;i<18;i++)controller.enqueue(new Uint8Array(1024*1024));controller.close();}}));
+ await persistMaterialResult(response(),bucket,'private',100*1024*1024,'video/mp4');assert.equal(completed,true);assert.deepEqual(sizes,[5242880,5242880,5242880,3145728]);
+ completed=false;await assert.rejects(persistMaterialResult(response(),bucket,'private',17*1024*1024,'video/mp4'));assert.equal(aborted,true);assert.equal(completed,false);
+});

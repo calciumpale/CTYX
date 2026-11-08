@@ -102,7 +102,7 @@ test('conversation settings preserve drafts, save the loaded enabled state, and 
     assert.match(await syncDetails.textContent(), /核验.*账号.*重新同步/);
     assert.doesNotMatch(await syncDetails.textContent(), /16:00/, 'A job completion or GET refresh must not replace the platform observation time');
     await page.locator('.prospect-chat-agent-settings > summary').click();
-    assert.equal(await page.getByRole('checkbox', { checked: true }).count(), 0, 'No library is shared by default');
+    assert.equal(await page.getByRole('checkbox', { checked: true }).count(), 2, 'All server-authorized department and shared libraries are mandatory');
     assert.equal(await page.getByLabel('每日回复上限', { exact: true }).inputValue(), '30');
     assert.equal(await page.getByLabel('单会话回复上限', { exact: true }).inputValue(), '12');
     assert.equal(await page.getByLabel('开始时间', { exact: true }).inputValue(), '08:30');
@@ -115,7 +115,7 @@ test('conversation settings preserve drafts, save the loaded enabled state, and 
     await page.getByLabel('开始时间', { exact: true }).fill('09:00');
     await page.getByLabel('结束时间', { exact: true }).fill('18:00');
     await page.getByLabel('每日回复上限', { exact: true }).fill('17');
-    await page.getByRole('checkbox', { name: '已审核招商资料' }).check();
+    assert.equal(await page.getByRole('checkbox', { name: '已审核招商资料' }).isDisabled(), true);
     await page.waitForFunction(() => window.__chatDirty === true);
     const priorReads = reads;
     await page.waitForResponse(response => response.url().includes('/api/prospecting?') && response.request().method() === 'GET');
@@ -151,7 +151,7 @@ test('conversation settings preserve drafts, save the loaded enabled state, and 
     await page.waitForFunction(() => window.__chatDirty === false);
     const saved = posts.findLast(item => item.policy);
     assert.equal(saved.enabled, true, 'Saving settings uses the loaded enabled state');
-    assert.deepEqual(saved.policy, { ...defaultPolicy(), libraryIds: ['public-info'], replyDailyLimit: 17, workStart: '09:00', workEnd: '18:00' });
+    assert.deepEqual(saved.policy, { ...defaultPolicy(), libraryIds: [], replyDailyLimit: 17, workStart: '09:00', workEnd: '18:00' });
     assert.ok(reads > priorReads, 'Mutation completion refreshed the server snapshot');
     await replyHours.check();
     await page.waitForFunction(() => window.__chatDirty === true);
@@ -224,7 +224,7 @@ test('conversation settings preserve drafts, save the loaded enabled state, and 
     await page.evaluate(() => { window.__chatFixture.setBlocked(false); window.__chatFixture.setCampaign('campaign-b'); });
     await page.getByLabel('每日回复上限', { exact: true }).waitFor({ state: 'attached' });
     assert.equal(await page.getByLabel('每日回复上限', { exact: true }).inputValue(), '30', 'Campaign remount resets settings');
-    assert.equal(await page.getByRole('checkbox', { checked: true }).count(), 0);
+    assert.equal(await page.getByRole('checkbox', { checked: true }).count(), 0, 'Collapsed settings are hidden after campaign remount');
     handoffReason = undefined;
     lastSyncedAt = undefined;
     await page.waitForResponse(response => response.url().includes('/api/prospecting?') && response.request().method() === 'GET');
@@ -361,4 +361,41 @@ test('verification waits stay one reply while legacy unsent attempts remain insp
     await server.close();
     await rm(cacheDir, { recursive: true, force: true });
   }
+});
+
+test('conversation learning sends only source identifiers and shows retryable status and errors', { timeout: 60000 }, async () => {
+  const { chromium } = await import(pathToFileURL(path.join(root, 'tools/douyin-bridge/node_modules/playwright/index.mjs')).href);
+  const { server, origin, cacheDir } = await createConversationFixture();
+  let browser;
+  try {
+    browser = await chromium.launch({ headless: true });
+    const page = await browser.newPage();
+    const snapshot = { enabled: false, online: true, policy: defaultPolicy(), libraries: [], conversations: [{ id: 'case-a', campaignId: 'campaign-a', nickname: '案例客户', mode: 'human', status: 'active', version: 1, updatedAt: '2026-11-08', lastMessageAt: '2026-11-08' }], messages: [], pool: [] };
+    const posts = []; let fail = true;
+    await page.route('**/*', async route => {
+      const url = new URL(route.request().url());
+      if (url.origin !== origin) return route.abort();
+      if (url.pathname !== '/api/prospecting') return route.continue();
+      if (route.request().method() === 'GET') return route.fulfill({ json: snapshot });
+      const payload = route.request().postDataJSON(); posts.push(payload);
+      return fail ? route.fulfill({ status: 409, json: { error: '至少需要两轮实质客户文本' } }) : route.fulfill({ json: { chat: snapshot, message: '对话案例已保存；请配置大模型后重试' } });
+    });
+    await page.goto(origin);
+    const button = page.getByRole('button', { name: '提炼话术 Skill / 重试', exact: true });
+    await button.click(); await page.getByText('至少需要两轮实质客户文本', { exact: true }).waitFor();
+    assert.deepEqual(posts[0], { action: 'chatLearn', campaignId: 'campaign-a', conversationId: 'case-a' });
+    fail = false; await button.click(); await page.getByText('对话案例已保存；请配置大模型后重试', { exact: true }).waitFor();
+    assert.equal(posts.length, 2);
+  } finally { await browser?.close(); await server.close(); await rm(cacheDir, { recursive: true, force: true }); }
+});
+
+test('conversation talktrack detail names a conversation case, never a confirmed won case', async()=>{
+ const {server,cacheDir}=await createConversationFixture();
+ try{
+  const React=await import('react');const {renderToStaticMarkup}=await import('react-dom/server');
+  const {TalkLibraryView}=await server.ssrLoadModule('/app/components/TalkLibraryView.tsx');const {createSeed}=await server.ssrLoadModule('/app/lib/seed.ts');const state=createSeed('2026-11-08');
+  state.talkTracks=[{id:'case',title:'需求话术',status:'published',weight:1,version:1,employeeName:'销售甲',employeeId:'sales-1',departmentId:'zs',topic:'需求',scenario:'需求核实',template:'确认需求',keywords:[],steps:[],objectionLogic:[],boundaries:[],leadTypes:[],evidence:[],createdAt:'2026-11-08',updatedAt:'2026-11-08',conversationSource:{campaignId:'task',capturedAt:'2026-11-08',messages:[]}}];
+  const html=renderToStaticMarkup(React.createElement(TalkLibraryView,{state,mutate:async()=>{},notify:()=>{},onUsePlaybook:()=>{}}));
+  assert.match(html,/的对话案例/);assert.doesNotMatch(html,/的成单沟通/);
+ }finally{await server.close();await rm(cacheDir,{recursive:true,force:true});}
 });

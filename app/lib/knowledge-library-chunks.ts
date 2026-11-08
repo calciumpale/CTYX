@@ -109,3 +109,57 @@ export function tokenizeKnowledge(text: string, { unique = true }: { unique?: bo
   }
   return unique ? [...new Set(tokens)] : tokens;
 }
+
+import { normalizeKnowledgeChunkConfig, type KnowledgeChunkConfig } from './knowledge-chunking-config.ts';
+
+/** Configured sizes count Unicode code points; ingress and aggregate limits count UTF-16. */
+export function splitConfiguredKnowledgeText(text: string, config: KnowledgeChunkConfig): KnowledgeChunkDraft[] {
+ if(typeof text!=='string'||text.length>KNOWLEDGE_TEXT_LIMIT) throw new Error('知识正文超出容量限制。');
+ const c=normalizeKnowledgeChunkConfig(config), result: KnowledgeChunkDraft[]=[];
+ let total=0;
+ const append=(content:string,heading:string,kind:KnowledgeChunkDraft['kind'],parentOrdinal:number|null)=>{
+ total+=content.length;
+ if(result.length>=6000||total>3000000) throw new Error('切块结果超出容量限制，请增大块大小或降低重叠。');
+ const ordinal=result.length+1; result.push({ordinal,parentOrdinal,kind,text:content,heading});return ordinal;
+ };
+ function split(source:string,size:number,overlap:number):string[]{
+ // Even without overlap or character-forced cuts, each group consumes at most N lines.
+ // Reject this lower bound before allocating a code-point array or line boundary table.
+ if(c.method==='lines'){
+ let lineCount=source.endsWith('\n')?0:1;
+ for(let i=0;i<source.length;i++)if(source.charCodeAt(i)===10)lineCount++;
+ if(Math.ceil(lineCount/c.linesPerChunk)>6000)throw new Error('切块结果超出容量限制，请增大块大小或降低重叠。');
+ }
+ const chars=Array.from(source), ends:number[]=[];let offset=0;
+ let mappedOffset=0, mappedPoints=0;
+ const pointAt=(target:number)=>{while(mappedOffset<target){mappedOffset+=source.codePointAt(mappedOffset)!>0xffff?2:1;mappedPoints++;}return mappedPoints;};
+ const units=c.method==='lines'?source.match(/[^\n]*(?:\n|$)/g)?.filter(Boolean):null;
+ if(units){for(let i=0;i<units.length;i++){offset+=Array.from(units[i]).length;ends.push(offset);}}
+ else if(c.method!=='fixed'){
+ const pattern=c.method==='paragraph'?/\r?\n[ \t]*\r?\n/g:c.method==='recursive'?/\r?\n[ \t]*\r?\n|[。！？；]|[;.!?](?:\s|$)|\n/g:null;
+ if(pattern) for(const m of source.matchAll(pattern)) ends.push(pointAt(m.index+m[0].length));
+ else {let at=0; for(const ch of chars){at++;offset+=ch.length; if(c.delimiters.some(d=>source.startsWith(d,offset-d.length))) ends.push(at);}}
+ }
+ const output:string[]=[];let start=0;
+ const firstAfter=(value:number)=>{let low=0,high=ends.length;while(low<high){const mid=(low+high)>>>1;if(ends[mid]<=value)low=mid+1;else high=mid;}return low;};
+ while(start<chars.length){let end=Math.min(start+size,chars.length);
+ if((c.method==='lines'||end<chars.length) && c.method!=='fixed'){const first=firstAfter(start),last=firstAfter(end)-1;if(last>=first) end=ends[c.method==='lines'?Math.min(first+c.linesPerChunk-1,last):last];}
+ output.push(chars.slice(start,end).join(''));if(output.length>6000) throw new Error('切块结果超出容量限制，请增大块大小或降低重叠。');if(end===chars.length) break;
+ let next=end-Math.floor((end-start)*overlap/100);
+ if(c.method==='lines'&&overlap){const slice=chars.slice(start,end);const lineStarts=[0];slice.forEach((ch,i)=>{if(ch==='\n'&&i+1<slice.length)lineStarts.push(i+1);});const count=Math.floor(lineStarts.length*overlap/100);next=count?start+lineStarts[lineStarts.length-count]:end;}
+ start=Math.max(start+1,next);
+ }return output;
+ }
+ // Reuse heading/fence recognition while preserving every source character.
+ const recognized=sections(text);let cursor=0;
+ for(let i=0;i<recognized.length;i++){
+ const section=recognized[i], found=text.indexOf(section.text,cursor);
+ const next=i+1<recognized.length?text.indexOf(recognized[i+1].text,found+section.text.length):text.length;
+ const source=text.slice(cursor,next);cursor=next;
+ for(const passage of split(source,c.strategy==='flat'?c.chunkSize:c.parentChunkSize,c.overlapPercent)){
+ const ordinal=append(passage,section.heading,c.strategy==='flat'?'flat':'parent',null);
+ if(c.strategy==='parent-child')for(const child of split(passage,c.childChunkSize,c.childOverlapPercent))append(child,section.heading,'child',ordinal);
+ }
+ }
+ return result;
+}

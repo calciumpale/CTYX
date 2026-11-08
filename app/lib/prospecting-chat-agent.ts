@@ -12,6 +12,7 @@ export interface ProspectChatEvidence {
 }
 
 interface ChatAgentTools {
+  preflightKnowledge?: (query:string) => Promise<import('./prospecting-chat-types.ts').ProspectKnowledgeLookup>;
   retrieve?: (query: string) => Promise<ProspectChatEvidence[]>;
   generate?: (messages: ModelMessage[]) => Promise<string>;
   answerKnowledge?: (request: KnowledgeAgentRequest) => Promise<KnowledgeAgentResult>;
@@ -220,9 +221,10 @@ export async function chooseProspectChatAction(input:ProspectChatAgentInput,tool
     /预约|看铺|看房|看场|到店|看店/.test(inbound)?'visit':undefined:undefined;
   const needMissing=(key:NeedKey)=>!memory.needs[key]||(key==='budget'&&memory.needs.budget?.includes('待确认'));
   const missing:NeedKey|undefined=tentativeBudget?'budget':questionNeed&&needMissing(questionNeed)?questionNeed:needOrder.find(needMissing);
+  let knowledgeLookup:import('./prospecting-chat-types.ts').ProspectKnowledgeLookup|undefined;
   const finish=(decision:ProspectChatDecision):ProspectChatDecision=>{
     memory.summary=summarize(memory);
-    return {...decision,memory,...(taskState?{taskMemoryState:taskState}:{})};
+    return {...decision,...(knowledgeLookup?{knowledgeLookup}:{}),memory,...(taskState?{taskMemoryState:taskState}:{})};
   };
   if(taskState?.pendingSourceIds?.length)return finish({action:'wait',reason:'新条件待核实，暂缓自动回复'});
   if(taskView&&(!taskView.isActive||!taskView.ready))return finish({action:'wait',reason:'本任务记忆尚未就绪或当前由其他任务接待'});
@@ -245,6 +247,11 @@ export async function chooseProspectChatAction(input:ProspectChatAgentInput,tool
     return finish({action:'handoff',reason,...base});
   };
   if(handoff.test(inbound))return transfer(handoffTopics.find(([pattern])=>pattern.test(inbound))?.[1]??modelHandoffReasons.human_confirmation);
+  if(tools.preflightKnowledge){
+    try{knowledgeLookup=await tools.preflightKnowledge([redact(inbound),...previousInbound.slice(-2).map(m=>redact(m.text))].join('\n').slice(-1500)||'客户图片咨询');}
+    catch{knowledgeLookup={department:null,libraryIds:[],sourceIds:[],status:'failed'};}
+    if(knowledgeLookup.status!=='ok')return finish({action:'wait',reason:'所属部门资料检索未完成，请人工核实后回复',...base});
+  }
   if(pending.at(-1)?.contentType==='image')return finish({action:'reply',reply:'收到图片了，请用文字说一下您想了解的问题。',evidenceIds:[],answeredMessageIds:[],route:'direct',...base});
   if(taskState&&lead)taskState.contact.captured=true;
   if(lead)return finish({action:'reply',reply:'收到，我们会尽快与您联系。',evidenceIds:[],...base});

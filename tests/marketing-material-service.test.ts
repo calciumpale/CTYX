@@ -18,3 +18,25 @@ test('large video streams to R2; declared and streaming size violations cannot c
  if(mode==='large'){assert.equal(done.status,'completed');assert.equal(consumed,total);assert.ok(ahead<=4*chunkSize);assert.equal(done.files.length,1);}else{assert.equal(done.status,'saving');assert.equal(done.files.length,0);}
  }
 });
+test('saving diagnostics identify the safe failure stage without signed URLs or provider secrets',async()=>{
+ for(const stage of ['result_schema','result_host','download_status','download_type','storage_put_or_stream']){
+  const {store,sqlite}=fixture();
+  try{
+   await store.configure('owner',{kind:'apimart',action:'save',version:0,secret:'private-provider-key'});
+   let submitted=0,clock=10000;
+   const service=createMaterialService({store,now:()=>clock,bucket:{put(){throw new Error('private-storage-token');}} as unknown as R2Bucket,request:async url=>{
+    if(String(url).includes('/generations')){submitted++;return Response.json({code:200,data:[{task_id:'existing-provider-task'}]});}
+    if(String(url).includes('/tasks/'))return Response.json({code:200,data:{status:'completed',result:stage==='result_schema'?{}:{images:[{url:[stage==='result_host'?'https://cdn.example.com/a.png?token=private-signed-token':'https://upload.apimart.ai/a.png?token=private-signed-token']}]}}});
+    return new Response('provider-private-body',{status:stage==='download_status'?500:200,headers:{'Content-Type':stage==='download_type'?'application/octet-stream':'image/png'}});
+   }});
+   let task=await service.execute('owner','alice',command);
+   for(let attempt=0;attempt<2;attempt++){
+    clock+=6000;task=await service.execute('owner','alice',{action:'refresh',taskId:task.id,version:task.version});
+    assert.equal(task.status,'saving');assert.equal(task.files.length,0);
+    assert.ok(task.error?.includes('['+stage),task.error);
+    assert.ok(!/private-|https?:|\?token/.test(task.error??''),task.error);
+   }
+   assert.equal(submitted,1);
+  }finally{sqlite.close();}
+ }
+});

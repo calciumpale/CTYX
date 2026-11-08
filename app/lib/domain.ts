@@ -1,3 +1,5 @@
+import {canReadLegacyKnowledge} from './knowledge-content-scope.ts';
+import {knowledgeDepartmentForSalesId} from './knowledge-department-scope.ts';
 import { markSalesBusinessChanges } from './sales-project-eligibility.ts';
 import {bindScope,scopeFor,rosterFor} from './sales-scope.ts';
 import type {SalesScope,SalesOwner} from './sales-scope.ts';
@@ -156,8 +158,8 @@ export function projectState(state:WorkbenchState,role:Role,scope?:SalesScope):W
     const ownIds=new Set(result.deals.filter(d=>d.ownerId===scopeFor(result).salesId).map(d=>d.id));
     result.contracts=result.contracts?.filter(c=>ownIds.has(c.dealId));
     result.transcripts=result.transcripts?.filter(t=>ownIds.has(t.dealId));
-    result.feedbackJobs=result.feedbackJobs?.filter(j=>ownIds.has(j.dealId));
-    result.talkTracks=result.talkTracks?.filter(t=>t.status==='published'||ownIds.has(t.dealId));
+    result.feedbackJobs=result.feedbackJobs?.filter(j=>ownIds.has(j.dealId)||j.conversationSource?.employeeId===scopeFor(result).salesId);
+    result.talkTracks=result.talkTracks?.filter(t=>(t.status==='published'&&canReadLegacyKnowledge(t,result._access??{},knowledgeDepartmentForSalesId(scopeFor(result).salesId)))||ownIds.has(t.dealId)||t.conversationSource?.employeeId===scopeFor(result).salesId);
     result.talkTrackUsages=result.talkTrackUsages?.filter(u=>!u.dealId||ownIds.has(u.dealId));
     result.deals=result.deals.filter(item=>item.ownerId===scopeFor(result).salesId);
     result.workflows=result.workflows.filter(item=>item.published||item.status==='published').map(publishedView);
@@ -399,7 +401,7 @@ async function buildRun(state:StoredState,role:Role,query:string,context:ActionC
   const portfolio=routed.includes('opportunity')&&/商机|漏斗|客户|团队|招商|销售|跟进/.test(retrievalQuery);
   const active=state.deals.filter(item=>!item.archive);const visibleDeals=role==='sales'?active.filter(item=>item.ownerId===scopeFor(state).salesId):active;
   const scopedDeals=deal?[deal]:portfolio?visibleDeals:[];
-  const explicitTracks=approvedTracks(state,options.talkTrackIds);
+  const explicitTracks=approvedTracks(state,options.talkTrackIds,role,state._access??{});
   const semanticTracks=!context.prepareKnowledge&&context.retrieveTalkTracks&&!explicitTracks.length&&routed.includes('strategy')?await context.retrieveTalkTracks(retrievalQuery):[];
   const tracks=[...new Map([...explicitTracks,...semanticTracks].map(t=>[t.id,t])).values()].slice(0,5);
   let knowledge:Knowledge[]=[];

@@ -1,17 +1,20 @@
+import {createKnowledgeRechunk, sourceStatements, configValue} from './knowledge-library-rechunk.ts';
+import type {KnowledgeChunkConfig} from './knowledge-chunking-config.ts';
+import {isKnowledgeLibraryDepartment, type KnowledgeDepartmentId, type KnowledgeLibraryDepartment} from './knowledge-department-scope.ts';
 import { DomainError } from './domain.ts';
 import { tokenizeKnowledge } from './knowledge-library-chunks.ts';
 import { cosineSimilarity, validateVectors } from './talktrack-vectors.ts';
 import { KNOWLEDGE_CHUNK_LIMIT, KNOWLEDGE_SEARCHABLE_LIMIT, KNOWLEDGE_TEXT_LIMIT } from './knowledge-library-types.ts';
 import type { KnowledgeChunk, KnowledgeChunkDraft, KnowledgeChunkStrategy, KnowledgeDocument, KnowledgeHit, KnowledgeLibrary, KnowledgeLibrarySnapshot, KnowledgeRetrievalMode, KnowledgeSearchResult } from './knowledge-library-types.ts';
 
-interface DocumentRow { id:string;owner_id:string;library_id:string;title:string;file_name:string;strategy:KnowledgeChunkStrategy;status:KnowledgeDocument['status'];chunk_count:number;indexed_count:number;error:string|null;model_key:string|null;generation:number;dimension:number|null;index_token:string|null;index_until:string|null;updated_at:string }
+export interface DocumentRow {content_version:number;source_version:string|null;source_hash:string|null;applied_config:string|null;upload_request_id:string|null;upload_hash:string|null;current_rechunk_job_id:string|null; id:string;owner_id:string;library_id:string;title:string;file_name:string;strategy:KnowledgeChunkStrategy;status:KnowledgeDocument['status'];chunk_count:number;indexed_count:number;error:string|null;model_key:string|null;generation:number;dimension:number|null;index_token:string|null;index_until:string|null;updated_at:string }
 interface ChunkRow { id:string;owner_id:string;document_id:string;ordinal:number;parent_ordinal:number|null;kind:KnowledgeChunkDraft['kind'];text:string;heading:string;vector_json:string|null;vector_model:string|null }
 type PublicChunkRow=Pick<ChunkRow,'id'|'ordinal'|'parent_ordinal'|'kind'|'text'|'heading'>;
 interface CandidateRow extends ChunkRow {title:string;file_name:string;library_name:string;updated_at:string;context:string|null;rank?:number}
 type CandidateKey=Pick<CandidateRow,'id'|'document_id'|'ordinal'|'parent_ordinal'|'rank'>;
 interface ScanRow {id:string;title:string;heading:string;text:string;vector_json:string|null}
 // Keep each JSON binding well below D1's 2 MB string limit, including CJK UTF-8 expansion.
-function jsonPages(rows:unknown[]):string[]{
+export function jsonPages(rows:unknown[]):string[]{
  const pages:string[]=[],encoder=new TextEncoder();let items:string[]=[],bytes=2;
  for(const row of rows){const item=JSON.stringify(row),size=encoder.encode(item).byteLength+1;
   if(items.length&&bytes+size>750_000){pages.push(`[${items.join(',')}]`);items=[];bytes=2;}
@@ -23,22 +26,27 @@ const stamp=()=>new Date().toISOString();
 const clean=(value:unknown,max:number,label:string)=>{if(typeof value!=='string'||!value.trim()||value.length>max||/[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(value))throw new DomainError(`${label}格式无效`);return value.trim();};
 const compact=(value:string)=>value.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]/gu,'');
 const publicChunk=(row:PublicChunkRow):KnowledgeChunk=>({id:row.id,ordinal:row.ordinal,parentOrdinal:row.parent_ordinal,kind:row.kind,text:row.text,heading:row.heading});
-const publicDocument=(row:DocumentRow,modelKey?:string|null):KnowledgeDocument=>{const outdated=!!modelKey&&!!row.model_key&&row.model_key!==modelKey;return{id:row.id,libraryId:row.library_id,title:row.title,fileName:row.file_name,strategy:row.strategy,status:outdated?'pending':row.status,chunkCount:row.chunk_count,indexedCount:outdated?0:row.indexed_count,error:outdated?'向量模型已变化，请重新建立索引':row.error,updatedAt:row.updated_at};};
+export const publicDocument=(row:DocumentRow,modelKey?:string|null):KnowledgeDocument=>{const outdated=!!modelKey&&!!row.model_key&&row.model_key!==modelKey;return{contentVersion:row.content_version??1,sourceAvailable:!!row.source_version,appliedConfig:row.applied_config ? configValue(row.applied_config,row.strategy) : undefined,id:row.id,libraryId:row.library_id,title:row.title,fileName:row.file_name,strategy:row.strategy,status:outdated?'pending':row.status,chunkCount:row.chunk_count,indexedCount:outdated?0:row.indexed_count,error:outdated?'向量模型已变化，请重新建立索引':row.error,updatedAt:row.updated_at};};
 const candidateSelect="SELECT c.id,c.owner_id,c.document_id,c.ordinal,c.parent_ordinal,c.kind,c.text,c.heading,d.title,d.file_name,d.updated_at,l.name AS library_name,p.text AS context FROM workbench_knowledge_chunks c JOIN workbench_knowledge_documents d ON d.id=c.document_id AND d.owner_id=c.owner_id JOIN workbench_knowledge_libraries l ON l.id=d.library_id AND l.owner_id=d.owner_id LEFT JOIN workbench_knowledge_chunks p ON p.owner_id=c.owner_id AND p.document_id=c.document_id AND p.ordinal=c.parent_ordinal AND p.kind='parent'";
 const candidateKeySelect='SELECT c.id,c.document_id,c.ordinal,c.parent_ordinal FROM workbench_knowledge_chunks c JOIN workbench_knowledge_documents d ON d.id=c.document_id AND d.owner_id=c.owner_id';
 
-export function createKnowledgeLibraryStore(db:D1Database,ownerId:string){
+export function createKnowledgeLibraryStore(db:D1Database,ownerId:string,options?:{departmentId?:KnowledgeDepartmentId|null}){
+ const department=options?.departmentId;
+ if(department!==undefined&&department!==null&&!['zs','yy','yl','ch','wl'].includes(department))throw new DomainError('资料库部门范围无效');
+ const libraryScope=department===undefined?'':` AND department_id IN ('shared','${department??'shared'}')`;
+ const documentScope=department===undefined?'':` AND library_id IN (SELECT id FROM workbench_knowledge_libraries WHERE owner_id=workbench_knowledge_documents.owner_id${libraryScope})`;
+ const searchScope=department===undefined?'':` AND d.library_id IN (SELECT id FROM workbench_knowledge_libraries WHERE owner_id=d.owner_id${libraryScope})`;
  if(!ownerId)throw new DomainError('请先登录',401);
- async function ownLibrary(id:string){const row=await db.prepare('SELECT id,name FROM workbench_knowledge_libraries WHERE owner_id=? AND id=?').bind(ownerId,id).first<{id:string;name:string}>();if(!row)throw new DomainError('知识库不存在',404);return row;}
- async function ownDocument(id:string){const row=await db.prepare('SELECT * FROM workbench_knowledge_documents WHERE owner_id=? AND id=?').bind(ownerId,id).first<DocumentRow>();if(!row)throw new DomainError('文档不存在',404);return row;}
+ async function ownLibrary(id:string){const row=await db.prepare(`SELECT * FROM workbench_knowledge_libraries WHERE owner_id=? AND id=?${libraryScope}`).bind(ownerId,id).first<{id:string;name:string;default_config:string|null;version:number;department_id:KnowledgeLibraryDepartment}>();if(!row)throw new DomainError('知识库不存在',404);return row;}
+ async function ownDocument(id:string){const row=await db.prepare(`SELECT * FROM workbench_knowledge_documents WHERE owner_id=? AND id=?${documentScope}`).bind(ownerId,id).first<DocumentRow>();if(!row)throw new DomainError('文档不存在',404);return row;}
  async function snapshot(modelKey?:string|null):Promise<Pick<KnowledgeLibrarySnapshot,'libraries'|'documents'>>{
-  const libraries=await db.prepare('SELECT l.id,l.name,COUNT(d.id) AS documentCount FROM workbench_knowledge_libraries l LEFT JOIN workbench_knowledge_documents d ON d.library_id=l.id AND d.owner_id=l.owner_id WHERE l.owner_id=? GROUP BY l.id ORDER BY l.created_at,l.id').bind(ownerId).all<KnowledgeLibrary>();
-  const documents=await db.prepare('SELECT * FROM workbench_knowledge_documents WHERE owner_id=? ORDER BY updated_at DESC,id').bind(ownerId).all<DocumentRow>();
-  return{libraries:libraries.results,documents:documents.results.map(row=>publicDocument(row,modelKey))};
+  const libraries=await db.prepare(`SELECT l.id,l.name,l.default_config,l.version,l.department_id,COUNT(d.id) AS documentCount FROM workbench_knowledge_libraries l LEFT JOIN workbench_knowledge_documents d ON d.library_id=l.id AND d.owner_id=l.owner_id WHERE l.owner_id=?${libraryScope} GROUP BY l.id ORDER BY l.created_at,l.id`).bind(ownerId).all<KnowledgeLibrary & {default_config:string|null;department_id:KnowledgeLibraryDepartment}>();
+  const documents=await db.prepare(`SELECT * FROM workbench_knowledge_documents WHERE owner_id=?${documentScope} ORDER BY updated_at DESC,id`).bind(ownerId).all<DocumentRow>();
+  return{libraries:libraries.results.map(row=>({id:row.id,name:row.name,documentCount:row.documentCount,version:row.version,departmentId:row.department_id,defaultConfig:configValue(row.default_config)})),documents:await Promise.all(documents.results.map(async row=>({...publicDocument(row,modelKey),...(row.current_rechunk_job_id?{rechunkJob:await extension.getJob(row.current_rechunk_job_id)}:{})})))};
  }
- async function createLibrary(name:string):Promise<KnowledgeLibrary>{const normalized=clean(name,100,'知识库名称'),id=`kl-${crypto.randomUUID()}`;await db.prepare('INSERT INTO workbench_knowledge_libraries(id,owner_id,name,created_at) VALUES (?,?,?,?)').bind(id,ownerId,normalized,stamp()).run();return{id,name:normalized,documentCount:0};}
+ async function createLibrary(name:string,departmentId:KnowledgeLibraryDepartment='shared'):Promise<KnowledgeLibrary>{if(!isKnowledgeLibraryDepartment(departmentId))throw new DomainError('资料库部门无效');const normalized=clean(name,100,'知识库名称'),id=`kl-${crypto.randomUUID()}`;await db.prepare('INSERT INTO workbench_knowledge_libraries(id,owner_id,name,created_at,department_id) VALUES (?,?,?,?,?)').bind(id,ownerId,normalized,stamp(),departmentId).run();return{id,name:normalized,documentCount:0,version:1,defaultConfig:configValue(null),departmentId};}
  async function renameLibrary(id:string,name:string){await ownLibrary(id);const normalized=clean(name,100,'知识库名称');const result=await db.prepare('UPDATE workbench_knowledge_libraries SET name=? WHERE owner_id=? AND id=?').bind(normalized,ownerId,id).run();if(!result.meta.changes)throw new DomainError('知识库不存在',404);}
- async function addDocument(input:{libraryId:string;title:string;fileName:string;strategy:KnowledgeChunkStrategy;chunks:KnowledgeChunkDraft[]}):Promise<KnowledgeDocument>{
+ async function addDocument(input:{libraryId:string;title:string;fileName:string;strategy:KnowledgeChunkStrategy;chunks:KnowledgeChunkDraft[];source?:string;config?:KnowledgeChunkConfig;requestId?:string;intentHash?:string}):Promise<KnowledgeDocument>{
   await ownLibrary(input.libraryId);const title=clean(input.title,200,'文档名称'),fileName=clean(input.fileName,255,'文件名');
   if(!['flat','parent-child'].includes(input.strategy)||!Array.isArray(input.chunks)||!input.chunks.length||input.chunks.length>KNOWLEDGE_CHUNK_LIMIT)throw new DomainError(`切分策略或片段数量无效，每份文档最多${KNOWLEDGE_CHUNK_LIMIT}个片段`);
   const ordinals=new Map<number,KnowledgeChunkDraft>(),parentsWithChildren=new Set<number>();let size=0;
@@ -54,14 +62,19 @@ export function createKnowledgeLibraryStore(db:D1Database,ownerId:string){
   for(const page of jsonPages(chunkRows))statements.push(db.prepare("INSERT INTO workbench_knowledge_chunks(id,owner_id,document_id,ordinal,parent_ordinal,kind,text,heading) SELECT json_extract(j.value,'$.id'),?,?,json_extract(j.value,'$.ordinal'),json_extract(j.value,'$.parentOrdinal'),json_extract(j.value,'$.kind'),json_extract(j.value,'$.text'),json_extract(j.value,'$.heading') FROM json_each(?) j WHERE EXISTS (SELECT 1 FROM workbench_knowledge_documents WHERE owner_id=? AND id=?)").bind(ownerId,id,page,ownerId,id));
   const indexRows=chunkRows.filter(chunk=>chunk.kind!=='parent').map(chunk=>({id:chunk.id,tokens:tokenizeKnowledge(`${title} ${chunk.heading} ${chunk.text}`,{unique:false}).join(' ')}));
   for(const page of jsonPages(indexRows))statements.push(db.prepare("INSERT INTO workbench_knowledge_fts(chunk_id,owner_id,tokens) SELECT json_extract(j.value,'$.id'),?,json_extract(j.value,'$.tokens') FROM json_each(?) j WHERE EXISTS (SELECT 1 FROM workbench_knowledge_chunks c WHERE c.owner_id=? AND c.document_id=? AND c.id=json_extract(j.value,'$.id'))").bind(ownerId,page,ownerId,id));
+  if(input.source!==undefined){
+   const source=await sourceStatements(db,ownerId,id,input.source);
+   statements.push(...source.statements,db.prepare('UPDATE workbench_knowledge_documents SET source_version=?,source_hash=?,applied_config=?,upload_request_id=?,upload_hash=? WHERE owner_id=? AND id=?').bind(source.version,source.hash,input.config ? JSON.stringify(input.config) : null,input.requestId??null,input.intentHash??null,ownerId,id));
+  }
   // D1 batches are transactional: chunks and FTS become visible together, or all are rolled back.
   await db.batch(statements);return publicDocument(await ownDocument(id));
  }
- async function removeDocument(id:string){await ownDocument(id);await db.batch([
+ async function removeDocument(id:string,version?:number){const doc=await ownDocument(id);if(version!==undefined&&(!Number.isSafeInteger(version)||version!==doc.content_version))throw new DomainError('资料版本已变化',409);try{await db.batch([
+  ...(version===undefined?[]:[db.prepare("SELECT CASE WHEN EXISTS (SELECT 1 FROM workbench_knowledge_documents WHERE owner_id=? AND id=? AND content_version=?) THEN 1 ELSE json('knowledge delete version conflict') END").bind(ownerId,id,version)]),
   db.prepare('DELETE FROM workbench_knowledge_fts WHERE owner_id=? AND chunk_id IN (SELECT id FROM workbench_knowledge_chunks WHERE owner_id=? AND document_id=?)').bind(ownerId,ownerId,id),
   db.prepare('DELETE FROM workbench_knowledge_chunks WHERE owner_id=? AND document_id=?').bind(ownerId,id),
   db.prepare('DELETE FROM workbench_knowledge_documents WHERE owner_id=? AND id=?').bind(ownerId,id),
- ]);}
+ ]);}catch(error){if(version!==undefined&&(await ownDocument(id)).content_version!==version)throw new DomainError('资料版本已变化',409);throw error;}}
  async function chunks(id:string):Promise<KnowledgeChunk[]>{await ownDocument(id);const rows=await db.prepare('SELECT id,ordinal,parent_ordinal,kind,text,heading FROM workbench_knowledge_chunks WHERE owner_id=? AND document_id=? ORDER BY ordinal').bind(ownerId,id).all<PublicChunkRow>();return rows.results.map(publicChunk);}
 
  async function indexDocument(id:string,modelKey:string,embed:(texts:string[])=>Promise<number[][]>):Promise<KnowledgeDocument>{
@@ -98,11 +111,12 @@ export function createKnowledgeLibraryStore(db:D1Database,ownerId:string){
    if(!allowlist.length)return{hits:[],mode:input.mode,notice:null};
    const ids=[...new Set(allowlist)];
    const owned=await db.prepare(`SELECT COUNT(*) AS total FROM workbench_knowledge_libraries WHERE owner_id=? AND id IN (${ids.map(()=>'?').join(',')})`).bind(ownerId,...ids).first<{total:number}>();
+   for(const id of ids)await ownLibrary(id);
    if(owned?.total!==ids.length)throw new DomainError('知识库不存在或无权使用',404);
   }
   if(input.libraryId)await ownLibrary(input.libraryId);
   const selectedIds=allowlist?[...new Set(allowlist)]:undefined;
-  const limit=Math.max(1,Math.min(20,Math.trunc(input.limit||5))),values=[ownerId,...(input.libraryId?[input.libraryId]:selectedIds??[])],scope=`c.owner_id=?${input.libraryId?' AND d.library_id=?':selectedIds?` AND d.library_id IN (${selectedIds.map(()=>'?').join(',')})`:''} AND c.kind!='parent'`;
+  const limit=Math.max(1,Math.min(20,Math.trunc(input.limit||5))),values=[ownerId,...(input.libraryId?[input.libraryId]:selectedIds??[])],scope=`c.owner_id=?${input.libraryId?' AND d.library_id=?':selectedIds?` AND d.library_id IN (${selectedIds.map(()=>'?').join(',')})`:''} AND c.kind!='parent'${searchScope}`;
   // Hold only lightweight keys for the corpus and FTS rankings; text and vectors are paged below.
   const corpus=(await db.prepare(`${candidateKeySelect} WHERE ${scope} ORDER BY d.updated_at DESC,c.document_id,c.ordinal LIMIT ?`).bind(...values,KNOWLEDGE_SEARCHABLE_LIMIT+1).all<CandidateKey>()).results;
   const notices:string[]=[];if(corpus.length>KNOWLEDGE_SEARCHABLE_LIMIT)notices.push(`当前范围超过${KNOWLEDGE_SEARCHABLE_LIMIT}个检索片段，向量和精确词匹配仅扫描最近${KNOWLEDGE_SEARCHABLE_LIMIT}个；可选择单个知识库缩小范围`);
@@ -158,5 +172,6 @@ export function createKnowledgeLibraryStore(db:D1Database,ownerId:string){
   const rows=new Map(current.map(row=>[row.id,row]));const hits:KnowledgeHit[]=selected.flatMap(id=>{const row=rows.get(id);return row?[{id:row.id,documentId:row.document_id,title:row.title,libraryName:row.library_name,fileName:row.file_name,heading:row.heading,ordinal:row.ordinal,matchedText:row.text,context:row.context??row.text,parent:row.parent_ordinal!==null,updatedAt:row.updated_at,bm25:lexical.get(id)??null,vector:dense.get(id)??null}]:[];});
   return{hits,mode,notice:notices.join('；')||null};
  }
- return{snapshot,createLibrary,renameLibrary,addDocument,removeDocument,chunks,indexDocument,search};
+ const extension=createKnowledgeRechunk(db,ownerId,{ownDocument,ownLibrary,addDocument});
+ return{...extension,snapshot,createLibrary,renameLibrary,addDocument,removeDocument,chunks,indexDocument,search};
 }

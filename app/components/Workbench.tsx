@@ -121,7 +121,7 @@ export default function Workbench({member,onLogout}:{member:MemberSession;onLogo
     if(next==='home'&&member.role!=='admin')next='deals';
     if(next==='meetings')next=member.role==='admin'?'settings':'schedule';
     if(next===view&&!id&&!intent&&!contractId&&!approvalId){setMobileMenu(false);setSearchOpen(false);return;}
-    if(projectBusy.current){notify('项目正在录入或更新，请等待完成后离开。');return;}
+    if(projectBusy.current){notify('当前内容正在处理，请等待完成后离开。');return;}
     if(approvalBusy.current){notify('审批操作正在保存，请等待完成后离开。');return;}
     if(contractBusy.current){notify('合同正在导入、保存或初审，请等待完成后离开。');return;}
     if(trainingPending.current){notify('语音回应正在保存，请等待完成；失败时可在带练页直接重试。');return;}
@@ -219,7 +219,7 @@ export default function Workbench({member,onLogout}:{member:MemberSession;onLogo
         {(view==='contracts'||view==='approvals')&&member.role!=='admin'&&<ContractCenter {...props} initialTab={view==='approvals'?'approvals':'contracts'} initialDealId={focusedDeal} initialContractId={focusedApprovalContract} initialApprovalId={focusedApprovalId} onNavigate={navigate} onReloadWorkspace={reload} onBusyChange={view==='approvals'?onApprovalBusy:onContractBusy} onDirtyChange={view==='approvals'?onApprovalDirty:onContractDirty} pendingCount={approvalPendingCount}/>}
         {view==='training'&&member.role!=='admin'&&<TrainingView {...props} onPendingChange={onTrainingPendingChange} onMediaStopReady={onTrainingMediaReady}/>}
 
-        {(view==='knowledge'||view==='talktracks')&&<KnowledgeWorkspace key={view+':'+(focusedDeal||'')} focus={focusedDeal} {...props} member={member} initialTab={view==='talktracks'?'talktracks':'documents'} onUsePlaybook={id=>{if(member.role==='admin')return;setSelectedTalkIds([id]);setConversation([]);setFailedRequest(null);setChatError('');setChatOpen(true);}}/>}
+        {(view==='knowledge'||view==='talktracks')&&<KnowledgeWorkspace key={view+':'+(focusedDeal||'')} focus={focusedDeal} {...props} member={member} onBusyChange={onProjectBusy} onDirtyChange={onProjectDirty} initialTab={view==='talktracks'?'talktracks':'documents'} onUsePlaybook={id=>{if(member.role==='admin')return;setSelectedTalkIds([id]);setConversation([]);setFailedRequest(null);setChatError('');setChatOpen(true);}}/>}
         {view==='studio'&&<BuilderStudio {...props} readOnly={member.role!=='admin'} onGuardReady={onStudioGuardReady}/>}
         {view==='runs'&&<RunsView {...props} canExtract={member.role!=='admin'}/>}
         {view==='settings'&&member.role==='admin'&&<><SettingsView {...props} onConnectionChanged={reload}/><section className="meeting-settings-status"><MeetingImportWorkspace state={state} onWorkspaceRefresh={reload} admin/></section></>}

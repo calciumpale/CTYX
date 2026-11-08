@@ -77,3 +77,7 @@ test('shared answer keeps source applicability clauses with its price',async()=>
  const result=await runKnowledgeAgent({question:'月租多少？',intent:'business'},{retrieve:async()=>[{id:'terms',title:'价格条件',content:'以下报价仅适用于年度合同。月租8000元。'}],generate:async()=>JSON.stringify({answer:'月租8000元。',evidenceIds:['terms']})});
  assert.equal(result.action,'unavailable');
 });
+test('parent context retains 6000 UTF16 budget without splitting a codepoint',async()=>{
+ const result=await prepareKnowledgeContext({question:'产品价格',intent:'business'},{retrieve:async()=>[{id:'emoji',title:'正文',content:'甲'+'😀'.repeat(4000)}]});
+ const text=result.knowledge[0].content;assert.equal(text.length,5999);assert.ok(text.endsWith('😀'));
+});

@@ -89,7 +89,10 @@ export interface ProspectChatSnapshot {
   sync?: { conversationId: string; status: ProspectJobStatus; updatedAt: string; error?: string };
 }
 
+export interface ProspectKnowledgeLookup {department:import('./knowledge-department-scope.ts').KnowledgeDepartmentId|null;libraryIds:string[];sourceIds:string[];status:'ok'|'failed';}
 export interface ProspectChatAgentInput {
+  /** Server-populated from the persisted conversation, never from request payload. */
+  memberId?:string;
   campaign: { name: string; requirements: string; minIntentScore: number };
   conversation: Pick<ProspectChatConversation, 'nickname'> & Partial<Pick<ProspectChatConversation, 'mode' | 'memory' | 'taskMemory'>>;
   policy?: ProspectChatPolicy;
@@ -100,6 +103,7 @@ export interface ProspectChatAgentInput {
 }
 
 export interface ProspectChatDecision {
+  knowledgeLookup?:ProspectKnowledgeLookup;
   action: 'reply' | 'handoff' | 'wait';
   reply?: string;
   reason?: string;

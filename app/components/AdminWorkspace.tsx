@@ -9,6 +9,7 @@ import { useBusinessSettings } from './BusinessSettingsContext';
 import { KnowledgeLibraries } from './KnowledgeLibraries';
 import { KnowledgeView } from './StudioViews';
 import { TalkLibraryView } from './TalkLibraryView';
+import { DiscardChangesDialog } from './CoreViews';
 import './admin-workspace.css';
 
 export const MEMBER_LABELS = {sales:'一线销售',manager:'销售管理者',admin:'管理员'};
@@ -59,16 +60,27 @@ export function BusinessRulesView({state,notify,onBusyChange,onDirtyChange}:{sta
   return <div className="admin-page admin-rules"><header className="admin-page-heading"><div><h1>业务规则</h1></div></header><section className="admin-rule-section"><div><h2>项目截止提醒</h2></div>{error&&<ErrorNote error={error} retry={!busy&&!dirty?()=>setReload(value=>value+1):undefined}/>}<form onSubmit={event=>void save(event)}><div className="admin-thresholds"><label>紧急提醒<span>剩余不足</span><div className="admin-number"><input type="number" min="1" max="29" required value={urgent} disabled={loading||busy} onChange={event=>setUrgent(event.target.value)}/><span>天</span></div></label><label>常规提醒<span>剩余不足</span><div className="admin-number"><input type="number" min="2" max="30" required value={warning} disabled={loading||busy} onChange={event=>setWarning(event.target.value)}/><span>天</span></div></label></div><footer><p>{loading?'正在读取已保存规则…':dirty?'有尚未保存的修改':'当前规则已保存'}</p><button className="button primary" disabled={!saved||!dirty||busy||loading}>{busy?<Loader2 size={15} className="spin"/>:<Check size={15}/>}保存规则</button></footer></form></section><ApprovalWorkspace templatesOnly state={state} notify={notify} onBusyChange={templateBusyChanged} onDirtyChange={templateDirtyChanged}/></div>;
 }
 
-export function KnowledgeWorkspace({member,onUsePlaybook,initialTab='documents',focus,...props}:ViewProps&{member:MemberSession;onUsePlaybook:(id:string)=>void;initialTab?:'documents'|'talktracks';focus?:string|null}) {
+export function KnowledgeWorkspace({member,onUsePlaybook,initialTab='documents',focus,onBusyChange,onDirtyChange,...props}:ViewProps&{member:MemberSession;onUsePlaybook:(id:string)=>void;initialTab?:'documents'|'talktracks';focus?:string|null}&GuardProps) {
   const [tab,setTab]=useState<'libraries'|'documents'|'talktracks'>(initialTab==='talktracks'||focus==='talk-review'?'talktracks':focus?'documents':'libraries');
+  const busy=useRef(false),dirty=useRef(false);
+  const [pendingTab,setPendingTab]=useState<typeof tab|null>(null);
+  const busyChanged=useCallback((value:boolean)=>{busy.current=value;onBusyChange?.(value);},[onBusyChange]);
+  const dirtyChanged=useCallback((value:boolean)=>{dirty.current=value;onDirtyChange?.(value);},[onDirtyChange]);
+  const switchTab=(next:typeof tab)=>{
+    if(next===tab)return;
+    if(busy.current){props.notify('资料正在处理，请等待当前操作结束后切换。');return;}
+    if(dirty.current){setPendingTab(next);return;}
+    setTab(next);
+  };
   return <div className="knowledge-workspace">
     <nav className="knowledge-workspace-switch" aria-label="知识库内容">
-      <button className={tab==='libraries'?'selected':''} aria-pressed={tab==='libraries'} onClick={()=>setTab('libraries')}><Database size={16}/>资料库</button>
-      <button className={tab==='documents'?'selected':''} aria-pressed={tab==='documents'} onClick={()=>setTab('documents')}><BookOpen size={16}/>知识与方法</button>
-      <button className={tab==='talktracks'?'selected':''} aria-pressed={tab==='talktracks'} onClick={()=>setTab('talktracks')}><GitBranch size={16}/>成单话术</button>
+      <button className={tab==='libraries'?'selected':''} aria-pressed={tab==='libraries'} onClick={()=>switchTab('libraries')}><Database size={16}/>资料库</button>
+      <button className={tab==='documents'?'selected':''} aria-pressed={tab==='documents'} onClick={()=>switchTab('documents')}><BookOpen size={16}/>知识与方法</button>
+      <button className={tab==='talktracks'?'selected':''} aria-pressed={tab==='talktracks'} onClick={()=>switchTab('talktracks')}><GitBranch size={16}/>成单话术</button>
     </nav>
-    {tab==='libraries' ? <KnowledgeLibraries notify={props.notify}/> : tab==='documents' ?
+    {tab==='libraries' ? <KnowledgeLibraries notify={props.notify} onBusyChange={busyChanged} onDirtyChange={dirtyChanged}/> : tab==='documents' ?
       <KnowledgeView {...props} initialTab={member.role==='manager'&&focus==='skill-review'?'review':'knowledge'} canReviewSkills={member.role==='manager'} canSubmitExperience={member.role!=='admin'}/> :
       <TalkLibraryView {...props} initialTab={member.role==='manager'&&focus==='talk-review'?'review':'published'} canReview={member.role==='manager'} operational={member.role==='admin'} onUsePlaybook={onUsePlaybook}/>}
+    {pendingTab&&<DiscardChangesDialog title="资料修改尚未保存" onCancel={()=>setPendingTab(null)} onDiscard={()=>{dirtyChanged(false);setTab(pendingTab);setPendingTab(null);}}/>}
   </div>;
 }

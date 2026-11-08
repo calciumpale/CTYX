@@ -18,6 +18,10 @@ export async function readMaterialBody(request:Request):Promise<Record<string,un
 export async function persistMaterialResult(response:Response,bucket:R2Bucket,key:string,max:number,type:string):Promise<void> {
  if(!response.ok||!response.body)throw new DomainError('结果下载失败',502);
  const declared=response.headers.get('content-length');
+ if(declared===null&&max>16*1024*1024&&typeof bucket.createMultipartUpload==='function'){
+ const upload=await bucket.createMultipartUpload(key,{httpMetadata:{contentType:type}}),reader=response.body.getReader(),parts:R2UploadedPart[]=[];const size=5*1024*1024;let buffer=new Uint8Array(size),used=0,total=0;
+ try{while(true){const {done,value}=await reader.read();if(done)break;total+=value.byteLength;if(total>max)throw new DomainError('生成结果超过大小限制',502);let offset=0;while(offset<value.length){const n=Math.min(size-used,value.length-offset);buffer.set(value.subarray(offset,offset+n),used);used+=n;offset+=n;if(used===size){parts.push(await upload.uploadPart(parts.length+1,buffer));buffer=new Uint8Array(size);used=0;}}}if(used)parts.push(await upload.uploadPart(parts.length+1,buffer.subarray(0,used)));if(!total)throw new DomainError('生成结果为空',502);await upload.complete(parts);}catch(error){await upload.abort().catch(()=>{});throw error;}finally{await reader.cancel().catch(()=>{});reader.releaseLock();}return;
+ }
  if(declared===null){const bytes=await boundedMaterialBytes(response,Math.min(max,16*1024*1024));await bucket.put(key,bytes,{httpMetadata:{contentType:type}});return;}
  const length=Number(declared);
  if(!/^\d+$/.test(declared)||!Number.isSafeInteger(length)||length<1||length>max){await response.body.cancel();throw new DomainError('结果下载超过大小限制',502);}

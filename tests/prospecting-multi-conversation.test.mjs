@@ -81,6 +81,105 @@ browserTest('opening recipient A switches a still-visible recipient B panel thro
   }
 });
 
+async function profileWithDuplicateEntry(t, { visiblePanel, settle }) {
+  const { adapter } = await fixture(t, { staleRecipient: 'recipient-b' });
+  const page = await adapter.navigate(input('recipient-a').profileUrl);
+  await page.evaluate(({ visiblePanel, settle }) => {
+    const panel = document.querySelector('[data-e2e="im-dialog"]');
+    panel.hidden = !visiblePanel;
+    const entry = document.querySelector('#private-message');
+    entry.addEventListener('click', () => { panel.hidden = false; });
+    const duplicate = document.createElement('button');
+    duplicate.textContent = '私信';
+    duplicate.onclick = () => { window.duplicateEntryClicked = true; };
+    entry.after(duplicate);
+    if (settle) setTimeout(() => duplicate.remove(), 500);
+  }, { visiblePanel, settle });
+  return { adapter, page };
+}
+
+for (const visiblePanel of [false, true]) {
+  browserTest(`private-message entry waits for temporary duplicates to settle (${visiblePanel ? 'stale panel' : 'closed panel'})`, async t => {
+    const { adapter, page } = await profileWithDuplicateEntry(t, { visiblePanel, settle: true });
+    const observed = await adapter.readConversation(input('recipient-a'));
+    assert.equal(observed.reliable, true);
+    assert.equal(observed.messages.at(-1).text, 'recipient-a的来信');
+    assert.deepEqual(await page.evaluate(() => [window.entryClicks, window.duplicateEntryClicked]), [1, undefined]);
+  });
+}
+
+browserTest('private-message entry refuses to click either permanently visible duplicate', async t => {
+  const { adapter, page } = await profileWithDuplicateEntry(t, { visiblePanel: false, settle: false });
+  await assert.rejects(adapter.readConversation(input('recipient-a')), { code: 'CONTROL_UNVERIFIED' });
+  assert.deepEqual(await page.evaluate(() => [window.entryClicks, window.duplicateEntryClicked, window.proofClicks]), [undefined, undefined, undefined]);
+});
+
+async function changingConversation(t, { wrongProof = 0 } = {}) {
+  const { adapter } = await fixture(t);
+  await adapter.readConversation(input('recipient-b'));
+  const page = await adapter.navigate(input('recipient-a').profileUrl);
+  await page.locator('#private-message').evaluate((entry, wrongProof) => {
+    entry.addEventListener('click', () => {
+      document.querySelector('[data-apm-action]').onclick = () => {
+        window.proofClicks = (window.proofClicks || 0) + 1;
+        if (window.proofClicks === 1) document.querySelector('[data-e2e="message-text"]').textContent = 'A的最新来信';
+        window.open(window.proofClicks === wrongProof ? '/user/unrelated-user' : '/user/recipient-a');
+      };
+    });
+  }, wrongProof);
+  return { adapter, page };
+}
+
+browserTest('read retries one changed snapshot with a fresh popup and returns only the stable messages', async t => {
+  const { adapter, page } = await changingConversation(t);
+  const observed = await adapter.readConversation(input('recipient-a'));
+  assert.equal(observed.reliable, true);
+  assert.deepEqual(observed.messages.map(message => message.text), ['A的最新来信']);
+  assert.equal(await page.evaluate(() => window.proofClicks), 2);
+  assert.equal((await adapter.readConversation(input('recipient-a'))).snapshotId, observed.snapshotId);
+  assert.equal(await page.evaluate(() => window.proofClicks), 2);
+});
+
+for (const wrongProof of [1, 2]) {
+  browserTest(`read rejects a changed snapshot when popup ${wrongProof} proves the wrong recipient`, async t => {
+    const { adapter, page } = await changingConversation(t, { wrongProof });
+    await assert.rejects(adapter.readConversation(input('recipient-a')), { code: 'RECIPIENT_UNVERIFIED' });
+    assert.equal(await page.evaluate(() => window.proofClicks), wrongProof);
+  });
+}
+
+browserTest('a changed transcript after a cached proof does not earn another popup', async t => {
+  const { adapter } = await fixture(t);
+  await adapter.readConversation(input('recipient-a'));
+  const page = await adapter.page();
+  const verify = adapter.verifyTarget.bind(adapter);
+  t.mock.method(adapter, 'verifyTarget', async (...args) => {
+    const proof = await verify(...args);
+    await page.locator('[data-e2e="message-text"]').evaluate(node => { node.textContent = 'A刚收到的来信'; });
+    return proof;
+  });
+  await assert.rejects(adapter.readConversation(input('recipient-a')), { code: 'CONVERSATION_CHANGED' });
+  assert.equal(await page.evaluate(() => window.proofClicks), 1);
+});
+
+browserTest('a replaced card at the final read check cannot trigger a third popup', async t => {
+  const { adapter, page } = await changingConversation(t);
+  const verifyAccount = adapter.verifiedConversationAccount.bind(adapter);
+  t.mock.method(adapter, 'verifiedConversationAccount', async (...args) => {
+    const account = await verifyAccount(...args);
+    if (await page.evaluate(() => window.proofClicks) === 2) {
+      await page.locator('[data-apm-action]').evaluate(card => {
+        const replacement = card.cloneNode(true);
+        replacement.onclick = card.onclick;
+        card.replaceWith(replacement);
+      });
+    }
+    return account;
+  });
+  await assert.rejects(adapter.readConversation(input('recipient-a')), { code: 'RECIPIENT_UNVERIFIED' });
+  assert.equal(await page.evaluate(() => window.proofClicks), 2);
+});
+
 browserTest('normal A then B then A polling gives each requested recipient a fresh participant proof', async t => {
   const { adapter } = await fixture(t);
   const realNow = Date.now.bind(Date);

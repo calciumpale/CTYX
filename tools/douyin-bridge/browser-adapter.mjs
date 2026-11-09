@@ -657,7 +657,7 @@ export class DouyinBrowserAdapter {
     if (visible.length !== 1) fail(message, 'CONTROL_UNVERIFIED');
     return visible[0];
   }
-  async verifyTarget(page, root, target, stackChat, { passive = false, snapshotId, preparingDispatch = false } = {}) {
+  async verifyTarget(page, root, target, stackChat, { passive = false, snapshotId, preparingDispatch = false, reuseOnly = false } = {}) {
     const message = '无法核对目标会话的用户主页，未发送。请打开该用户会话后检查页面结构。';
     const rejectTarget = () => { this.conversationSelection = undefined; fail(message, 'RECIPIENT_UNVERIFIED'); };
     if (stackChat) {
@@ -683,6 +683,7 @@ export class DouyinBrowserAdapter {
           (snapshotId === undefined || binding.snapshotId === snapshotId) &&
           Date.now() - binding.checkedAt >= 0 && Date.now() - binding.checkedAt < TARGET_READ_PROOF_INTERVAL_MS &&
           sameCard) return;
+      if (reuseOnly) rejectTarget();
       // Each recipient owns its read budget. A successful proof from a previous
       // document must be renewed after switching away and back; a failed proof
       // remains throttled for that recipient even while other chats are read.
@@ -709,7 +710,7 @@ export class DouyinBrowserAdapter {
         if (profileIdentity(profilePage.url()).id === target.id && current && await signature() === current && profileIdentity(page.url()).url === target.url) {
           this.readTargetBinding = { page, context: this.context, targetId: target.id, signature: current, card: await profileCard.elementHandle(), checkedAt: Date.now() };
           proofAttempt.successful = true;
-          return;
+          return true;
         }
       } catch { /* An unavailable, invalid, or different profile cannot authorize a send. */ }
       finally { await profilePage?.close().catch(() => {}); }
@@ -733,30 +734,36 @@ export class DouyinBrowserAdapter {
     const required = writable ? COMPOSER : '.messageMessageListwrapper, [data-e2e="message-list"]';
     const roots = page.locator(CHAT_ROOTS);
     const panel = roots.filter({ has: page.locator(required), visible: true }).first();
-    const entry = page.getByRole('button', { name: /^(私信|发消息|发送私信)$/ });
+    const entry = page.getByRole('button', { name: /^(私信|发消息|发送私信)$/ }).filter({ visible: true });
     const entryError = '未找到唯一的私信入口，目标可能未开放私信。';
+    const clickEntry = async () => {
+      const deadline = performance.now() + this.timeoutMs;
+      for (;;) {
+        await this.guard(page, signal);
+        const remaining = deadline - performance.now();
+        if (remaining <= 0) fail(entryError, 'CONTROL_UNVERIFIED');
+        if (await entry.count() === 1) {
+          if (profileIdentity(page.url()).url !== target.url) fail('打开的主页与审核时的收件人不同。', 'INVALID_RECIPIENT');
+          await entry.click({ timeout: Math.max(1, deadline - performance.now()) });
+          await this.guard(page, signal);
+          return;
+        }
+        await sleep(Math.min(100, remaining));
+      }
+    };
     const panelVisible = await panel.isVisible();
     const selected = this.conversationSelection;
     const selectionMatches = selected?.page === page && selected.context === this.context && selected.targetId === target.id;
-    if (!panelVisible) {
-      try { await entry.filter({ visible: true }).first().waitFor({ state: 'visible', timeout: this.timeoutMs }); }
-      catch { await this.guard(page, signal); fail(entryError, 'CONTROL_UNVERIFIED'); }
-      const button = await this.uniqueVisible(entry, entryError);
-      await button.click(); await this.guard(page, signal);
-    } else if (!selectionMatches && await entry.filter({ visible: true }).count() === 1) {
-      // Douyin can retain B's visible inbox on A's profile. Select A through
-      // A's native private-message entry before reading or editing anything.
-      const button = await this.uniqueVisible(entry, entryError);
-      await button.click(); await this.guard(page, signal);
-    }
+    // Douyin can retain B's visible inbox on A's profile. Select A through
+    // A's native private-message entry before reading or editing anything.
+    if (!panelVisible || !selectionMatches && await entry.count() > 0) await clickEntry();
     try { await panel.waitFor({ state: 'visible', timeout: Math.min(3000, this.timeoutMs) }); }
     catch {
       await this.guard(page, signal);
       // The profile can expose its private-message button before it responds to
       // a click. Only retry the entry while no chat panel is visible.
       if (!await roots.filter({ visible: true }).count() && profileIdentity(page.url()).id === target.id) {
-        const retry = await this.uniqueVisible(entry, entryError);
-        await retry.click(); await this.guard(page, signal);
+        await clickEntry();
       }
       try { await panel.waitFor({ state: 'visible', timeout: this.timeoutMs }); }
       catch { await this.guard(page, signal); fail('会话面板未打开或需要人工操作，未发送。', 'CHAT_UNAVAILABLE'); }
@@ -780,16 +787,25 @@ export class DouyinBrowserAdapter {
   }
   async readConversation(input, { signal } = {}) {
     const { page, root, target, stackChat } = await this.openConversation(input, { signal, writable: false, deferTargetProof: true });
-    const result = await readConversationTranscript(root, { ...input, signal, timeoutMs: this.timeoutMs, includeProof: true });
-    await this.verifyTarget(page, root, target, stackChat, { passive: true, snapshotId: result.snapshotId });
-    const binding = this.readTargetBinding;
-    const confirmed = await readConversationTranscript(root, { ...input, signal, timeoutMs: this.timeoutMs, includeProof: true });
-    if (confirmed.snapshotId !== result.snapshotId) fail('核实会话对象时消息已变化，请稍后重新同步。', 'CONVERSATION_CHANGED');
-    const account = await this.verifiedConversationAccount(page, input.senderAccountId, signal);
-    requireAccount(account, input.senderAccountId, '暂未核实读取会话的账号，请等待页面恢复。');
-    if (stackChat && binding && this.readTargetBinding === binding) binding.snapshotId = result.snapshotId;
-    await this.verifyTarget(page, root, target, stackChat, { passive: true, snapshotId: result.snapshotId });
-    return confirmed;
+    const transcriptOptions = { ...input, signal, timeoutMs: this.timeoutMs, includeProof: true };
+    for (const retry of [false, true]) {
+      const result = await readConversationTranscript(root, transcriptOptions);
+      const snapshotId = result.snapshotId;
+      const provedByPopup = await this.verifyTarget(page, root, target, stackChat, { passive: !retry, snapshotId });
+      const binding = this.readTargetBinding;
+      const confirmed = await readConversationTranscript(root, transcriptOptions);
+      if (confirmed.snapshotId !== snapshotId) {
+        // Only a fresh, successful popup earns one retry. The next sample
+        // requires its own popup and a matching transcript on both sides.
+        if (!retry && provedByPopup) continue;
+        fail('核实会话对象时消息已变化，请稍后重新同步。', 'CONVERSATION_CHANGED');
+      }
+      const account = await this.verifiedConversationAccount(page, input.senderAccountId, signal);
+      requireAccount(account, input.senderAccountId, '暂未核实读取会话的账号，请等待页面恢复。');
+      if (stackChat && binding && this.readTargetBinding === binding) binding.snapshotId = snapshotId;
+      await this.verifyTarget(page, root, target, stackChat, { passive: true, snapshotId, reuseOnly: true });
+      return confirmed;
+    }
   }
   async reply(input, options = {}) {
     return this.send(input, { ...options, conversationReply: true });

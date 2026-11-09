@@ -603,15 +603,18 @@ browserTest('a new stack snapshot needs one budgeted target proof before returni
   assert.deepEqual(state.requests.slice(before), ['/user/recipient-1']);
 });
 
-browserTest('a transcript changing during target proof is never returned or cached as verified', async t => {
-  const { adapter, page } = await stackConversationFixture(t);
+browserTest('a transcript changing during both target proofs is never returned or cached as verified', async t => {
+  const { adapter, page, state } = await stackConversationFixture(t);
   await page.locator('[data-apm-action]').evaluate(card => {
+    let changes = 0;
     card.onclick = () => {
-      document.querySelector('[data-e2e=message-text]').textContent = '核实期间出现的不同正文';
+      document.querySelector('[data-e2e=message-text]').textContent = `核实期间出现的不同正文 ${++changes}`;
       window.open('/user/recipient-1');
     };
   });
+  const before = state.requests.length;
   await assert.rejects(adapter.readConversation(conversationInput), error => error.code === 'CONVERSATION_CHANGED');
+  assert.deepEqual(state.requests.slice(before), ['/user/recipient-1', '/user/recipient-1']);
   assert.equal(adapter.readTargetBinding?.snapshotId, undefined);
 });
 

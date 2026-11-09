@@ -5,15 +5,129 @@ import type { GenerationInput } from '../app/lib/domain.ts';
 import { createSeed } from '../app/lib/seed.ts';
 import type { Run, Workflow } from '../app/lib/types.ts';
 import { buildModelMessages } from '../app/lib/model-messages.ts';
+import { customerInsightEvidence, formatCustomerInsight } from '../app/lib/customer-insight.ts';
 import type { SalesIntelligence } from '../app/lib/sales-intelligence-types.ts';
 
 const now='2026-10-23T08:00:00.000Z';
 const status=(expected:number)=>(error:unknown)=>error instanceof DomainError&&error.status===expected;
+
+test('customer insight filters unsupported assertions from model suggestions and keeps uncertain source snippets attributed',()=>{
+  const deal=createSeed(now).deals[0];
+  deal.companyProfile={companyName:deal.name,summary:'只保存了公开网页片段',provider:'web',status:'partial',facts:[],warnings:[],modelUsed:false,updatedAt:now,
+    sources:[{id:'web-1',title:'企业公开介绍',url:'https://example.com/company',provider:'web',retrievedAt:now,snippet:'公开网页提及该企业从事设备服务。'}]};
+  const evidence=customerInsightEvidence(deal);
+  const answer=formatCustomerInsight(JSON.stringify({
+    factIds:['source-1'],insights:['建议先核实实际业务线。','每月8000元是本项目报价。','现有三间商铺。'],
+    questions:['客户现在的优先事项是什么？'],nextSteps:['联系采购负责人确认对接流程。','客户已经通过采购审批。','该公司是全国最大的供应商。'],
+  }),evidence)!;
+  assert.match(answer,/公开网页提及该企业从事设备服务。.*企业公开介绍，待核实/);
+  assert.match(answer,/联系采购负责人确认对接流程/);
+  assert.doesNotMatch(answer,/8000元|现有三间商铺|已通过采购审批|已经通过采购审批|全国最大/);
+});
 function capture() {
   const inputs:GenerationInput[]=[];
   return {inputs,context:{now,generate:async(input:GenerationInput)=>{inputs.push(structuredClone(input));return {answer:'服务端生成的已保存回答',mode:'live' as const};}}};
 }
 const storedRun=(id:string,query:string,answer:string):Run=>({id,query,answer,agentIds:['insight'],steps:[],citations:[],mode:'live',createdAt:now,duration:1});
+
+function scopedInsightFixture() {
+  const state=createSeed(now);
+  const deal=state.deals.find(item=>item.ownerId==='sales-1')!;
+  deal.name='百川医疗设备测试公司';
+  deal.dataOrigin='manual';
+  deal.companyProfile={companyName:deal.name,summary:'企业公开资料待进一步核实。',
+    facts:[{label:'主营业务',value:'医疗器械的研发与制造',sourceIds:['registry']},
+      {label:'采购预算',value:'未验证的采购预算500万元',sourceIds:['missing']}],
+    sources:[{id:'registry',title:'企业公开登记信息',url:'https://registry.example/company',provider:'jinghai',retrievedAt:now}],
+    provider:'jinghai',status:'ready',warnings:[],updatedAt:now,modelUsed:false};
+  const query=`我要对接${deal.name}，帮我看看这家公司怎么样`;
+  const unrelated={id:'sales-manual',title:'销售方法与话术实用手册120条',content:'这是一段与该企业无关的通用话术。'};
+  return {state,deal,query,unrelated};
+}
+
+test('scoped customer insight uses the configured model despite unrelated shared knowledge conflicts',async()=>{
+  const {state,deal,query,unrelated}=scopedInsightFixture();
+  for(const agentId of [undefined,'insight'] as const){
+    let calls=0;
+    const result=await executeAction(state,'sales','chat',{query,dealId:deal.id,...(agentId?{agentId}:{})},{
+      now,
+      prepareKnowledge:async()=>({route:'conflict',knowledge:[unrelated],evidenceIds:[unrelated.id]}),
+      generateInsight:async(input:GenerationInput)=>{
+        calls++;
+        assert.equal(input.deal?.id,deal.id);
+        const prompt=buildModelMessages(input).map(message=>message.content).join('\n');
+        assert.match(prompt,/factIds|fact-1/);
+        assert.match(prompt,/医疗器械的研发与制造/);
+        assert.doesNotMatch(prompt,/通用话术|未验证的采购预算500万元/);
+        return {answer:JSON.stringify({factIds:['fact-1','unknown-fact'],insights:['可以从现有工作流程和协作难点切入。'],questions:['谁负责评估现有流程？'],nextSteps:['先约一次需求沟通。']}),mode:'live' as const};
+      },
+    });
+    assert.equal(calls,1);
+    const run=result.run!;
+    assert.equal(run.mode,'live');
+    assert.deepEqual(run.agentIds,['insight']);
+    for(const content of ['已知信息','对接分析','待核实','下一步','医疗器械的研发与制造','可以从现有工作流程和协作难点切入','谁负责评估现有流程','先约一次需求沟通'])assert.ok(run.answer.includes(content),content);
+    assert.doesNotMatch(run.answer,/unknown-fact|未验证的采购预算500万元|未调用外部模型/);
+    assert.ok(run.citations.some(citation=>citation.title==='企业公开登记信息'));
+    assert.ok(run.citations.every(citation=>citation.id!==unrelated.id));
+  }
+});
+
+test('scoped customer insight reports missing model configuration rather than saving a local answer',async()=>{
+  const {state,deal,query}=scopedInsightFixture();
+  await assert.rejects(executeAction(state,'sales','chat',{query,dealId:deal.id},{
+    now,
+    prepareKnowledge:async()=>({route:'no_evidence',knowledge:[],evidenceIds:[]}),
+    generateInsight:async()=>({answer:'不可展示的本地演示',mode:'demo' as const}),
+  }),status(503));
+  assert.equal(state.runs.length,0);
+});
+
+test('scoped customer insight can plan discovery without evidence and rejects malformed model output',async()=>{
+  const {state,deal,query}=scopedInsightFixture();
+  Object.assign(deal,{companyProfile:undefined,customerProfile:undefined,summary:'',needs:[],notes:[],nextAction:''});
+  let calls=0;
+  const context={now,generateInsight:async(input:GenerationInput)=>{
+    calls++;
+    assert.deepEqual(input.customerInsightEvidence,[]);
+    assert.match(buildModelMessages(input).at(-1)!.content,/百川医疗设备测试公司/);
+    return {answer:JSON.stringify({factIds:['fact-1'],insights:['可从了解医疗设备使用场景切入。'],questions:['负责设备选型的是哪个部门？'],nextSteps:['先约一次使用场景访谈。']}),mode:'live' as const};
+  }};
+  const result=await executeAction(state,'sales','chat',{query,dealId:deal.id},context);
+  assert.equal(calls,1);
+  assert.equal(result.run?.mode,'live');
+  assert.deepEqual(result.run?.citations,[]);
+  assert.match(result.run!.answer,/资料.*不足/);
+  assert.match(result.run!.answer,/负责设备选型的是哪个部门/);
+  assert.match(result.run!.answer,/先约一次使用场景访谈/);
+  assert.doesNotMatch(result.run!.answer,/fact-1|未验证的采购预算/);
+  await assert.rejects(executeAction(state,'sales','chat',{query,dealId:deal.id},{
+    now,generateInsight:async()=>({answer:'{"factIds": [',mode:'live' as const}),
+  }),error=>status(502)(error)&&/重试/.test((error as DomainError).message));
+});
+
+test('scoped insight follows up for the same deal while explicit price questions remain guarded',async()=>{
+  const {state,deal,query}=scopedInsightFixture();
+  const modelInputs:GenerationInput[]=[];
+  const context={
+    now,
+    prepareKnowledge:async()=>({route:'no_evidence' as const,knowledge:[],evidenceIds:[]}),
+    generate:async()=>{assert.fail('缺少价格依据时不能生成业务答案');},
+    generateInsight:async(input:GenerationInput)=>{
+      modelInputs.push(input);
+      return {answer:JSON.stringify({factIds:['fact-1'],insights:['可以先梳理现有使用场景。'],questions:['目前哪个环节最耗时？'],nextSteps:['请使用部门讲解一次典型流程。']}),mode:'live' as const};
+    },
+  };
+  const first=await executeAction(state,'sales','chat',{query,dealId:deal.id},context);
+  const detail=await executeAction(first.state,'sales','chat',{query:'再具体一点',dealId:deal.id,conversationRunIds:[first.run!.id]},context);
+  assert.equal(detail.run?.mode,'live');
+  assert.equal(detail.run?.dealId,deal.id);
+  assert.deepEqual(modelInputs.map(input=>input.query),[query,'再具体一点']);
+  assert.deepEqual(modelInputs[1].history,[{query,answer:first.run!.answer}]);
+  const result=await executeAction(detail.state,'sales','chat',{query:'这个项目的商铺月租多少？',dealId:deal.id,agentId:'insight',conversationRunIds:[first.run!.id,detail.run!.id]},context);
+  assert.equal(modelInputs.length,2);
+  assert.match(result.run!.answer,/资料不足/);
+});
 
 test('ordinary chat does not send unrelated customer records or references to the model',async()=>{
   for(const query of ['你好','1+1等于几？','本周天气怎么样？']) {

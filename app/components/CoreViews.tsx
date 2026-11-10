@@ -12,7 +12,7 @@ export function BrandMark({ small = false }: { small?: boolean }) {
   return <svg className={small ? 'brand-mark small' : 'brand-mark'} viewBox="0 0 40 40" fill="none" aria-hidden="true">{Array.from({ length: 12 }, (_, i) => <path key={i} d="M20 3 L21.3 14.7 L20 18 L18.7 14.7 Z" fill="currentColor" transform={`rotate(${i * 30} 20 20)`} />)}<circle cx="20" cy="20" r="3.8" fill="currentColor" /></svg>;
 }
 
-export function Overlay({ children, title, onClose, className = '', wide = false }: { children: ReactNode; title: string; onClose: () => void; className?: string; wide?: boolean }) {
+export function Overlay({ children, title, onClose, className = '', wide = false, actions }: { children: ReactNode; title: string; onClose: () => void; className?: string; wide?: boolean; actions?: ReactNode }) {
   const ref = useRef<HTMLDialogElement>(null);
   const closeRef = useRef(onClose);
   useEffect(() => { closeRef.current = onClose; }, [onClose]);
@@ -25,7 +25,8 @@ export function Overlay({ children, title, onClose, className = '', wide = false
     dialog?.addEventListener('cancel', cancel);
     return () => { dialog?.removeEventListener('cancel', cancel); dialog?.close(); previous?.focus(); };
   }, []);
-  return <dialog ref={ref} className={`overlay ${wide ? 'wide' : ''} ${className}`} aria-label={title} onClick={e => { if (e.target === e.currentTarget) onClose(); }}><div className="overlay-body"><div className="overlay-heading"><h2>{title}</h2><button className="icon-button" onClick={onClose} aria-label="关闭"><X size={19} /></button></div>{children}</div></dialog>;
+  const close = <button className="icon-button" onClick={onClose} aria-label="关闭"><X size={19} /></button>;
+  return <dialog ref={ref} className={`overlay ${wide ? 'wide' : ''} ${className}`} aria-label={title} onClick={e => { if (e.target === e.currentTarget) onClose(); }}><div className="overlay-body"><div className="overlay-heading"><h2>{title}</h2>{actions ? <div className="overlay-heading-actions">{actions}{close}</div> : close}</div>{children}</div></dialog>;
 }
 
 export function DiscardChangesDialog({ title, onCancel, onDiscard }: {

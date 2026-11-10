@@ -24,6 +24,7 @@ export function readMemberDisplayName(request:Request):string {
 export function assertMemberApi(role:MemberRole,pathname:string,method:string):void {
   const path=pathname.replace(/\/$/,'');const verb=method.toUpperCase();
   if(path==='/api/workbench'){if(['GET','POST'].includes(verb))return;return denied();}
+  if(path==='/api/agent-memory'){if(role!=='admin'&&['GET','POST'].includes(verb))return;return denied();}
   if(['/api/web-prospects','/api/marketing-materials','/api/moments-materials'].includes(path)){if(role!=='admin'&&['GET','POST'].includes(verb))return;return denied();}
   if(path==='/api/marketing-materials/result'){if(role!=='admin'&&['GET','HEAD'].includes(verb))return;return denied();}
   if(path==='/api/material-connection'){if(role==='admin'&&['GET','POST'].includes(verb))return;return denied();}

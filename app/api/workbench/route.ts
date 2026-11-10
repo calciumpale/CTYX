@@ -36,7 +36,7 @@ export async function POST(request:Request):Promise<Response> {
     if(!payload||typeof payload!=='object'||Array.isArray(payload))throw new DomainError('操作参数格式不正确');
     if(input.action==='switch_role')throw new DomainError('账号角色由登录权限确定，请退出后使用对应账号登录',403);
     const memberRole=requireMemberRole(request);
-    const result=await mutateWorkbench(userId,readRole(request),input.action,payload as Record<string,unknown>,input.revision,new URL(request.url).origin,memberRole,readMemberDisplayName(request),readMemberSalesScope(request));
+    const result=await mutateWorkbench(userId,readRole(request),input.action,payload as Record<string,unknown>,input.revision,new URL(request.url).origin,memberRole,readMemberDisplayName(request),readMemberSalesScope(request),request.headers.get('x-ctai-member-account-id')!);
     const projected=projectAccountResult(memberRole,result,readMemberSalesScope(request));if(memberRole==='manager')projected.state.salesOwners=await readSalesOwners(userId);return Response.json(projected,{headers:responseHeaders});
   } catch(error){return errorResponse(error);}
 }

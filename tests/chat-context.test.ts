@@ -30,6 +30,44 @@ function capture() {
 }
 const storedRun=(id:string,query:string,answer:string):Run=>({id,query,answer,agentIds:['insight'],steps:[],citations:[],mode:'live',createdAt:now,duration:1});
 
+test('chat recalls bounded memory for its resolved project and presents it as reference', async () => {
+  const state = createSeed(now);
+  const deal = state.deals.find(item => item.ownerId === 'sales-1')!;
+  const requests: Array<{ query: string; projectId?: string }> = [];
+  const result = await executeAction(state, 'sales', 'chat', { query: '按我的惯例梳理本次沟通', dealId: deal.id }, {
+    now,
+    recallAgentMemory: async (query: string, projectId?: string) => {
+      requests.push({ query, projectId });
+      return { index: ['沟通格式'], topics: [{ title: '沟通格式', body: '用户偏好先给结论。' }] };
+    },
+    generateInsight: async (input: GenerationInput) => {
+      const prompt = buildModelMessages(input).map(message => message.content).join('\n');
+      assert.match(prompt, /用户偏好先给结论/);
+      assert.match(prompt, /记忆.*参考/);
+      return { answer: JSON.stringify({ factIds: [], insights: ['先说明沟通目标'], questions: ['需要确认哪些情况？'], nextSteps: ['整理跟进清单'] }), mode: 'live' };
+    },
+  });
+  assert.deepEqual(requests, [{ query: '按我的惯例梳理本次沟通', projectId: deal.id }]);
+  assert.ok(result.run?.steps.some(step => /Agent 记忆/.test(step.title)));
+});
+
+test('an explicit preference recall uses memory when there is no matching shared knowledge', async () => {
+  const state = createSeed(now);
+  let modelCalls = 0;
+  const context = {
+    now,
+    prepareKnowledge: async () => ({ route: 'conflict' as const, knowledge: [], evidenceIds: [] }),
+    recallAgentMemory: async () => ({ index: ['汇报格式'], topics: [{ title: '汇报格式', body: '先给结论，再列行动项。' }] }),
+    generate: async () => { modelCalls++; return { answer: '你习惯先给结论，再列行动项。', mode: 'live' as const }; },
+  };
+  const answer = await executeAction(state, 'sales', 'chat', { query: '你记得我平时的汇报格式吗？' }, context);
+  assert.equal(answer.run?.mode, 'live');
+  assert.equal(modelCalls, 1);
+  const price = await executeAction(state, 'sales', 'chat', { query: '你记得客户的月租报价吗？' }, context);
+  assert.equal(price.run?.mode, 'demo');
+  assert.equal(modelCalls, 1);
+});
+
 function scopedInsightFixture() {
   const state=createSeed(now);
   const deal=state.deals.find(item=>item.ownerId==='sales-1')!;

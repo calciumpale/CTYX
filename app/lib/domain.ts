@@ -16,6 +16,7 @@ import type { AgentId, ApiResult, CompanyProfile, CustomerProfile, Deal, FlowNod
 import { defaultTrainingProfile, validateTrainingProfile } from './training-profile.ts';
 import { demoTrainingGenerate } from './training-dialogue.ts';
 import type { TrainingGenerationInput } from './training-dialogue.ts';
+import type { AgentMemoryContext } from './agent-memory-types.ts';
 import { CUSTOMER_INSIGHT_INSTRUCTION, CUSTOMER_RECORD_INSTRUCTION, customerInsightEvidence, formatCustomerInsight, formatCustomerRecordAnswer, isCustomerInsightQuestion, isCustomerRecordFollowup, isCustomerRecordQuestion, type CustomerInsightEvidence } from './customer-insight.ts';
 
 export class DomainError extends Error {
@@ -26,9 +27,9 @@ export class DomainError extends Error {
 interface WorkflowFrame {knowledgeIds:string[];answerIds:string[];targets?:string[];knowledgeRoute?:KnowledgePreparedContext['route'];}
 interface WorkflowCheckpoint {workflow:Workflow;role:Role;deal?:Deal;deals:Deal[];knowledge:Record<string,Knowledge>;answers:Record<string,string>;frames:Record<string,WorkflowFrame>;order:string[];cursor:number;}
 type StoredState=WorkbenchState & {_access?:Record<string,string>;_workflowRuns?:Record<string,WorkflowCheckpoint>};
-export interface GenerationInput {salesScope?:SalesScope;query:string;agentId:AgentId;projectApprovals?:ProjectApprovalContext[];deal?:Deal;deals:Deal[];knowledge:Knowledge[];instruction?:string;previous?:string;history?:{query:string;answer:string}[];contractReviews?:{title:string;reviewedAt?:string;analysis:ContractAnalysis}[];purpose?:'chat'|'workflow';customerInsightEvidence?:CustomerInsightEvidence[];}
+export interface GenerationInput {salesScope?:SalesScope;query:string;agentId:AgentId;projectApprovals?:ProjectApprovalContext[];deal?:Deal;deals:Deal[];knowledge:Knowledge[];instruction?:string;previous?:string;history?:{query:string;answer:string}[];contractReviews?:{title:string;reviewedAt?:string;analysis:ContractAnalysis}[];purpose?:'chat'|'workflow';customerInsightEvidence?:CustomerInsightEvidence[];agentMemory?:AgentMemoryContext;}
 export interface GenerationOutput {answer:string;mode:'demo'|'live';}
-export interface ActionContext {salesScope?:SalesScope;salesOwners?:SalesOwner[];prepareKnowledge?:(request:KnowledgeAgentRequest,scope?:{knowledgeIds:string[];knowledge:Knowledge[]})=>Promise<KnowledgePreparedContext>;actorName?:string;extractIntake?:(text:string)=>Promise<IntakeExtraction>;now?:string;generate?:(input:GenerationInput)=>Promise<GenerationOutput>;generateInsight?:(input:GenerationInput)=>Promise<GenerationOutput>;trainingGenerate?:(input:TrainingGenerationInput)=>Promise<GenerationOutput>;enrichCompany?:(deal:Deal)=>Promise<CompanyProfile>;trustedRecording?:FollowupRecording;reviewContract?:(document:ContractDocument,deal:Deal)=>Promise<ContractAnalysis>;contractModelName?:string;approveTalkTrack?:(track:TalkTrack)=>Promise<void>;retrieveTalkTracks?:(query:string)=>Promise<TalkTrack[]>;retrieveManagedKnowledge?:(query:string)=>Promise<Knowledge[]>;}
+export interface ActionContext {salesScope?:SalesScope;salesOwners?:SalesOwner[];prepareKnowledge?:(request:KnowledgeAgentRequest,scope?:{knowledgeIds:string[];knowledge:Knowledge[]})=>Promise<KnowledgePreparedContext>;actorName?:string;extractIntake?:(text:string)=>Promise<IntakeExtraction>;now?:string;generate?:(input:GenerationInput)=>Promise<GenerationOutput>;generateInsight?:(input:GenerationInput)=>Promise<GenerationOutput>;trainingGenerate?:(input:TrainingGenerationInput)=>Promise<GenerationOutput>;enrichCompany?:(deal:Deal)=>Promise<CompanyProfile>;trustedRecording?:FollowupRecording;reviewContract?:(document:ContractDocument,deal:Deal)=>Promise<ContractAnalysis>;contractModelName?:string;approveTalkTrack?:(track:TalkTrack)=>Promise<void>;retrieveTalkTracks?:(query:string)=>Promise<TalkTrack[]>;retrieveManagedKnowledge?:(query:string)=>Promise<Knowledge[]>;recallAgentMemory?:(query:string,projectId?:string)=>Promise<AgentMemoryContext|undefined>;}
 const agentIds=new Set(AGENTS.map(item=>item.id));
 const nodeTypes=new Set(['start','intent','knowledge','agent','review','output']);
 const managerActions=new Set(['skill_review','knowledge_add','workflow_save','workflow_publish','workflow_review']);
@@ -419,8 +420,12 @@ async function buildRun(state:StoredState,role:Role,query:string,context:ActionC
     ? priorRuns.findLast(run => run.dealId === deal?.id && run.agentIds.includes('insight') && isCustomerInsightQuestion(run.query))
     : undefined;
   const insightGenerator = deal && routed.includes('insight') && (checkRecords || isCustomerInsightQuestion(query, previousInsight?.query)) ? context.generateInsight : undefined;
-  const needsSharedKnowledge = !insightGenerator || routed.some(id => id !== 'insight');
   const retrievalQuery=followup?`${latest!.query}\n${query}`:query;
+  const agentMemory = checkRecords ? undefined : await context.recallAgentMemory?.(retrievalQuery, deal?.id);
+  const preferenceRecall = !!agentMemory?.topics.length &&
+    /我(?:平时|通常|惯用|偏好|习惯|的(?:惯例|习惯|偏好|风格|格式))|记忆里.{0,15}(?:偏好|习惯|惯例|格式|风格)/.test(query) &&
+    !/报价|价格|租金|库存|政策|制度|合同|折扣|优惠|免租|预算|审批|合规|资质|处罚|违规|违法/.test(query);
+  const needsSharedKnowledge = !preferenceRecall && (!insightGenerator || routed.some(id => id !== 'insight'));
   const portfolio=routed.includes('opportunity')&&/商机|漏斗|客户|团队|招商|销售|跟进/.test(retrievalQuery);
   const active=state.deals.filter(item=>!item.archive);const visibleDeals=role==='sales'?active.filter(item=>item.ownerId===scopeFor(state).salesId):active;
   const scopedDeals=deal?[deal]:portfolio?visibleDeals:[];
@@ -432,6 +437,7 @@ async function buildRun(state:StoredState,role:Role,query:string,context:ActionC
   const generate=async (agentId:AgentId,instruction?:string,previous=answers.join('\n\n'))=> {
     const tick=Date.now();const input:GenerationInput={salesScope:context.salesScope,query,agentId,deal,deals:scopedDeals,knowledge,instruction:[instruction,explicitTracks.length?'用户指定采用以下已审核话术的结构和表达方式：'+explicitTracks.map(t=>t.title).join('、')+'。根据当前客户资料改写占位符，不照搬来源项目事实。':undefined].filter(Boolean).join('\n'),previous,history,...(agentId==='risk'&&deal?{contractReviews:(state.contracts??[]).filter(c=>c.dealId===deal.id&&c.analysis).slice(0,5).map(c=>({title:c.title,reviewedAt:c.reviewedAt,analysis:c.analysis!}))}:{}),purpose:'chat'};
     const scopedInsight=agentId==='insight'&&deal&&insightGenerator;
+    if(agentMemory) input.agentMemory=agentMemory;
     if(checkRecords)input.history=recordTopic?boundedConversation([recordTopic]):[];
     const output=scopedInsight
       ? await generateCustomerInsight(input,deal,insightGenerator,checkRecords)
@@ -442,6 +448,7 @@ async function buildRun(state:StoredState,role:Role,query:string,context:ActionC
     return `${agentName(agentId)}\n${output.answer}`;
   };
     step('主 Agent 识别意图',`${role==='manager'?'销售管理者':'销售'}主 Agent ${options.agentId?'按指定专家':inheritedRoute.length?'沿用当前对话专家':'按问题关键词路由'}至${routed.map(agentName).join('、')}。`);
+    if(agentMemory?.index.length) step('读取 Agent 记忆',`加载 ${agentMemory.index.length} 个主题索引，读取 ${agentMemory.topics.length} 条相关经验。`);
     if(!checkRecords&&deal?.dataOrigin==='manual'&&!deal.companyProfile?.sources.length&&routed.includes('insight')) {
       const tick=Date.now();
       try {

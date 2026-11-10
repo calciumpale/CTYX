@@ -4,7 +4,9 @@ import {createWorkbenchKnowledgeAgent} from './knowledge-agent-runtime.ts';
 import {prepareKnowledgeContext} from './knowledge-agent.ts';
 import {extractProjectIntake} from './project-intake.ts';
 import {processSalesIntelligence} from './sales-intelligence-service.ts';
-import {persistSalesWorkspace} from './sales-report-store.ts';
+import {persistSalesWorkspace, type GuardedWorkspaceWrite} from './sales-report-store.ts';
+import { agentMemoryRuntime } from './agent-memory-runtime.ts';
+import type { MemoryTranscript } from './agent-memory-types.ts';
 import {salesMutationEvents} from './sales-report-domain.ts';
 import type {SalesEvent} from './sales-report-types.ts';
 import {createApprovalStore} from './approval-store.ts';
@@ -18,7 +20,7 @@ import { workbenchKnowledge } from './knowledge-library-runtime.ts';
 import { runPlaybookFeedback } from './playbook-graph.ts';
 import { feedbackBatches,maintainTalkTracks,talkText,talkTitle,transcriptHash } from './talktrack-domain.ts';
 import type { TalkTrack } from './talktrack-types.ts';
-import { env } from 'cloudflare:workers';
+import { env, waitUntil } from 'cloudflare:workers';
 import { assertRevision, demoGenerate, DomainError, projectState } from './domain.ts';
 import type { GenerationInput, GenerationOutput } from './domain.ts';
 import { createSeed } from './seed.ts';
@@ -66,8 +68,8 @@ export async function loadWorkspace(userId:string,siteOrigin='https://production
   const state=JSON.parse(row.state_json) as WorkbenchState;
   state.revision=row.revision;await applyModelStatus(state,userId,siteOrigin);return state;
 }
-export async function saveWorkspace(userId:string,expectedRevision:number,state:WorkbenchState,events:SalesEvent[]=[]):Promise<void> {
-  await persistSalesWorkspace(database(),userId,expectedRevision,state,events);
+export async function saveWorkspace(userId:string,expectedRevision:number,state:WorkbenchState,events:SalesEvent[]=[],extra?:GuardedWorkspaceWrite):Promise<void> {
+  await persistSalesWorkspace(database(),userId,expectedRevision,state,events,extra);
 }
 /** Derived analysis follows the committed business write and cannot roll it back. */
 export async function refreshSalesProject(userId:string,dealId:string,siteOrigin:string,force=false):Promise<WorkbenchState>{
@@ -90,10 +92,21 @@ export async function readWorkbench(userId:string,role:Role,siteOrigin='https://
   if(role==='sales'&&!salesScope)throw new DomainError('销售账号归属无效',401);return projectState(await loadWorkspace(userId,siteOrigin),role,salesScope);
 }
 /** Internal canonical result. The workbench route applies projectAccountResult exactly once. */
-export async function mutateWorkbench(userId:string,role:Role,action:string,payload:Record<string,unknown>,revision:unknown,siteOrigin='https://production.invalid',memberRole:MemberRole=role,actorName?:string,salesScope?:SalesScope):Promise<ApiResult> {
+export async function mutateWorkbench(userId:string,role:Role,action:string,payload:Record<string,unknown>,revision:unknown,siteOrigin='https://production.invalid',memberRole:MemberRole=role,actorName?:string,salesScope?:SalesScope,memberId?:string):Promise<ApiResult> {
   if(role==='sales'&&!salesScope)throw new DomainError('销售账号归属无效',401);const state=await loadWorkspace(userId,siteOrigin);assertRevision(state,revision);
   const salesOwners=await readSalesOwners(userId);
   let model:Awaited<ReturnType<typeof readEffectiveModel>>=null;try{model=await readEffectiveModel(userId,siteOrigin);}catch{/* Keep customer writes usable when model settings need repair. */}
+  let memory: ReturnType<typeof agentMemoryRuntime> | undefined;
+  if (action === 'chat' && memberId && memberRole !== 'admin') {
+    try {
+      const runtime = agentMemoryRuntime(siteOrigin);
+      await runtime.store.ready();
+      memory = runtime;
+    } catch { console.warn('Agent memory storage temporarily unavailable'); }
+  }
+  const memoryScope = (projectId = '') => ({ ownerId: userId, memberId: memberId!, projectId });
+  const recallAgentMemory = memory && model ? (query: string, projectId?: string) =>
+    memory.recall(memoryScope(projectId), query).catch(() => undefined) : undefined;
   const mutationAt=new Date().toISOString();
   const knowledgeAgent=createWorkbenchKnowledgeAgent(database(),userId,siteOrigin,{generate:model?(messages,options)=>requestModelText(model!,messages,{timeoutMs:options?.phase==='route'?8000:12000}):undefined});
   const managedByQuery = new Map<string, ReturnType<typeof workbenchKnowledge>>();
@@ -104,7 +117,7 @@ export async function mutateWorkbench(userId:string,role:Role,action:string,payl
     managedByQuery.set(query, lookup);
     return lookup;
   };
-  const result=await executeMemberAction(state,memberRole,action,payload,{now:mutationAt,actorName,salesScope,salesOwners,retrieveManagedKnowledge,prepareKnowledge:(request,scope)=>scope?prepareKnowledgeContext({...request,intent:'business'},{retrieve:async()=>scope.knowledge.filter(item=>scope.knowledgeIds.includes(item.id))}):knowledgeAgent.prepare(request),extractIntake:model?text=>extractProjectIntake(text,messages=>requestModelText(model!,messages,{timeoutMs:60000})):undefined,contractModelName:model?.name,reviewContract:async(document,deal)=>{if(!model)throw new DomainError('请先在设置中配置并启用大模型 API，合同原文已保存',503);return reviewContract({...document,projectContext:JSON.stringify({projectName:deal.projectName??deal.name,company:deal.name,dataOrigin:deal.dataOrigin??'sample',userRecordedNeeds:deal.needs.slice(0,5).map(t=>t.slice(0,200)),userRecordedRisks:deal.risks.slice(0,5).map(t=>t.slice(0,200)),customerBudget:deal.customerProfile?.budget.slice(0,300),customerTimeline:deal.customerProfile?.timeline.slice(0,300)})},messages=>requestModelText(model,messages,{timeoutMs:60000}));},approveTalkTrack:async track=>{const embed=await effectiveEmbedding(userId);if(!embed)throw new DomainError('请在设置中配置并启用 Embedding API',503);const result=await requestEmbeddings(embed,[talkText(track)],{origin:siteOrigin});const index=createTalkIndex(database(),userId);const current=await index.all((state.talkTracks??[]).filter(t=>t.status==='candidate'||t.status==='published'),result.model);const activeIds=new Set((state.talkTracks??[]).filter(t=>t.status==='candidate'||t.status==='published').map(t=>t.id));if(current.some(v=>activeIds.has(v.id)&&v.id!==track.id&&v.model!==result.model))throw new DomainError('Embedding 模型已变更，请先重建索引',409);if(current.some(v=>v.id!==track.id&&v.model===result.model&&cosineSimilarity(v.vector,result.vectors[0])>=0.90))throw new DomainError('审核后的话术与现有条目高度相似，请调整或打回',409);const version=track.version+1;await index.upsert({...track,version,title:talkTitle(track.employeeName,track.topic,version)},result.vectors[0],result.model,'published');},retrieveTalkTracks:async query=>{const embed=await effectiveEmbedding(userId);if(!embed||!state.talkTracks?.some(t=>t.status==='published'))return [];const result=await requestEmbeddings(embed,[query],{origin:siteOrigin,timeoutMs:4500});return createTalkIndex(database(),userId).search(result.vectors[0],result.model,state.talkTracks);},generate:async input=>{if(input.deal&&['strategy','risk'].includes(input.agentId)){const page=await createApprovalStore(database()).list({id:userId,email:''},{scope:'mine',projectId:input.deal.id,limit:5});input.projectApprovals=await projectApprovalContext(page.records.map(item=>item.request),state,input.deal.id,userId);}return generate(input,model);},generateInsight:input=>generate(input,model),trainingGenerate:input=>generateTraining(input,model),enrichCompany:async deal=>{
+  const result=await executeMemberAction(state,memberRole,action,payload,{now:mutationAt,actorName,salesScope,salesOwners,retrieveManagedKnowledge,recallAgentMemory,prepareKnowledge:(request,scope)=>scope?prepareKnowledgeContext({...request,intent:'business'},{retrieve:async()=>scope.knowledge.filter(item=>scope.knowledgeIds.includes(item.id))}):knowledgeAgent.prepare(request),extractIntake:model?text=>extractProjectIntake(text,messages=>requestModelText(model!,messages,{timeoutMs:60000})):undefined,contractModelName:model?.name,reviewContract:async(document,deal)=>{if(!model)throw new DomainError('请先在设置中配置并启用大模型 API，合同原文已保存',503);return reviewContract({...document,projectContext:JSON.stringify({projectName:deal.projectName??deal.name,company:deal.name,dataOrigin:deal.dataOrigin??'sample',userRecordedNeeds:deal.needs.slice(0,5).map(t=>t.slice(0,200)),userRecordedRisks:deal.risks.slice(0,5).map(t=>t.slice(0,200)),customerBudget:deal.customerProfile?.budget.slice(0,300),customerTimeline:deal.customerProfile?.timeline.slice(0,300)})},messages=>requestModelText(model,messages,{timeoutMs:60000}));},approveTalkTrack:async track=>{const embed=await effectiveEmbedding(userId);if(!embed)throw new DomainError('请在设置中配置并启用 Embedding API',503);const result=await requestEmbeddings(embed,[talkText(track)],{origin:siteOrigin});const index=createTalkIndex(database(),userId);const current=await index.all((state.talkTracks??[]).filter(t=>t.status==='candidate'||t.status==='published'),result.model);const activeIds=new Set((state.talkTracks??[]).filter(t=>t.status==='candidate'||t.status==='published').map(t=>t.id));if(current.some(v=>activeIds.has(v.id)&&v.id!==track.id&&v.model!==result.model))throw new DomainError('Embedding 模型已变更，请先重建索引',409);if(current.some(v=>v.id!==track.id&&v.model===result.model&&cosineSimilarity(v.vector,result.vectors[0])>=0.90))throw new DomainError('审核后的话术与现有条目高度相似，请调整或打回',409);const version=track.version+1;await index.upsert({...track,version,title:talkTitle(track.employeeName,track.topic,version)},result.vectors[0],result.model,'published');},retrieveTalkTracks:async query=>{const embed=await effectiveEmbedding(userId);if(!embed||!state.talkTracks?.some(t=>t.status==='published'))return [];const result=await requestEmbeddings(embed,[query],{origin:siteOrigin,timeoutMs:4500});return createTalkIndex(database(),userId).search(result.vectors[0],result.model,state.talkTracks);},generate:async input=>{if(input.deal&&['strategy','risk'].includes(input.agentId)){const page=await createApprovalStore(database()).list({id:userId,email:''},{scope:'mine',projectId:input.deal.id,limit:5});input.projectApprovals=await projectApprovalContext(page.records.map(item=>item.request),state,input.deal.id,userId);}return generate(input,model);},generateInsight:input=>generate(input,model),trainingGenerate:input=>generateTraining(input,model),enrichCompany:async deal=>{
     let qcc:Awaited<ReturnType<typeof readEffectiveCompanyConnection>>=null;
     let jinghai:Awaited<ReturnType<typeof readEffectiveJinghaiConnection>>=null;
     const issues:string[]=[];
@@ -115,7 +128,18 @@ export async function mutateWorkbench(userId:string,role:Role,action:string,payl
     return profile;
   }});
   if(result.state.revision===state.revision)return {...result,state:await loadWorkspace(userId,siteOrigin)};
-  await saveWorkspace(userId,state.revision,result.state,salesMutationEvents(state,result.state,action,payload,mutationAt));
+  const run = result.run;
+  const transcript: MemoryTranscript | undefined = memory && run && !run.workflowId && run.status !== 'failed'
+    ? { runId: run.id, query: run.query, answer: run.answer, createdAt: run.createdAt,
+      trace: JSON.stringify({ agentIds: run.agentIds, steps: run.steps, citations: run.citations, mode: run.mode, duration: run.duration }) }
+    : undefined;
+  const scope = memoryScope(run?.dealId);
+  await saveWorkspace(userId,state.revision,result.state,salesMutationEvents(state,result.state,action,payload,mutationAt),
+    memory && transcript ? guard => memory.store.transcriptStatement(scope, transcript, guard) : undefined);
+  if (memory && transcript && model) waitUntil(memory.capture(scope, transcript, model).catch(() => {
+    // A transient provider failure leaves the original waiting for offline capture.
+    console.warn('Agent memory capture deferred');
+  }));
   const targetDealId=result.dealId||result.run?.dealId||(typeof payload.dealId==='string'?payload.dealId:'');
   const changedSalesData=['deal_create','deal_intake','deal_intake_followup','deal_note','deal_update','deal_enrich','deal_stage','deal_outcome','transcript_add','deal_assess'].includes(action)||(action==='chat'&&!!targetDealId&&result.state.deals.find(deal=>deal.id===targetDealId)?.version!==state.deals.find(deal=>deal.id===targetDealId)?.version);
   if(targetDealId&&changedSalesData){const next=await refreshSalesProject(userId,targetDealId,siteOrigin,action==='deal_assess');result.state=next;}

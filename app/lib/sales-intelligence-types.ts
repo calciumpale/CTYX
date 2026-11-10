@@ -1,4 +1,5 @@
 export type SalesGrade = 'A' | 'B' | 'C';
+export const SALES_GRADE_LABELS: Record<SalesGrade, string> = { A: '高意向', B: '中意向', C: '低意向' };
 export type SalesDimensionKey = 'need' | 'budget' | 'decision' | 'timeline' | 'engagement';
 export type SalesConfidence = 'low' | 'medium' | 'high';
 export interface SalesEvidence { refId: string; quote: string; }

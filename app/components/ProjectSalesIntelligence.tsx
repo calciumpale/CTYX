@@ -4,10 +4,9 @@ import {useEffect,useRef,useState} from 'react';
 import {ChartNoAxesCombined,ChevronDown,History,Lightbulb,Loader2,RefreshCw,Target} from 'lucide-react';
 import {salesIntelligenceIsCurrent} from '../lib/sales-intelligence';
 import type {Deal,Mutate,View} from '../lib/types';
-import type {SalesAssessment,SalesEvidence,SalesNextAction} from '../lib/sales-intelligence-types';
+import {SALES_GRADE_LABELS as GRADE,type SalesAssessment,type SalesEvidence,type SalesNextAction} from '../lib/sales-intelligence-types';
 import './project-sales-intelligence.css';
 
-const GRADE={A:'高意向',B:'中低意向',C:'无明显意向'};
 const DIMENSION={need:'需求明确度',budget:'预算匹配',decision:'决策链',timeline:'采购时间',engagement:'互动意愿'};
 const date=(value:string)=>new Date(value).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});
 function Evidence({items}:{items:SalesEvidence[]}){return items.length?<details className="sales-evidence"><summary>查看依据 <ChevronDown size={12}/></summary>{items.map((item,index)=><blockquote key={`${item.refId}:${index}`}><p>{item.quote}</p></blockquote>)}</details>:null;}

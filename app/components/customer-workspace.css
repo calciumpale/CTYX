@@ -96,7 +96,12 @@
 .cw-insights { display: none; min-width: 0; min-height: 0; border-left: 1px solid var(--cds-border); background: var(--cds-surface-3); flex-direction: column; }
 .cw-profile-open .cw-insights { display: flex; }
 .cw-insights-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 17px 16px; min-height: 73px; border-bottom: 1px solid var(--cds-border); }
-.cw-insights-heading h2 { flex: 1; font-size: 13px; font-weight: 550; }
+.cw-insights-heading h2 { flex: 1; font-size: 13px; font-weight: 550; white-space: nowrap; }
+.cw-insights-heading .button { flex-shrink: 0; }
+.cw-insights-heading .cw-intent-summary { gap: 5px; min-height: var(--control-height); padding-inline: 7px; font-size: 12px; }
+.cw-intent-score { color: var(--cds-text-secondary); font-variant-numeric: tabular-nums; }
+.cw-intent-score strong { color: var(--cds-text-primary); font-weight: 600; }
+@media (min-width: 701px) { .cw-insights-heading .cw-mobile-back { display: none; } }
 .cw-insights-body { padding: 0 18px 22px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--cds-border-strong) transparent; overscroll-behavior-y: contain; }
 .cw-profile-section { padding: 21px 0; border-bottom: 1px solid var(--cds-border); font-size: 12px; line-height: 1.9; overflow-wrap: anywhere; }
 .cw-profile-section h3 { font-size: 12px; font-weight: 600; }

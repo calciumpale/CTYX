@@ -10,7 +10,27 @@ import react from '@vitejs/plugin-react';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const fixture = `import React,{useState} from 'react';import {createRoot} from 'react-dom/client';import {CustomerWorkspace} from '/app/components/CustomerWorkspace.tsx';import {ProjectsView} from '/app/components/ProjectWorkspace.tsx';import {createSeed} from '/app/lib/seed.ts';import '/app/globals.css';
 const now='2026-11-08T00:00:00Z';const seed=createSeed(now);const base={...seed.deals[0],owner:'ZS',ownerId:'sales-1',summary:'',contact:'',position:'',notes:[],needs:[],risks:[],amount:0,health:0};const active={...base,id:'new',name:'公开企业有限公司',projectName:'公开企业线索',dataOrigin:'research',companyProfile:{companyName:'公开企业有限公司',summary:'公开机构资料；尚未确认采购需求或建立客户关系。',provider:'web',status:'ready',modelUsed:false,updatedAt:now,facts:[{label:'地区',value:'嘉兴',sourceIds:['official']}],sources:[{id:'official',title:'官方机构名录',url:'https://example.com/registry',provider:'web',retrievedAt:now,snippet:'资料日期：2024-06-30'}],warnings:['当前登记、许可及营业状态尚未核验。']}};const old={...base,id:'old',name:'历史企业',projectName:'历史项目',archive:{at:now,reason:'五科室企业目录替换；历史保留',migrationKey:'setup'},notes:[{id:'note',text:'历史客户原话',author:'ZS',date:now}]};
-function Fixture(){const[state,setState]=useState({...seed,deals:[active,old],salesOwners:[{salesId:'sales-empty',displayName:'WL'}],runs:[{id:'old-chat',dealId:'old',createdAt:now,query:'历史提问',answer:'历史回答',agentIds:['insight'],steps:[],citations:[],mode:'demo',duration:1}]});window.refreshFixture=()=>setState(s=>({...s,revision:s.revision+1}));const params=new URLSearchParams(location.search);const View=params.has('legacy')?ProjectsView:CustomerWorkspace;return <View state={state} member={{role:'manager',salesId:'manager',displayName:'管理者'}} mutate={async(action,payload)=>{window.lastMutation={action,payload};return {state,message:'已保存'};}} notify={()=>{}} initialDealId={params.get('deal')} onNavigate={(view,id)=>{window.navigation={view,id}}} onBusyChange={value=>{window.workspaceBusy=value}}/>}createRoot(document.getElementById('root')).render(<Fixture/>);`;
+function Fixture() {
+  const [state,setState] = useState({ ...seed, deals:[active,old], salesOwners:[{salesId:'sales-empty',displayName:'WL'}], runs:[{id:'old-chat',dealId:'old',createdAt:now,query:'历史提问',answer:'历史回答',agentIds:['insight'],steps:[],citations:[],mode:'demo',duration:1}] });
+  window.refreshFixture = () => setState(s => ({ ...s, revision:s.revision+1 }));
+  window.setIntentFixture = ({ grade, score, stale = false }) => setState(current => ({
+    ...current,
+    deals: current.deals.map(deal => {
+      if (deal.id !== 'new') return deal;
+      const latest = {
+        sourceHash: 'fixture', sourceVersion: deal.version - Number(stale), assessedAt: now, modelName: '测试模型',
+        insight: { grade, score, summary: '意向依据', dimensions: [], nextActions: [], missingInfo: [] },
+        forecast: { kind: 'estimated', probability: 21, range: null, confidence: null, summary: '成交估计依据', factors: [], nextActions: [] },
+        warnings: [],
+      };
+      return { ...deal, intelligence: { status: grade ? 'ready' : 'needs_info', sourceHash: 'fixture', updatedAt: now, modelName: '测试模型', message: '', history: [], latest } };
+    }),
+  }));
+  const params = new URLSearchParams(location.search);
+  const View = params.has('legacy') ? ProjectsView : CustomerWorkspace;
+  return <View state={state} member={{role:'manager',salesId:'manager',displayName:'管理者'}} mutate={async(action,payload)=>{window.lastMutation={action,payload};return {state,message:'已保存'};}} notify={()=>{}} initialDealId={params.get('deal')} onNavigate={(view,id)=>{window.navigation={view,id}}} onBusyChange={value=>{window.workspaceBusy=value}}/>;
+}
+createRoot(document.getElementById('root')).render(<Fixture/>);`;
 
 async function createFixture() {
   const cacheDir = await mkdtemp(path.join(tmpdir(), 'archive-ui-vite-'));
@@ -33,4 +53,49 @@ test('legacy project view excludes archives by default and exposes explicit hist
   const {chromium}=await import(pathToFileURL(path.join(root,'tools/douyin-bridge/node_modules/playwright/index.mjs')).href);const {server,origin,cacheDir}=await createFixture();let browser;
   try{browser=await chromium.launch({headless:true});const page=await browser.newPage();await page.route('**/api/approvals**',route=>route.fulfill({json:{requests:[]}}));await page.goto(origin+'/?legacy=1');await page.getByRole('button',{name:/公开企业线索/}).first().waitFor();assert.equal(await page.getByRole('button',{name:/历史项目/}).count(),0);await page.getByRole('button',{name:/归档历史/}).click();await page.getByRole('button',{name:/历史项目/}).first().click();await page.getByText('已归档',{exact:true}).waitFor();await page.getByRole('button',{name:'返回项目跟进'}).click();await page.getByRole('button',{name:'新建项目',exact:true}).click();await page.getByLabel('项目负责人').selectOption('sales-empty');await page.getByLabel(/^项目名称/).fill('经理代建项目');await page.getByLabel(/^客户企业/).fill('新客户');await page.getByRole('button',{name:'创建项目',exact:true}).click();assert.equal((await page.evaluate(()=>window.lastMutation)).payload.ownerId,'sales-empty');
   }finally{await browser?.close();await server.close();await rm(cacheDir,{recursive:true,force:true});}
+});
+
+test('customer details header shows the current intent score and links to the existing assessment', { timeout: 30000 }, async () => {
+  const { chromium } = await import(pathToFileURL(path.join(root, 'tools/douyin-bridge/node_modules/playwright/index.mjs')).href);
+  const { server, origin, cacheDir } = await createFixture();
+  let browser;
+  try {
+    browser = await chromium.launch({ headless: true });
+    const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    await page.goto(origin);
+    const header = page.locator('.cw-insights-heading');
+    await header.getByRole('heading', { name: '客户资料' }).waitFor();
+    assert.match(await header.innerText(), /尚未评估/);
+
+    for (const [grade, score, label] of [['A', 88, '高意向'], ['B', 58, '中意向'], ['C', 0, '低意向']]) {
+      await page.evaluate(value => window.setIntentFixture(value), { grade, score });
+      const scoreButton = header.getByRole('button', { name: new RegExp(`${grade}.*${label}.*${score}.*100`) });
+      await scoreButton.waitFor();
+      assert.doesNotMatch(await scoreButton.innerText(), /21%/);
+      assert.equal(await header.evaluate(node => node.scrollWidth <= node.clientWidth), true);
+    }
+
+    await page.evaluate(() => window.setIntentFixture({ grade: 'A', score: 88, stale: true }));
+    await header.getByText('待重新评估', { exact: true }).waitFor();
+    assert.doesNotMatch(await header.innerText(), /88/);
+    await page.evaluate(() => window.setIntentFixture({ grade: null, score: null }));
+    await header.getByText('资料不足', { exact: true }).waitFor();
+    assert.doesNotMatch(await header.innerText(), /\/\s*100/);
+
+    await page.setViewportSize({ width: 320, height: 700 });
+    await page.getByRole('button', { name: /公开企业有限公司/ }).click();
+    await page.getByRole('button', { name: '查看客户资料' }).click();
+    await page.evaluate(() => window.setIntentFixture({ grade: 'A', score: 88 }));
+    const mobileScore = header.getByRole('button', { name: /A.*高意向.*88.*100/ });
+    await mobileScore.click();
+    await page.getByRole('button', { name: '重新评估' }).waitFor();
+    assert.equal(await page.evaluate(() => Boolean(document.activeElement?.matches('[tabindex="-1"]') && document.activeElement.querySelector('[aria-label="AI 销售分析"]'))), true);
+    assert.equal(await page.evaluate(() => window.lastMutation), undefined);
+    assert.equal(await header.evaluate(node => node.scrollWidth <= node.clientWidth), true);
+    assert.equal(await mobileScore.evaluate(node => node.getBoundingClientRect().height >= 44), true);
+  } finally {
+    await browser?.close();
+    await server.close();
+    await rm(cacheDir, { recursive: true, force: true });
+  }
 });

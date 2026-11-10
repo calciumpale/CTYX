@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createSeed } from '../app/lib/seed.ts';
 import type { Deal, Run } from '../app/lib/types.ts';
+import { readWorkbenchResponse } from '../app/lib/api.ts';
 import { buildCustomerChatRequest, companyDirectory, customerChatHistory, selectCompanyProject, selectInitialCustomerProject } from '../app/lib/customer-workspace.ts';
 
 const seed = createSeed('2026-11-07T08:00:00.000Z');
@@ -61,4 +62,20 @@ test('chat requests capture exact text, selected target and bounded completed co
   runs.splice(0);
   assert.equal(request.query, '  继续\n保留原话  ');
   assert.equal(request.conversationRunIds.length, 6);
+});
+
+test('workbench response decoding hides browser parse errors for gateway pages and empty replies', async () => {
+  const fallback = '本次操作没有完成，请重试。';
+  const gateway = new Response('<html><title>Bad Gateway</title></html>', { status: 502, headers: { 'Content-Type': 'text/html' } });
+  const empty = new Response(null, { status: 204 });
+  await assert.rejects(readWorkbenchResponse(gateway, fallback), /未返回完整响应（HTTP 502）.*重试/);
+  await assert.rejects(readWorkbenchResponse(empty, fallback), /未返回完整响应.*重试/);
+});
+
+test('workbench response decoding retains JSON domain errors and accepts a valid response', async () => {
+  const fallback = '本次操作没有完成，请重试。';
+  const message = '客户洞察需要大模型。请先配置并启用。';
+  await assert.rejects(readWorkbenchResponse(Response.json({ error: message }, { status: 503 }), fallback), { message });
+  const payload = { state: { revision: seed.revision, role: seed.role } };
+  assert.deepEqual(await readWorkbenchResponse(Response.json(payload), fallback), payload);
 });

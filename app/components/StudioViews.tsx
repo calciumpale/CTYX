@@ -13,6 +13,7 @@ import { ApiConnectionSettings } from './ApiConnectionSettings';
 import MaterialConnectionSettings from './MaterialConnectionSettings';
 import ZegoConnectionSettings from './ZegoConnectionSettings';
 import { EmbeddingSettings } from './EmbeddingSettings';
+import { MineruConnectionSettings } from './MineruConnectionSettings';
 import { CompanyConnectionSettings } from './CompanyConnectionSettings';
 import { SpeechRecognitionSettings } from './SpeechRecognitionSettings';
 import { DuplexVoiceControls } from './DuplexVoiceControls';
@@ -321,12 +322,13 @@ export { RunsView } from './RunHistoryView';
 export function SettingsView({ state,onConnectionChanged }: ViewProps & {onConnectionChanged?:()=>Promise<void>}) {
   return <section className="studio-view studio-settings-view">
     <PageHeading title="服务连接"/>
-    <nav className="studio-service-nav" aria-label="服务连接"><a href="#api-configuration">大模型</a><a href="#material-connection">营销素材</a><a href="#zego-connection">数字人</a><a href="#speech-recognition-settings">语音识别</a><a href="#jinghai-api-configuration">企业数据</a><a href="#embedding-configuration">向量检索</a></nav>
+    <nav className="studio-service-nav" aria-label="服务连接"><a href="#api-configuration">大模型</a><a href="#material-connection">营销素材</a><a href="#zego-connection">数字人</a><a href="#speech-recognition-settings">语音识别</a><a href="#jinghai-api-configuration">企业数据</a><a href="#embedding-configuration">向量检索</a><a href="#mineru-configuration">文档解析</a></nav>
     <ApiConnectionSettings onSaved={onConnectionChanged}/>
     <div id="material-connection"><MaterialConnectionSettings onConnectionChanged={onConnectionChanged}/></div>
     <div id="zego-connection"><ZegoConnectionSettings onConnectionChanged={onConnectionChanged}/></div>
     <SpeechRecognitionSettings/>
     <CompanyConnectionSettings provider="jinghai"/><CompanyConnectionSettings/><EmbeddingSettings/>
+    <MineruConnectionSettings/>
     <details className="studio-setting-description studio-workspace-data"><summary>工作空间数据</summary>
       <dl><div><dt>当前模型</dt><dd>{state.model.connected?modelDisplayName(state.model.name):'未配置'}</dd></div><div><dt>数据版本</dt><dd>{state.revision}</dd></div></dl>
       <p>客户与案例包含预置示例。企业 SSO、组织架构与 CRM 尚未接入；业务数据保存在当前工作空间。</p>

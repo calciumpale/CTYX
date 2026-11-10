@@ -37,7 +37,8 @@ export function assertMemberApi(role:MemberRole,pathname:string,method:string):v
   if(path==='/api/approvals'){if(['GET','POST'].includes(verb))return;return denied();}
   if(path==='/api/business-settings'){if(verb==='GET'||role==='admin'&&verb==='POST')return;return denied();}
   if(path==='/api/knowledge-library'){if(verb==='GET'||verb==='POST')return;return denied();}
-  if(['/api/connections','/api/embedding-connection','/api/company-connection'].includes(path)){if(role==='admin'&&['GET','POST'].includes(verb))return;return denied();}
+  if(path==='/api/knowledge-mineru'){if(role!=='sales'&&['GET','POST'].includes(verb))return;return denied();}
+  if(['/api/connections','/api/embedding-connection','/api/company-connection','/api/mineru-connection'].includes(path)){if(role==='admin'&&['GET','POST'].includes(verb))return;return denied();}
   if(path==='/api/workspace-setup'){if(role==='admin'&&verb==='POST')return;return denied();}
   if(path==='/api/workspace-members'){if(role==='admin'&&['GET','POST','PATCH'].includes(verb))return;return denied();}
   if(path==='/api/speech-settings'){if(verb==='GET'||verb==='POST'&&role!=='sales')return;return denied();}

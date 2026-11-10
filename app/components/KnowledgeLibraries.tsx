@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import { BookOpen, ChevronRight, CircleAlert, Database, FileText, Layers, Loader2, Pencil, Plus, RefreshCw, Search, Trash2, Upload } from 'lucide-react';
 import {
   KNOWLEDGE_TEXT_LIMIT, KNOWLEDGE_UPLOAD_ACCEPT,
@@ -12,7 +12,8 @@ import { KnowledgeChunkControls } from './KnowledgeChunkControls';
 import { KNOWLEDGE_DEPARTMENTS } from '../lib/knowledge-department-scope';
 import { driveRechunk, documentWithRechunkJob, type RechunkResult } from './knowledge-rechunk-driver';
 import { createKnowledgeRequestIdentity } from './knowledge-request-identity';
-import { drainImportQueue, type ImportQueueItem } from './knowledge-import-queue';
+import { drainImportQueue, type ImportQueueItem, type KnowledgePdfParser } from './knowledge-import-queue';
+import { importMineruPdf, readMineruAvailability } from './knowledge-mineru-import';
 import { Overlay } from './CoreViews';
 import './knowledge-libraries.css';
 
@@ -52,6 +53,10 @@ export function KnowledgeLibraries({ notify, onBusyChange, onDirtyChange }: { no
   const [name, setName] = useState('');
   const [draft, setDraft] = useState<ImportDraft>(emptyDraft);
   const [importMode, setImportMode] = useState<'file' | 'text'>('file');
+  const [pdfParser, setPdfParser] = useState<KnowledgePdfParser>('browser');
+  const [mineruAvailability, setMineruAvailability] = useState<'checking' | 'available' | 'unconfigured' | 'unavailable'>('checking');
+  const pdfParserId = useId();
+  const mineruHintId = `${pdfParserId}-hint`;
   const [chunks, setChunks] = useState<KnowledgeChunk[]>([]);
   const [previewPage, setPreviewPage] = useState(0);
   const [query, setQuery] = useState('');
@@ -103,6 +108,19 @@ export function KnowledgeLibraries({ notify, onBusyChange, onDirtyChange }: { no
   const documents = snapshot?.documents.filter(document => document.libraryId === libraryId) || [];
   const canManage = snapshot?.canManage === true;
   const hasEmbedding = snapshot?.embeddingConfigured === true;
+  const importOpen = dialog?.kind === 'upload';
+  const usesMineru = pdfParser === 'mineru' || queue.some(item => item.parser === 'mineru' && item.state !== 'done');
+
+  useEffect(() => {
+    if (!importOpen || !canManage) return;
+    const controller = new AbortController();
+    void readMineruAvailability(controller.signal).then(configured => {
+      if (!controller.signal.aborted) setMineruAvailability(configured ? 'available' : 'unconfigured');
+    }).catch(() => {
+      if (!controller.signal.aborted) setMineruAvailability('unavailable');
+    });
+    return () => controller.abort();
+  }, [importOpen, canManage]);
 
   async function run(label: string, work: (signal: AbortSignal) => Promise<void>, insideDialog = false) {
     if (operation.current) return;
@@ -130,7 +148,11 @@ export function KnowledgeLibraries({ notify, onBusyChange, onDirtyChange }: { no
     setDialogError(''); setRechunkNotice('');
     setRechunkProgress(next.kind === 'rechunk' && next.document.rechunkJob ? { document: next.document, job: next.document.rechunkJob } : null);
     if (next.kind === 'create' || next.kind === 'rename') setName(next.kind === 'rename' ? next.library.name : '');
-    if (next.kind === 'upload') setImportMode('file');
+    if (next.kind === 'upload') {
+      setImportMode('file');
+      setPdfParser('browser');
+      setMineruAvailability('checking');
+    }
     setProposed(null); setSourceText(''); setRebuildIndex(hasEmbedding);
     setConfig(next.kind === 'rechunk' ? next.document.appliedConfig || { ...DEFAULT_KNOWLEDGE_CHUNK_CONFIG, strategy: next.document.strategy } : current?.defaultConfig || DEFAULT_KNOWLEDGE_CHUNK_CONFIG);
     setDepartmentId(next.kind === 'create' ? 'shared' : current?.departmentId || 'unassigned');
@@ -203,12 +225,13 @@ export function KnowledgeLibraries({ notify, onBusyChange, onDirtyChange }: { no
     });
   }
   function addFiles(files: File[]) {
-    if (!current) return;
+    if (!current || operation.current) return;
     if (files.length + queue.length > 20) { setDialogError('每批最多 20 个文件'); return; }
     const added: ImportQueueItem[] = [];
     for (const file of files) {
       if ([...queue, ...added].some(item => item.file.name === file.name && item.file.size === file.size && item.file.lastModified === file.lastModified)) { setDialogError('已跳过重复选择的文件'); continue; }
-      added.push({ id: crypto.randomUUID(), file, libraryId: current.id, config: structuredClone(config), rebuildIndex, state: 'queued' });
+      const parser = /\.pdf$/i.test(file.name) ? pdfParser : 'browser';
+      added.push({ id: crypto.randomUUID(), file, libraryId: current.id, config: structuredClone(config), rebuildIndex, parser, state: 'queued' });
     }
     setQueue(previous => [...previous, ...added]);
   }
@@ -217,7 +240,18 @@ export function KnowledgeLibraries({ notify, onBusyChange, onDirtyChange }: { no
     void run('batch', async signal => {
       await drainImportQueue(queue, () => stopQueue.current, async item => {
         if (!item.document) {
-          if (item.text === undefined) { const { importKnowledgeFile } = await import('../lib/knowledge-library-import'); const parsed = await importKnowledgeFile(item.file); item.text = parsed.text; item.warnings = parsed.warnings; }
+          if (item.text === undefined && item.parser === 'mineru') {
+            const text = await importMineruPdf(item, signal, progress => { item.progress = progress; setQueue([...queue]); }, () => stopQueue.current);
+            if (text === undefined) return 'paused';
+            item.text = text;
+            item.progress = '正在入库';
+            setQueue([...queue]);
+          } else if (item.text === undefined) {
+            const { importKnowledgeFile } = await import('../lib/knowledge-library-import');
+            const parsed = await importKnowledgeFile(item.file);
+            item.text = parsed.text;
+            item.warnings = parsed.warnings;
+          }
           const result = await request<{ document: KnowledgeDocument }>(signal, { action: 'upload', requestId: item.id, libraryId: item.libraryId, title: item.file.name.replace(/\.[^.]+$/, '').slice(0, titleLimit), fileName: item.file.name, text: item.text, config: item.config });
           item.document = result.document; updateDocument(result.document);
         }
@@ -331,11 +365,25 @@ export function KnowledgeLibraries({ notify, onBusyChange, onDirtyChange }: { no
       {dialog.kind === 'upload' && <form className="knowledge-form" onSubmit={saveDocument}>
         <p className="knowledge-dialog-description">{current?.name} · 保存解析正文和文件名</p>
         <div className="knowledge-local-tabs" aria-label="资料来源"><button type="button" aria-pressed={importMode === 'file'} disabled={Boolean(busy)} onClick={() => { setImportMode('file'); setDialogError(''); }}><Upload size={15} />上传文件</button><button type="button" aria-pressed={importMode === 'text'} disabled={Boolean(busy)} onClick={() => { setImportMode('text'); setDialogError(''); }}><FileText size={15} />粘贴文本</button></div>
-        {importMode === 'file' ? <div onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); addFiles(Array.from(event.dataTransfer.files)); }}><label>选择或拖入多个文档<input type="file" multiple accept={KNOWLEDGE_UPLOAD_ACCEPT} disabled={Boolean(busy)} onChange={event => { addFiles(Array.from(event.currentTarget.files || [])); event.currentTarget.value = ''; }} /><small>最多20份 · 每份10MB · 两份并行 · 参数与目标库在加入时固定</small></label>
-          <ul className="knowledge-import-queue">{queue.map(item => <li key={item.id}>{item.file.name} · {{ queued: '等待导入', working: '处理中', done: '已完成', error: '失败' }[item.state]} {item.text !== undefined && `· ${item.text.length} 字符`} {item.error}<p>{item.warnings?.join('；')}</p><button type="button" className="button secondary" disabled={Boolean(busy)} onClick={() => setQueue(previous => previous.filter(row => row.id !== item.id))}>移除此项</button>{item.state === 'error' && <button type="button" className="button secondary" disabled={Boolean(busy)} onClick={() => { item.state = 'queued'; setQueue([...queue]); }}>重试此项</button>}</li>)}</ul>
+        {importMode === 'file' ? <>
+          <div className="knowledge-parser-choice">
+            <label htmlFor={pdfParserId}>PDF 解析方式</label>
+            <select id={pdfParserId} value={pdfParser} aria-describedby={mineruHintId} disabled={Boolean(busy)} onChange={event => setPdfParser(event.target.value as KnowledgePdfParser)}>
+              <option value="browser">浏览器解析</option><option value="mineru" disabled={mineruAvailability !== 'available'}>MinerU 云解析</option>
+            </select>
+            <small id={mineruHintId} role="status">{usesMineru ? '开始导入后，原始 PDF 将发送至 MinerU 云服务。请选择获准外发的资料。其他格式仍在浏览器解析。'
+              : mineruAvailability === 'unconfigured' ? '请管理员在「服务连接」中配置 MinerU，以解析扫描件和复杂版面。'
+              : mineruAvailability === 'unavailable' ? '暂时无法读取 MinerU 配置，可使用浏览器解析。'
+              : mineruAvailability === 'checking' ? '正在检查 MinerU 配置…' : '扫描件、表格或多栏 PDF 可选 MinerU 云解析。'}</small>
+          </div>
+          <div onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); addFiles(Array.from(event.dataTransfer.files)); }}><label>选择或拖入多个文档<input type="file" multiple accept={KNOWLEDGE_UPLOAD_ACCEPT} disabled={Boolean(busy)} onChange={event => { addFiles(Array.from(event.currentTarget.files || [])); event.currentTarget.value = ''; }} /><small>最多20份 · 每份10MB · 两份并行 · 解析方式、参数与目标库在加入时固定</small></label>
+          <ul className="knowledge-import-queue">{queue.map(item => <li key={item.id}>
+            <span aria-live="polite">{item.file.name}{item.parser === 'mineru' && ' · MinerU 云解析'} · {{ queued: item.mineruTicket && item.text === undefined ? '可继续查询' : '等待导入', working: item.progress || '处理中', done: '已完成', error: '失败' }[item.state]} {item.text !== undefined && `· ${item.text.length} 字符`} {item.error}</span>
+            <p>{item.warnings?.join('；')}</p><button type="button" className="button secondary" disabled={Boolean(busy)} onClick={() => setQueue(previous => previous.filter(row => row.id !== item.id))}>移除此项</button>{item.state === 'error' && <button type="button" className="button secondary" disabled={Boolean(busy)} onClick={() => { item.state = 'queued'; item.error = undefined; setQueue([...queue]); }}>重试此项</button>}
+          </li>)}</ul>
           <button type="button" className="button secondary" disabled={Boolean(busy)} onClick={() => setQueue(previous => previous.filter(item => item.state !== 'done'))}>清除已完成</button><button type="button" className="button secondary" disabled={Boolean(busy)} onClick={() => setQueue([])}>清空队列</button>
           <button type="button" className="button primary" disabled={Boolean(busy) || !queue.some(item => item.state === 'queued')} onClick={startQueue}>开始 / 继续导入</button><button type="button" className="button secondary" disabled={busy !== 'batch'} onClick={() => { stopQueue.current = true; }}>停止后续导入（等待当前请求完成）</button>
-        </div> :
+        </div></> :
           <label>正文<textarea rows={6} maxLength={KNOWLEDGE_TEXT_LIMIT} value={draft.text} onChange={event => setDraft(previous => ({ ...previous, text: event.target.value }))} disabled={Boolean(busy)} required placeholder="粘贴政策、话术或说明正文" /><small>{draft.text.length.toLocaleString()} / {KNOWLEDGE_TEXT_LIMIT.toLocaleString()} 字符</small></label>}
         {draft.warnings.map(warning => <p key={warning} className="knowledge-feedback"><CircleAlert size={16} />{warning}</p>)}
         <label>资料标题<input value={draft.title} maxLength={titleLimit} onChange={event => setDraft(previous => ({ ...previous, title: event.target.value }))} disabled={Boolean(busy)} required /></label>

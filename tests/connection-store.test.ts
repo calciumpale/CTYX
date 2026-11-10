@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { createConnectionStore } from '../app/lib/connection-store.ts';
+import { createMineruStore } from '../app/lib/mineru-store.ts';
 const encryptionKey='ab'.repeat(32);
 function fixture() {
   const sqlite=new DatabaseSync(':memory:');
@@ -11,6 +12,39 @@ function fixture() {
   return {sqlite,environment,store:createConnectionStore(environment)};
 }
 const input={action:'save',kind:'model',version:0,enabled:true,baseUrl:'https://provider.example.com/v1',modelName:'account-model',secret:'sk-account-private'};
+test('MinerU workspace token is encrypted, isolated, and can be replaced or cleared', async () => {
+  const { sqlite, environment } = fixture();
+  const store = createMineruStore(environment);
+  const token = 'synthetic-mineru-token';
+  assert.equal((await store.snapshot('alice')).configured, false);
+  const saved = await store.execute('alice', { action: 'save', version: 0, token });
+  assert.equal(saved.configured, true);
+  assert.equal(saved.source, 'account');
+  assert.equal(await store.effectiveToken('alice'), token);
+  assert.equal(await store.effectiveToken('bob'), null);
+  assert.doesNotMatch(JSON.stringify(saved), /synthetic-mineru-token/);
+  assert.doesNotMatch(JSON.stringify(sqlite.prepare('SELECT * FROM workbench_api_connections').all()), /synthetic-mineru-token/);
+  const replaced = await store.execute('alice', { action: 'save', version: saved.version, token: 'next-synthetic-token' });
+  await assert.rejects(store.execute('alice', { action: 'remove', version: saved.version }), { status: 409 });
+  assert.equal(await store.effectiveToken('alice'), 'next-synthetic-token');
+  assert.equal((await store.execute('alice', { action: 'remove', version: replaced.version })).configured, false);
+});
+
+test('MinerU server fallback does not expose its token and requires task-ticket encryption', async () => {
+  const { environment } = fixture();
+  const settings = { ...environment, MINERU_API_TOKEN: 'synthetic-server-token' };
+  const store = createMineruStore(settings);
+  const snapshot = await store.snapshot('alice');
+  assert.equal(snapshot.source, 'environment');
+  assert.equal(snapshot.configured, true);
+  assert.doesNotMatch(JSON.stringify(snapshot), /synthetic-server-token/);
+  await assert.rejects(store.execute('alice', { action: 'save', version: 0, token: 'Bearer injected-token' }), { status: 400 });
+  await assert.rejects(store.execute('alice', { action: 'save', version: 0, token: 'valid', baseUrl: 'https://unknown.example.com' }), { status: 400 });
+  const unavailable = createMineruStore({ ...settings, CONFIG_ENCRYPTION_KEY: undefined });
+  assert.equal((await unavailable.snapshot('alice')).configured, false);
+  assert.equal(await unavailable.effectiveToken('alice'), null);
+  await assert.rejects(unavailable.execute('alice', { action: 'save', version: 0, token: 'valid' }), { status: 503 });
+});
 test('account overrides are encrypted, user-isolated, redacted, disabled independently, and removable',async()=>{
   const {store,sqlite}=fixture();
   assert.equal((await store.snapshot('alice')).model.source,'environment');

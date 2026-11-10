@@ -49,6 +49,63 @@ async function createFixture() {
   return {server,cacheDir,origin:server.resolvedUrls.local[0].replace(/\/$/,'')};
 }
 
+test('MinerU import snapshots the PDF parser and resumes polling without uploading again', {timeout:60000}, async()=>{
+  const {chromium}=await import(pathToFileURL(path.join(root,'tools/douyin-bridge/node_modules/playwright/index.mjs')).href);
+  const {server,cacheDir,origin}=await createFixture();
+  let browser;
+  try {
+    browser=await chromium.launch({headless:true});
+    const page=await browser.newPage({viewport:{width:390,height:740}});
+    const uploads=[];
+    let starts=0,polls=0,configured=false;
+    await page.route('**/api/knowledge-library',async route=>{
+      if(route.request().method()==='GET')return route.fulfill({json:{libraries:[{id:'library',name:'测试资料',documentCount:0}],documents:[],canManage:true,embeddingConfigured:false}});
+      const body=route.request().postDataJSON();
+      uploads.push(body);
+      return route.fulfill({json:{document:{...body,id:'doc-'+uploads.length,strategy:'flat',status:'pending',chunkCount:1,indexedCount:0}}});
+    });
+    await page.route('**/api/knowledge-mineru',async route=>{
+      const request=route.request();
+      if(request.method()==='GET')return route.fulfill({json:{configured}});
+      if(request.headers()['content-type'].startsWith('multipart/form-data;')){
+        starts++;
+        assert.match(request.postData(),/扫描件\.pdf/);
+        return route.fulfill({status:202,json:{ticket:'existing-ticket'}});
+      }
+      assert.deepEqual(request.postDataJSON(),{ticket:'existing-ticket'});
+      if(++polls===1)return route.fulfill({status:502,json:{error:'解析状态暂时不可用'}});
+      return route.fulfill({json:{status:'done',text:'# 扫描件\n\n识别出的完整正文。'}});
+    });
+    await page.goto(origin+'/?module=knowledge');
+    await page.getByRole('button',{name:'导入资料',exact:true}).click();
+    const dialog=page.getByRole('dialog');
+    await dialog.waitFor();
+    const parser=dialog.getByLabel('PDF 解析方式',{exact:true});
+    assert.equal(await parser.count(),1);
+    await dialog.getByText(/请管理员.*服务连接/).waitFor();
+    assert.ok(await parser.locator('option[value=mineru]').isDisabled());
+    await dialog.getByRole('button',{name:'取消',exact:true}).click();
+
+    configured=true;
+    await page.getByRole('button',{name:'导入资料',exact:true}).click();
+    assert.equal(await parser.inputValue(),'browser');
+    await parser.selectOption('mineru');
+    const picker=dialog.locator('input[type=file]');
+    await picker.setInputFiles([{name:'扫描件.pdf',mimeType:'application/pdf',buffer:Buffer.from('%PDF-1.7\nplaceholder')},{name:'原有格式.txt',mimeType:'text/plain',buffer:Buffer.from('浏览器导入正文。')}]);
+    await parser.selectOption('browser');
+    await dialog.getByText(/原始 PDF 将发送至 MinerU 云服务/).waitFor();
+    await dialog.getByRole('button',{name:'开始 / 继续导入',exact:true}).click();
+    await dialog.getByText(/解析状态暂时不可用/).waitFor();
+    await dialog.getByRole('button',{name:'重试此项',exact:true}).click();
+    await dialog.getByRole('button',{name:'开始 / 继续导入',exact:true}).click();
+    await dialog.locator('li').filter({hasText:'扫描件.pdf'}).getByText(/已完成/).waitFor();
+    assert.equal(starts,1);
+    assert.equal(polls,2);
+    assert.equal(uploads.find(body=>body.fileName==='扫描件.pdf').text,'# 扫描件\n\n识别出的完整正文。');
+    assert.equal(uploads.find(body=>body.fileName==='原有格式.txt').text,'浏览器导入正文。');
+  } finally {await browser?.close();await server.close();await rm(cacheDir,{recursive:true,force:true,maxRetries:5,retryDelay:100});}
+});
+
 test('knowledge settings and explicit preview/apply preserve old content on desktop/mobile', {timeout:120000}, async()=>{
  const {chromium}=await import(pathToFileURL(path.join(root,'tools/douyin-bridge/node_modules/playwright/index.mjs')).href);
  const {server,cacheDir,origin}=await createFixture(); let browser;

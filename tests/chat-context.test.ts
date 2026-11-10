@@ -7,6 +7,7 @@ import type { Run, Workflow } from '../app/lib/types.ts';
 import { buildModelMessages } from '../app/lib/model-messages.ts';
 import { customerInsightEvidence, formatCustomerInsight } from '../app/lib/customer-insight.ts';
 import type { SalesIntelligence } from '../app/lib/sales-intelligence-types.ts';
+import type { PropertyQuery } from '../app/lib/property-query.ts';
 
 const now='2026-10-23T08:00:00.000Z';
 const status=(expected:number)=>(error:unknown)=>error instanceof DomainError&&error.status===expected;
@@ -29,6 +30,96 @@ function capture() {
   return {inputs,context:{now,generate:async(input:GenerationInput)=>{inputs.push(structuredClone(input));return {answer:'服务端生成的已保存回答',mode:'live' as const};}}};
 }
 const storedRun=(id:string,query:string,answer:string):Run=>({id,query,answer,agentIds:['insight'],steps:[],citations:[],mode:'live',createdAt:now,duration:1});
+
+test('property lookup returns original matching rows once and bypasses customer insight for a selected project', async () => {
+  const state = createSeed(now);
+  const deal = state.deals.find(item => item.ownerId === 'sales-1')!;
+  deal.dataOrigin = 'manual';
+  delete deal.companyProfile;
+  const answer = '找到 2 条符合条件的空置房源。\n\n1. A101｜面积：120㎡｜位置：嘉兴南湖｜业态：餐饮\n2. A103｜面积：140㎡｜位置：嘉兴南湖｜业态：餐饮';
+  const sources = [
+    { id: 'property:vacant:2', title: '空置房源.xlsx · 南湖 · 第2行', content: 'A101｜面积：120㎡｜位置：嘉兴南湖｜业态：餐饮' },
+    { id: 'property:vacant:4', title: '空置房源.xlsx · 南湖 · 第4行', content: 'A103｜面积：140㎡｜位置：嘉兴南湖｜业态：餐饮' },
+  ];
+  let lookups = 0;
+  const result = await executeAction(state, 'sales', 'chat', {
+    query: '分析一下嘉兴南湖100到150平的空置商铺，能做餐饮的都给我', dealId: deal.id,
+  }, {
+    now,
+    prepareKnowledge: async () => {
+      lookups++;
+      return { route: 'retrieved', answer, knowledge: sources, evidenceIds: sources.map(source => source.id), recordLookup: { kind: 'property' as const, total: 2, complete: true } };
+    },
+    generate: async () => { assert.fail('a row lookup must not ask the model to rewrite inventory'); },
+    generateInsight: async () => { assert.fail('selected customer context must not replace property lookup'); },
+    enrichCompany: async () => { assert.fail('property search must not enrich the selected company'); },
+  });
+  assert.equal(lookups, 1);
+  assert.equal(result.run?.answer, answer);
+  assert.equal(result.run?.answerSource, 'property-records');
+  assert.deepEqual(result.run?.citations, sources.map(source => ({ id: source.id, title: source.title, excerpt: source.content })));
+  assert.equal(result.run?.dealId, deal.id);
+  assert.ok(result.run?.steps.some(step => /房源/.test(step.title)));
+  assert.doesNotMatch(result.run!.steps.map(step => step.detail).join('\n'), /演示|外部模型返回|服务端模型生成/);
+  assert.equal(result.message, '已完成知识库房源筛选');
+  assert.doesNotMatch(result.state.activities[0].detail, /演示/);
+});
+
+test('a property lookup with no matches preserves its answer and has no unrelated company citations', async () => {
+  const { state, deal } = scopedInsightFixture();
+  const answer = '空置房源中没有找到同时符合这些条件的条目。';
+  const result = await executeAction(state, 'sales', 'chat', { query: '找1000平以上的空置房源', dealId: deal.id, agentId: 'insight' }, {
+    now,
+    prepareKnowledge: async () => ({ route: 'no_evidence', answer, knowledge: [], evidenceIds: [], recordLookup: { kind: 'property' as const, total: 0, complete: true } }),
+    generateInsight: async () => { assert.fail('an explicit insight selector must not change the source of property inventory'); },
+  });
+  assert.equal(result.run?.answer, answer);
+  assert.equal(result.run?.answerSource, 'property-records');
+  assert.deepEqual(result.run?.citations, []);
+});
+
+test('property pagination and filter refinements stay on the inventory path in a customer chat', async () => {
+  const { state, deal } = scopedInsightFixture();
+  const first = await executeAction(state, 'sales', 'chat', { query: '分析空置房源', dealId: deal.id }, {
+    now,
+    prepareKnowledge: async () => ({ route: 'retrieved', answer: '第1页房源', knowledge: [], evidenceIds: [], recordLookup: { kind: 'property' as const, total: 20, complete: true } }),
+  });
+  for (const query of ['第2页', '面积改成80到100平', '看看还有没有80到100平的']) {
+    let retrieved = false;
+    const result = await executeAction(first.state, 'sales', 'chat', { query, dealId: deal.id, conversationRunIds: [first.run!.id] }, {
+      now,
+      prepareKnowledge: async request => {
+        retrieved = true;
+        assert.ok(request.history?.some(turn => turn.role === 'user' && turn.content === '分析空置房源'));
+        return { route: 'retrieved', answer: '新的房源筛选结果', knowledge: [], evidenceIds: [], recordLookup: { kind: 'property' as const, total: 20, complete: true } };
+      },
+      generateInsight: async () => { assert.fail('property refinements must not return to customer analysis'); },
+    });
+    assert.equal(retrieved, true, query);
+    assert.equal(result.run?.answerSource, 'property-records');
+  }
+});
+
+test('chat persists resolved property filters and only forwards the latest server-owned property state',async()=>{
+ const state=createSeed(now);const deal=state.deals.find(item=>item.ownerId==='sales-1')!;
+ const resolved:PropertyQuery={status:'vacant',minArea:100,maxArea:200,groups:[{field:'location',values:['绮园']}],page:1,pageSize:10};
+ const first=await executeAction(state,'sales','chat',{query:'找绮园100-200平空置房源',dealId:deal.id,propertyQuery:{status:'rented'}},{now,prepareKnowledge:async request=>{
+  assert.equal(request.propertyQuery,undefined,'client payload must not provide saved query state');
+  return {route:'retrieved',answer:'房源首屏',knowledge:[],evidenceIds:[],recordLookup:{kind:'property',total:100,complete:true,query:resolved}};
+ }});
+ assert.deepEqual(first.run?.propertyQuery,resolved);
+ const second=await executeAction(first.state,'sales','chat',{query:'下一页',dealId:deal.id,conversationRunIds:[first.run!.id]},{now,prepareKnowledge:async request=>{
+  assert.deepEqual(request.propertyQuery,resolved);
+  return {route:'retrieved',answer:'房源第二页',knowledge:[],evidenceIds:[],recordLookup:{kind:'property',total:100,complete:true,query:{...resolved,page:2}}};
+ }});
+ assert.equal(second.run?.propertyQuery?.page,2);
+ const unrelated=second.state.runs.find(run=>run.id===second.run!.id)!;
+ unrelated.query='今天怎么准备拜访';delete unrelated.answerSource;
+ await executeAction(second.state,'sales','chat',{query:'找空置房源',dealId:deal.id,conversationRunIds:[unrelated.id]},{now,prepareKnowledge:async request=>{
+  assert.equal(request.propertyQuery,undefined,'a non-property latest run cannot supply stored filters');
+  return {route:'no_evidence',answer:'没有匹配',knowledge:[],evidenceIds:[],recordLookup:{kind:'property',total:0,complete:true}};
+ }});
+});
 
 test('chat recalls bounded memory for its resolved project and presents it as reference', async () => {
   const state = createSeed(now);

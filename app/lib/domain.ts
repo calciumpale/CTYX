@@ -18,6 +18,7 @@ import { demoTrainingGenerate } from './training-dialogue.ts';
 import type { TrainingGenerationInput } from './training-dialogue.ts';
 import type { AgentMemoryContext } from './agent-memory-types.ts';
 import { CUSTOMER_INSIGHT_INSTRUCTION, CUSTOMER_RECORD_INSTRUCTION, customerInsightEvidence, formatCustomerInsight, formatCustomerRecordAnswer, isCustomerInsightQuestion, isCustomerRecordFollowup, isCustomerRecordQuestion, type CustomerInsightEvidence } from './customer-insight.ts';
+import { isPropertyQuestion } from './property-query.ts';
 
 export class DomainError extends Error {
   status:number;
@@ -323,6 +324,10 @@ function isFollowup(query:string):boolean {
     || /^(?:请|麻烦|帮我)?(?:继续|接着|再(?:简短|短|详细|展开|补充|解释|改|写|整理|说明)|还有呢|[他她它](?:的|有|需|预|要|说|会|能|是|呢))/.test(query)
     || /^(?:那|那么|还有)(?:预算|需求|风险|时间|价格|租金|免租|合同|决策人|下一步|呢|？|\?)/.test(query);
 }
+function isPropertyFollowup(query:string):boolean {
+  if(/^(?:请)?(?:换(?:一?个)?话题|新(?:的)?问题|另(?:外)?(?:一?个)?问题|另外问|重新开始)/.test(query))return false;
+  return isFollowup(query)||/第\s*\d+\s*页|下一页|上一页|面积|业态|位置|区域|楼层|餐饮|零售|\d+(?:\.\d+)?\s*(?:平米|平方米|㎡|m²|m2|平)/i.test(query);
+}
 export function demoGenerate(input:GenerationInput):GenerationOutput {
   const {agentId,deal,query,deals,knowledge,instruction}=input;
   if(input.purpose==='chat'&&!deal&&!deals.length&&!knowledge.length)return {answer:'本地生成 · 未调用外部模型\n\n当前尚未配置模型连接，无法生成此问题的完整回答。请在设置中配置模型，或选择项目并填写需求、预算和下一步沟通目标。',mode:'demo'};
@@ -407,10 +412,11 @@ async function buildRun(state:StoredState,role:Role,query:string,context:ActionC
     run.dealId !== latest.dealId || !run.agentIds.includes('insight') || !isCustomerRecordFollowup(run.query)) : undefined;
   const recordTopic = priorTopic && priorTopic.dealId === latest?.dealId && priorTopic.agentIds.includes('insight') &&
     isCustomerRecordQuestion(priorTopic.query) ? priorTopic : undefined;
+  const propertyQuestion=isPropertyQuestion(query)||(!!latest&&latest.answerSource==='property-records'&&isPropertyFollowup(query));
   const directDeal=chooseDeal(state,role,query,options.dealId);const followup=!!latest&&!directDeal&&(isFollowup(query)||!!recordTopic);
   const deal=directDeal??(followup?chooseDeal(state,role,latest!.query,latest!.dealId):undefined);
   if(options.agentId!==undefined&&!agentIds.has(options.agentId as AgentId))fail('请选择五位领域专家之一');
-  const checkRecords = !!deal && (!options.agentId || options.agentId === 'insight') &&
+  const checkRecords = !propertyQuestion && !!deal && (!options.agentId || options.agentId === 'insight') &&
     (isCustomerRecordQuestion(query) || recordTopic?.dealId === deal.id);
   if (checkRecords && !context.generateInsight) fail('客户洞察需要大模型。请在设置的「服务连接」中配置并启用大模型后重试。', 503);
   const explicitIntent=/培训|练习|带练|扮演|陪练|风险|合同|免租|审批|合规|资质|违约|授权|优先|预测|健康|本周|商机|漏斗|推进|拜访|方案|策略|开场|话术|谈判/.test(query);
@@ -419,13 +425,13 @@ async function buildRun(state:StoredState,role:Role,query:string,context:ActionC
   const previousInsight = latest?.dealId === deal?.id && latest?.agentIds.includes('insight')
     ? priorRuns.findLast(run => run.dealId === deal?.id && run.agentIds.includes('insight') && isCustomerInsightQuestion(run.query))
     : undefined;
-  const insightGenerator = deal && routed.includes('insight') && (checkRecords || isCustomerInsightQuestion(query, previousInsight?.query)) ? context.generateInsight : undefined;
+  const insightGenerator = !propertyQuestion && deal && routed.includes('insight') && (checkRecords || isCustomerInsightQuestion(query, previousInsight?.query)) ? context.generateInsight : undefined;
   const retrievalQuery=followup?`${latest!.query}\n${query}`:query;
-  const agentMemory = checkRecords ? undefined : await context.recallAgentMemory?.(retrievalQuery, deal?.id);
+  const agentMemory = checkRecords || propertyQuestion ? undefined : await context.recallAgentMemory?.(retrievalQuery, deal?.id);
   const preferenceRecall = !!agentMemory?.topics.length &&
     /我(?:平时|通常|惯用|偏好|习惯|的(?:惯例|习惯|偏好|风格|格式))|记忆里.{0,15}(?:偏好|习惯|惯例|格式|风格)/.test(query) &&
     !/报价|价格|租金|库存|政策|制度|合同|折扣|优惠|免租|预算|审批|合规|资质|处罚|违规|违法/.test(query);
-  const needsSharedKnowledge = !preferenceRecall && (!insightGenerator || routed.some(id => id !== 'insight'));
+  const needsSharedKnowledge = propertyQuestion || !preferenceRecall && (!insightGenerator || routed.some(id => id !== 'insight'));
   const portfolio=routed.includes('opportunity')&&/商机|漏斗|客户|团队|招商|销售|跟进/.test(retrievalQuery);
   const active=state.deals.filter(item=>!item.archive);const visibleDeals=role==='sales'?active.filter(item=>item.ownerId===scopeFor(state).salesId):active;
   const scopedDeals=deal?[deal]:portfolio?visibleDeals:[];
@@ -449,7 +455,7 @@ async function buildRun(state:StoredState,role:Role,query:string,context:ActionC
   };
     step('主 Agent 识别意图',`${role==='manager'?'销售管理者':'销售'}主 Agent ${options.agentId?'按指定专家':inheritedRoute.length?'沿用当前对话专家':'按问题关键词路由'}至${routed.map(agentName).join('、')}。`);
     if(agentMemory?.index.length) step('读取 Agent 记忆',`加载 ${agentMemory.index.length} 个主题索引，读取 ${agentMemory.topics.length} 条相关经验。`);
-    if(!checkRecords&&deal?.dataOrigin==='manual'&&!deal.companyProfile?.sources.length&&routed.includes('insight')) {
+    if(!propertyQuestion&&!checkRecords&&deal?.dataOrigin==='manual'&&!deal.companyProfile?.sources.length&&routed.includes('insight')) {
       const tick=Date.now();
       try {
         deal.companyProfile=await enrichDeal(deal,context);deal.version++;
@@ -458,8 +464,15 @@ async function buildRun(state:StoredState,role:Role,query:string,context:ActionC
         step('检索企业公开资料','企业资料补全暂时未完成，本次仅依据已填写的项目资料回答；未核验信息保持未知。','warning','insight',Date.now()-tick);
       }
     }
-    if(deal&&!checkRecords)citations.push(...companyCitations(deal));
-    const prepared=needsSharedKnowledge?await context.prepareKnowledge?.({question:query,retrievalQuery,history:history.flatMap(item=>[{role:'user' as const,content:item.query},{role:'assistant' as const,content:item.answer}]),context:deal?[{id:deal.id,kind:'customer_fact',text:JSON.stringify({needs:deal.needs,budget:deal.customerProfile?.budget})}]:[]}):undefined;
+    if(deal&&!checkRecords&&!propertyQuestion)citations.push(...companyCitations(deal));
+    const prepared=needsSharedKnowledge?await context.prepareKnowledge?.({question:query,retrievalQuery,...(latest?.answerSource==='property-records'&&latest.propertyQuery?{propertyQuery:latest.propertyQuery}:{}),history:history.flatMap(item=>[{role:'user' as const,content:item.query},{role:'assistant' as const,content:item.answer}]),context:deal?[{id:deal.id,kind:'customer_fact',text:JSON.stringify({needs:deal.needs,budget:deal.customerProfile?.budget})}]:[]}):undefined;
+    if(prepared?.recordLookup?.kind==='property'&&prepared.answer?.trim()) {
+      citations.length=0;
+      const evidenceIds=new Set(prepared.evidenceIds);
+      for(const item of prepared.knowledge)if(evidenceIds.has(item.id)&&!citations.some(entry=>entry.id===item.id))citations.push({id:item.id,title:item.title,excerpt:item.content.slice(0,240)});
+      step('按条件筛选知识库房源',`在已授权的房源资料中匹配面积、业态、位置等条件；${prepared.recordLookup.complete?'本次资料范围已扫描完成':'部分资料尚未完整读取，结果范围已在回答中说明'}；找到 ${prepared.recordLookup.total} 条匹配记录。`,prepared.recordLookup.complete?'success':'warning');
+      return {id:uid('run'),query,answer:prepared.answer,agentIds:[routed[0]],steps,citations,mode:'demo',answerSource:'property-records',...(prepared.recordLookup.query?{propertyQuery:structuredClone(prepared.recordLookup.query)}:{}),createdAt:now,duration:Date.now()-started,...(deal?{dealId:deal.id}:{})};
+    }
     if(prepared){
       knowledge=[...(prepared.route==='retrieved'?prepared.knowledge.map(asKnowledge):[]),...tracks.map(talkKnowledge)];
     }else if(needsSharedKnowledge){
@@ -702,7 +715,7 @@ async function executeActionInternal(original:WorkbenchState,role:Role,action:st
       activity(state,role,'应用已发布',`${workflow.name} · v${workflow.version}`,'workflow',now);message='已发布，销售视角现在可以使用此版本';break;
     }
     case 'chat': {
-      const query=text(payload.query,'问题',6000);run=await buildRun(state,role,query,context,now,{agentId:payload.agentId,dealId:payload.dealId,conversationRunIds:payload.conversationRunIds,talkTrackIds:payload.talkTrackIds});state.runs.unshift(run);for(const trackId of [...new Set(run.citations.filter(c=>state.talkTracks?.some(t=>t.id===c.id)).map(c=>c.id))]){(state.talkTrackUsages??=[]).unshift({trackId,runId:run.id,dealId:run.dealId,usedAt:now});}mark(state,run.id,role);activity(state,role,'专家协作已完成',`${run.agentIds.map(agentName).join('、')} · ${run.mode==='demo'?'演示生成':'外部模型生成'}`,'run',now);message=run.mode==='demo'?'已完成演示生成，未调用外部模型':'已完成服务端模型生成';break;
+      const query=text(payload.query,'问题',6000);run=await buildRun(state,role,query,context,now,{agentId:payload.agentId,dealId:payload.dealId,conversationRunIds:payload.conversationRunIds,talkTrackIds:payload.talkTrackIds});state.runs.unshift(run);for(const trackId of [...new Set(run.citations.filter(c=>state.talkTracks?.some(t=>t.id===c.id)).map(c=>c.id))]){(state.talkTrackUsages??=[]).unshift({trackId,runId:run.id,dealId:run.dealId,usedAt:now});}mark(state,run.id,role);activity(state,role,'专家协作已完成',`${run.agentIds.map(agentName).join('、')} · ${run.answerSource==='property-records'?'知识库房源筛选':run.mode==='demo'?'演示生成':'外部模型生成'}`,'run',now);message=run.answerSource==='property-records'?'已完成知识库房源筛选':run.mode==='demo'?'已完成演示生成，未调用外部模型':'已完成服务端模型生成';break;
     }
     case 'workflow_run': {
       if(payload.mode!==undefined&&payload.mode!=='draft'&&payload.mode!=='published')fail('运行模式不正确');

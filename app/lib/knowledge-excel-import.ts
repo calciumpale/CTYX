@@ -64,11 +64,15 @@ export async function extractKnowledgeExcel(bytes: Uint8Array, format: ExcelForm
       value=checkCharacters(value).replace(/\n/g,' ↵ ');
       if (!value.trim()) continue;
       const row=position.r+1;
-      rows.set(row,[...(rows.get(row)||[]),`${address}=${value}`]);
+      // Keep literal cell text distinct from the canonical “；B2=” cell separator.
+      // Escaping backslashes first also preserves literal text such as “\\uFF1B”.
+      const encoded=JSON.stringify(value).slice(1,-1).replace(/；/g,'\\uFF1B');
+      rows.set(row,[...(rows.get(row)||[]),`${address}=${encoded}`]);
     }
     if (!rows.size) { warnings.push(`工作表“${name}”没有可读取的单元格内容。`); continue; }
     const isHidden=Boolean(book.Workbook?.Sheets?.[index]?.Hidden); hidden ||= isHidden;
     append(`${blocks.length?'\n':''}## 工作表：${name}${isHidden?'（隐藏）':''}`);
+    append('单元格转义：JSON-v1');
     if (sheet['!merges']?.length) {
       merged=true;
       append(`合并单元格：${sheet['!merges'].map(range=>xlsx.utils.encode_range(range)).join('、')}（内容保留在原单元格，不填充空格）`);

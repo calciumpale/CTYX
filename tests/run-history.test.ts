@@ -1,12 +1,18 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { Run } from '../app/lib/types.ts';
-import { filterRuns, groupRunsByDate, runAnswerForDisplay, runStatus } from '../app/lib/run-history.ts';
+import { filterRuns, groupRunsByDate, runAnswerForDisplay, runGenerationLabel, runStatus } from '../app/lib/run-history.ts';
 
 const run = (overrides: Partial<Run> = {}): Run => ({
   id: 'run-1', query: '准备客户拜访方案', answer: '先确认预算与决策链。', agentIds: ['strategy'],
   steps: [], citations: [], mode: 'live', createdAt: '2026-10-24T02:00:00Z', duration: 1200,
   ...overrides,
+});
+
+test('labels original property records separately from model answers and local generation', () => {
+  assert.equal(runGenerationLabel(run({ answerSource: 'property-records', mode: 'demo' })), '知识库房源筛选');
+  assert.equal(runGenerationLabel(run({ mode: 'live' })), '模型生成');
+  assert.equal(runGenerationLabel(run({ mode: 'demo' })), '本地生成');
 });
 
 test('normalizes legacy chat status while preserving paused, rejected, and failed runs', () => {

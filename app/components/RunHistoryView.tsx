@@ -4,7 +4,7 @@ import { useId, useRef, useState, type KeyboardEvent, type ReactNode, type RefOb
 import { AlertCircle, ArrowLeft, BookOpen, Check, CheckCircle2, ChevronRight, Copy, FileText, GitBranch, History, Info, Loader2, MessageSquare, PauseCircle, Search, Sparkles, X, XCircle } from 'lucide-react';
 import { AnswerContent } from './AnswerContent';
 import { AGENTS, type Run, type TraceStep, type ViewProps } from '../lib/types';
-import { filterRuns, groupRunsByDate, runAnswerForDisplay, runStatus, type RunFilters, type RunStatus } from '../lib/run-history';
+import { filterRuns, groupRunsByDate, runAnswerForDisplay, runGenerationLabel, runStatus, type RunFilters, type RunStatus } from '../lib/run-history';
 import './answer-content.css';
 import './run-history.css';
 
@@ -101,7 +101,7 @@ function RecordDetail({ run, existingCandidate, busy, extractionPending, error, 
     </>)}
     <details className="run-history-technical"><summary>运行信息</summary><dl>
       <div><dt>运行编号</dt><dd>{run.id}</dd></div>
-      <div><dt>生成方式</dt><dd>{run.mode === 'live' ? '模型生成' : '本地生成'}</dd></div>
+      <div><dt>生成方式</dt><dd>{runGenerationLabel(run)}</dd></div>
       <div><dt>任务来源</dt><dd>{run.workflowId ? '工作流' : '专家协作'}</dd></div>
       {run.workflowId && <div><dt>工作流编号</dt><dd>{run.workflowId}</dd></div>}
       {run.workflowVersion !== undefined && <div><dt>工作流版本</dt><dd>v{run.workflowVersion}{run.workflowSource && ` · ${run.workflowSource === 'published' ? '已发布' : '草稿'}`}</dd></div>}
@@ -154,8 +154,8 @@ export function RunsView({ state, mutate, notify, canExtract = true }: ViewProps
         scenario: `适用于类似任务：“${run.query.slice(0, 1800)}”。复用前核实客户、业务阶段、关键事实和现行政策。`,
         steps: run.steps.length ? run.steps.slice(0, 12).map(step => `复用“${step.title}”：${step.detail}`.slice(0, 1900)) : ['澄清任务目标与待核实事实', '核对生效知识及业务授权边界', '形成建议并与实际反馈逐项验证'],
         boundaries: ['当前工作空间使用示例数据；示例结果不构成真实客户反馈、成交或转化证据。', '本次运行输出属于方法草稿，需管理者核对原始依据后人工审核。', '不得承诺未经审批的优惠、交付或商务条件；复用时重新核对生效知识。'],
-        evidence: `证据性质：本工作空间为示例数据；以下运行结果不是成交或转化证据。仅保留任务和执行输出供人工审核。\n运行编号：${run.id}\n生成方式：${run.mode === 'demo' ? '本地生成' : '模型生成'}\n\n原始任务：${run.query.slice(0, 1100)}\n\n原始结果片段：${run.answer.slice(0, 3200)}\n\n引用来源：${run.citations.map(item => item.title).join('；').slice(0, 250)}`.slice(0, 5000),
-        source: `运行记录 ${run.id} · ${dateLabel(run.createdAt)} · ${run.mode === 'demo' ? '本地生成' : '模型生成'}`,
+        evidence: `证据性质：本工作空间为示例数据；以下运行结果不是成交或转化证据。仅保留任务和执行输出供人工审核。\n运行编号：${run.id}\n生成方式：${runGenerationLabel(run)}\n\n原始任务：${run.query.slice(0, 1100)}\n\n原始结果片段：${run.answer.slice(0, 3200)}\n\n引用来源：${run.citations.map(item => item.title).join('；').slice(0, 250)}`.slice(0, 5000),
+        source: `运行记录 ${run.id} · ${dateLabel(run.createdAt)} · ${runGenerationLabel(run)}`,
       });
       setExtractedIds(ids => [...ids, run.id]);
       notify('已提炼为候选 Skill，待管理者本人核对证据与边界后审核。');

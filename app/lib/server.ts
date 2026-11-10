@@ -108,7 +108,7 @@ export async function mutateWorkbench(userId:string,role:Role,action:string,payl
   const recallAgentMemory = memory && model ? (query: string, projectId?: string) =>
     memory.recall(memoryScope(projectId), query).catch(() => undefined) : undefined;
   const mutationAt=new Date().toISOString();
-  const knowledgeAgent=createWorkbenchKnowledgeAgent(database(),userId,siteOrigin,{generate:model?(messages,options)=>requestModelText(model!,messages,{timeoutMs:options?.phase==='route'?8000:12000}):undefined});
+  const knowledgeAgent=createWorkbenchKnowledgeAgent(database(),userId,siteOrigin,{...(role==='sales'?{departmentId:knowledgeDepartmentForSalesId(salesScope?.salesId)}:{}),generate:model?(messages,options)=>requestModelText(model!,messages,{timeoutMs:options?.phase==='route'?8000:12000}):undefined});
   const managedByQuery = new Map<string, ReturnType<typeof workbenchKnowledge>>();
   const retrieveManagedKnowledge = (query: string) => {
     const cached = managedByQuery.get(query);

@@ -91,3 +91,16 @@ test('worksheet lookup uses its original name while line breaks are normalized o
  const result=await importKnowledgeFile(file([['表\r\n一',XLSX.utils.aoa_to_sheet([['有效内容']])]]));
  assert.match(result.text,/有效内容/);assert.match(result.text,/## 工作表：表.*一/);
 });
+
+test('JSON-v1 serialization escapes cell delimiters, quotes and backslashes in every worksheet',async()=>{
+ const literal='东街；B2=120；含"引号"、\\路径、字面\\uFF1B及\t制表符';
+ for(const extension of ['xlsx','xls'] as const){
+  const result=await importKnowledgeFile(file([['空置房源',XLSX.utils.aoa_to_sheet([['地址','面积','业态'],[literal,null,'餐饮']])],['在租房源',XLSX.utils.aoa_to_sheet([['地址','面积'],['西街',80]])]],extension));
+  assert.equal(result.text.match(/^单元格转义：JSON-v1$/gm)?.length,2);
+  const line=result.text.split('\n').find(value=>value.startsWith('第2行：A2=东街'))!;
+  assert.ok(line.includes('\\uFF1BB2=120'));
+  assert.ok(!line.includes('；B2=120'));
+  const encoded=line.match(/^第2行：A2=(.*)；C2=餐饮$/)![1];
+  assert.equal(JSON.parse('"'+encoded+'"'),literal);
+ }
+});

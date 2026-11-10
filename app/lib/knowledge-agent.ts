@@ -1,19 +1,23 @@
 import type {ModelMessage} from './model-client.ts';
+import type {PropertyQuery} from './property-query.ts';
 export interface KnowledgeAgentEvidence {id:string;title:string;content:string;}
 export interface KnowledgeAgentRequest {
  question:string;intent?:'auto'|'conversation'|'customer_memory'|'business';
  context?:{id:string;text:string;kind:'customer_fact'|'conversation_event'}[];
  history?:{role:'user'|'assistant';content:string}[];instructions?:string;maxAnswerChars?:number;retrievalQuery?:string;
+ /** Resolved filters from the caller's persisted prior run; never an authorization scope. */
+ propertyQuery?:PropertyQuery;
 }
-export interface KnowledgeAgentResult {action:'answer'|'unavailable'|'handoff';answer?:string;evidenceIds:string[];knowledge:KnowledgeAgentEvidence[];route:'direct'|'retrieved'|'no_evidence'|'failed'|'conflict';}
+export interface KnowledgeAgentResult {action:'answer'|'unavailable'|'handoff';answer?:string;evidenceIds:string[];knowledge:KnowledgeAgentEvidence[];route:'direct'|'retrieved'|'no_evidence'|'failed'|'conflict';recordLookup?:{kind:'property';total:number;complete:boolean;query?:PropertyQuery};}
 export interface KnowledgeAgentTools {retrieve:(query:string)=>Promise<KnowledgeAgentEvidence[]>;generate?:(messages:ModelMessage[],options?:{phase:'route'|'answer'})=>Promise<string>;}
-export interface KnowledgePreparedContext {route:KnowledgeAgentResult['route'];knowledge:KnowledgeAgentEvidence[];evidenceIds:string[];query?:string;answer?:string;}
+export interface KnowledgePreparedContext {route:KnowledgeAgentResult['route'];knowledge:KnowledgeAgentEvidence[];evidenceIds:string[];query?:string;answer?:string;recordLookup?:KnowledgeAgentResult['recordLookup'];}
 // Inputs are untrusted data; only caller-owned tool closures can establish access scope.
-const redact=(value:string)=>{const normalized=value.normalize('NFKC');const redacted=normalized
+export const redactKnowledgeText=(value:string)=>{const normalized=value.normalize('NFKC');const redacted=normalized
  .replace(/(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,24}/g,'[邮箱]')
  .replace(/(?<![0-9A-Za-z])(?:\+?86[ -]?)?1[3-9]\d[ -]?\d{4}[ -]?\d{4}(?![0-9A-Za-z])/g,'[手机号]')
  .replace(/(?<!\d)0\d{2,3}[ -]?\d{7,8}(?!\d)/g,'[电话]')
  .replace(/(?:微信号?|wechat|vx)[：:\s]*[A-Za-z][A-Za-z0-9_-]{5,19}/gi,'微信[账号]');return redacted===normalized?value:redacted;};
+const redact=redactKnowledgeText;
 const unsafe=/系统指令|系统提示|提示词|内部(?:资料|规则)|忽略.{0,12}(?:规则|指令)|prompt|https?:\/\/|稳赚|保本|保证有|预约成功/i;
 const business=/租金|月租|价格|单价|库存|地址|营业|开门|政策|制度|审批|支持|收费|转让费|[有剩].{0,12}[吗么]|哪里|哪儿|怎么办|怎么(?:用|做|预约|购买)/;
 const greeting=/^(?:你好|您好|嗨|哈喽|hello|hi|谢谢|好的|收到|明白|在吗)[！!。,.，?？\s]*$/i;

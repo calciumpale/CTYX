@@ -1,3 +1,4 @@
+import {preparePropertyKnowledge} from './property-knowledge.ts';
 import {canReadLegacyKnowledge} from './knowledge-content-scope.ts';
 import type {KnowledgeDepartmentId} from './knowledge-department-scope.ts';
 import type {KnowledgeAgentEvidence} from './knowledge-agent.ts';
@@ -42,6 +43,7 @@ export function createWorkbenchKnowledgeAgent(db:D1Database,ownerId:string,origi
    return [...documents,...lexical,...semantic.map(talkKnowledge)];
   }catch{return [...documents,...lexical];}
  };
+ const prepareProperty=(request:KnowledgeAgentRequest)=>preparePropertyKnowledge(db,ownerId,request,{...(scoped?{departmentId:options.departmentId}:{}),...(!scoped&&libraryIds!==undefined?{libraryIds}:{}),generate:options.generate});
  const tools={retrieve:async(query:string)=>prefetched??retrieve(query),generate:options.generate};
- return {preflight:async(query:string)=>{const snapshot=await store.snapshot();prefetched=await retrieve(query);return {department:options.departmentId??null,libraryIds:snapshot.libraries.map(l=>l.id).slice(0,100),sourceIds:prefetched.map(e=>e.id).slice(0,20),status:'ok' as const};},prepare:(request:KnowledgeAgentRequest)=>prepareKnowledgeContext(request,tools),answer:(request:KnowledgeAgentRequest)=>runKnowledgeAgent(request,tools)};
+ return {preflight:async(query:string)=>{const snapshot=await store.snapshot();prefetched=await retrieve(query);return {department:options.departmentId??null,libraryIds:snapshot.libraries.map(l=>l.id).slice(0,100),sourceIds:prefetched.map(e=>e.id).slice(0,20),status:'ok' as const};},prepare:async(request:KnowledgeAgentRequest)=>(await prepareProperty(request))??prepareKnowledgeContext(request,tools),answer:async(request:KnowledgeAgentRequest)=>{const max=Math.max(1,Math.min(12000,request.maxAnswerChars??2000));const prepared=await prepareProperty({...request,maxAnswerChars:max});if(!prepared)return runKnowledgeAgent(request,tools);return max>=350&&prepared.answer&&prepared.answer.length<=max?{...prepared,action:'answer' as const}:{...prepared,answer:undefined,evidenceIds:[],action:'handoff' as const};}};
 }

@@ -4,6 +4,10 @@ export type RunStatus = NonNullable<Run['status']>;
 export type RunSource = 'all' | 'chat' | 'workflow';
 export interface RunFilters { search: string; status: 'all' | RunStatus; source: RunSource; }
 
+export function runGenerationLabel(run: Pick<Run, 'mode' | 'answerSource'>): string {
+  return run.answerSource === 'property-records' ? '知识库房源筛选' : run.mode === 'live' ? '模型生成' : '本地生成';
+}
+
 export function runStatus(run: Run): RunStatus {
   if (run.status === 'paused' || run.status === 'rejected' || run.status === 'failed') return run.status;
   return run.steps.some(step => step.status === 'error') ? 'failed' : 'completed';

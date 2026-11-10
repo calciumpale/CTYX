@@ -19,7 +19,7 @@ export function isCustomerRecordQuestion(query: string): boolean {
   return /(?:违规|违法|合规|处罚|失信|食品安全).{0,4}(?:记录|历史|公示|通报)|行政处罚|经营异常|被执行人|司法执行|严重违法失信|食品安全(?:问题|风险)|(?:有没有|是否|有无|曾经|被).{0,6}(?:违规|违法|处罚|罚款|列入黑名单)/.test(query);
 }
 
-export const isCustomerRecordFollowup = (query: string) => /^(?:那(?:么)?\s*)?(?:请|帮我)?(?:去哪(?:里|儿)查|哪里查|如何查|怎么查|怎么核实|如何核实|查什么|还能查什么|再(?:详细|具体|补充|展开)(?:一点)?)[？?。！!\s]*$/.test(query);
+export const isCustomerRecordFollowup = (query: string) => /^(?:那(?:么)?\s*)?(?:请|帮我)?(?:去哪(?:里|儿)?查|哪(?:里|儿)查|如何查|怎么查|怎么核实|如何核实|查什么|还能查什么|再(?:详细|具体|补充|展开)(?:一点)?)[？?。！!\s]*$/.test(query);
 
 const recordChecks = {
   registry: '[国家企业信用信息公示系统](https://www.gsxt.gov.cn/index.html) · 核对行政处罚、经营异常和市场监管严重违法失信信息。',

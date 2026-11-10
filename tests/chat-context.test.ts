@@ -97,8 +97,8 @@ test('a customer violation-record question calls the model and stays inconclusiv
     },
   };
   const first=await executeAction(state,'sales','chat',{query:'他有没有违规记录',dealId:deal.id},context);
-  const followup=await executeAction(first.state,'sales','chat',{query:'那去哪里查？',dealId:deal.id,conversationRunIds:[first.run!.id]},context);
-  const continued=await executeAction(followup.state,'sales','chat',{query:'再具体一点',conversationRunIds:[first.run!.id,followup.run!.id]},context);
+  const followup=await executeAction(first.state,'sales','chat',{query:'去哪查',conversationRunIds:[first.run!.id]},context);
+  const continued=await executeAction(followup.state,'sales','chat',{query:'怎么核实',conversationRunIds:[first.run!.id,followup.run!.id]},context);
   const another=await executeAction(state,'sales','chat',{query:'这家公司的合规记录里有没有经营异常？',dealId:deal.id},context);
   for(const {run} of [first,followup,continued,another]){
     assert.equal(run?.mode,'live');
@@ -108,7 +108,7 @@ test('a customer violation-record question calls the model and stays inconclusiv
     assert.doesNotMatch(run!.answer,/从未违规|已经被处罚|已被罚款|资料存在冲突/);
     assert.deepEqual(run?.citations,[]);
   }
-  assert.deepEqual(inputs.map(input=>input.query),['他有没有违规记录','那去哪里查？','再具体一点','这家公司的合规记录里有没有经营异常？']);
+  assert.deepEqual(inputs.map(input=>input.query),['他有没有违规记录','去哪查','怎么核实','这家公司的合规记录里有没有经营异常？']);
   assert.ok(inputs.every(input=>input.deal?.id===deal.id&&input.knowledge.length===0));
   assert.equal(inputs[2].history?.[0].query,'他有没有违规记录');
 

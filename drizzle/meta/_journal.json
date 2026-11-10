@@ -176,6 +176,13 @@
       "when": 1794154811925,
       "tag": "0024_yellow_wasp",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "6",
+      "when": 1794268297159,
+      "tag": "0025_lively_kinsey_walden",
+      "breakpoints": true
     }
   ]
 }

@@ -44,7 +44,7 @@ test('unified material entries retain image/video drafts, remove deck tools and 
   await page.route('**/api/marketing-materials',route=>route.fulfill({json:{tasks,availability:{presentation:true,image:false,video:false}}}));await page.route('**/api/material-connection',route=>{if(route.request().method()==='POST')connectionWrites++;return route.fulfill({json:{connection:{kind:'apimart',configured:false,hasSecret:false,enabled:false,version:0,imageModel:'gpt-image-1-official',storageReady:true},message:'已保存'}});});
   await page.goto(origin);await page.getByLabel('产品与生成要求').waitFor();
   assert.equal(await page.getByRole('heading',{name:'AI营销素材',exact:true}).count(),1);
-  assert.deepEqual(await page.getByRole('tab').allTextContents(),['图文生成','数字人']);
+  assert.deepEqual(await page.getByRole('tab').allTextContents(),['图文生成','AI 朋友圈','数字人']);
   assert.equal(await page.getByRole('tab',{name:'产品演示稿'}).count(),0);assert.equal(await page.getByText('历史演示稿',{exact:true}).count(),0);assert.equal(await page.getByRole('button',{name:'导出可编辑 PPTX'}).count(),0);
   assert.equal(await page.getByLabel('输出类型',{exact:true}).inputValue(),'image');
   await page.getByLabel('产品与生成要求').fill('保留的图片输入');assert.equal(await page.getByRole('button',{name:'生成营销图片'}).isDisabled(),true);
@@ -98,7 +98,7 @@ test('both material entries contribute to parent busy and dirty guards without d
   await page.goto(origin);await state('clean');await page.getByLabel('产品与生成要求').fill('图片草稿');await state('dirty');
   await page.getByRole('tab',{name:'数字人',exact:true}).click();await page.getByLabel('数字人测试草稿').fill('数字人草稿');await page.getByLabel('数字人测试草稿').fill('');await state('dirty');
   await page.getByRole('tab',{name:'图文生成',exact:true}).click();assert.equal(await page.getByLabel('产品与生成要求').inputValue(),'图片草稿');await page.getByLabel('产品与生成要求').fill('');await state('clean');
-  await page.getByRole('tab',{name:'图文生成',exact:true}).focus();await page.keyboard.press('ArrowRight');await page.getByLabel('数字人测试草稿').fill('数字人草稿');await state('dirty');
+  await page.getByRole('tab',{name:'图文生成',exact:true}).focus();await page.keyboard.press('ArrowRight');await page.getByRole('tab',{name:'AI 朋友圈',exact:true}).focus();await page.keyboard.press('ArrowRight');await page.getByLabel('数字人测试草稿').fill('数字人草稿');await state('dirty');
   await page.getByRole('button',{name:'开始数字人测试请求',exact:true}).click();await state('busy');assert.equal(await page.getByRole('tab',{name:'图文生成',exact:true}).isDisabled(),true);
   await page.getByRole('button',{name:'结束数字人测试请求',exact:true}).click();await state('dirty');await page.getByRole('tab',{name:'数字人',exact:true}).focus();await page.keyboard.press('Home');assert.equal(await page.getByLabel('产品与生成要求').inputValue(),'');await state('dirty');assert.equal(writes,0);
  }finally{await browser?.close();await server.close();await rm(cacheDir,{recursive:true,force:true});}

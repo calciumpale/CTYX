@@ -104,7 +104,9 @@ export default function Workbench({member,onLogout}:{member:MemberSession;onLogo
   }, []);
   useEffect(() => {
     const route=readWorkspaceRoute(window.location.search,member.role);
-    const frame=requestAnimationFrame(()=>{
+    // Initial routing does not depend on a paint. Safari can suspend animation
+    // frames while the workspace is in a background tab.
+    const timer=window.setTimeout(()=>{
       setView(route.view);
       setProjectIntent(route.intent??null);
       setMeetingEmbed(route.meetingEmbed===true);
@@ -114,7 +116,7 @@ export default function Workbench({member,onLogout}:{member:MemberSession;onLogo
       setProspectingSection(route.prospectingSection??'create');
       setRouteReady(true);
     });
-    return()=>cancelAnimationFrame(frame);
+    return()=>window.clearTimeout(timer);
   }, [member.role]);
   const navigate = useCallback((next: View, id?: string, contractId?:string, approvalId?:string,intent?:'create'|'followup') => {
     if(!canOpenWorkspaceView(member.role,next)){notify('当前账号没有这个功能的访问权限');return;}

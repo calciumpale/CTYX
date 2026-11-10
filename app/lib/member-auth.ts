@@ -43,7 +43,7 @@ export function trustedMemberHeaders(original:Headers,member:MemberSession):Head
   if(member.salesId)headers.set('x-ctai-member-sales-id',member.salesId);
   return headers;
 }
-/** Only the two existing owner-private Sites service jobs may omit a member session.
+/** Owner-private Sites service jobs may omit a member session.
  * Human requests always retain their outer identity and must pass app authorization. */
 export function memberRouteAccess(request:Request):'session'|'service'|'manager'|'operator'|'member'{
   const path=new URL(request.url).pathname.replace(/\/$/,'');
@@ -51,6 +51,7 @@ export function memberRouteAccess(request:Request):'session'|'service'|'manager'
   if(path==='/api/workspace-session')return 'session';
   if(['/api/meeting-bridge/setup','/api/meeting-bridge/poll','/api/meeting-bridge/heartbeat','/api/meeting-bridge/complete','/api/meeting-bridge/media'].includes(path)&&request.method==='POST')return 'service';
   if(['/api/prospecting-bridge/status','/api/prospecting-bridge/poll','/api/prospecting-bridge/heartbeat','/api/prospecting-bridge/complete'].includes(path)&&request.method==='POST')return 'service';
+  if(path==='/api/moments-materials/maintenance'&&request.method==='POST'&&!request.headers.has('oai-authenticated-user-id')&&!request.headers.has('oai-authenticated-user-email'))return 'service';
   if(path==='/api/sales-reports/maintenance'||path==='/api/talktracks/maintenance'){
     if(!request.headers.get('oai-authenticated-user-id')&&!request.headers.get('oai-authenticated-user-email'))return 'service';
     return path==='/api/sales-reports/maintenance'?'manager':'operator';

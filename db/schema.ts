@@ -183,6 +183,29 @@ export const workbenchMaterialTasks=sqliteTable('workbench_material_tasks',{
  id:text('id').primaryKey(),ownerId:text('owner_id').notNull(),memberId:text('member_id').notNull(),requestId:text('request_id').notNull(),payloadHash:text('payload_hash').notNull(),version:integer('version').notNull(),status:text('status').notNull(),updatedAt:text('updated_at').notNull(),dataJson:text('data_json').notNull(),
 },table=>[uniqueIndex('workbench_material_identity').on(table.ownerId,table.memberId,table.requestId),index('workbench_material_history').on(table.ownerId,table.memberId,table.updatedAt)]);
 
+/** Recurrence settings and durable generated drafts are private to a workspace member. */
+export const workbenchMomentPlans = sqliteTable('workbench_moment_plans', {
+  id: text('id').primaryKey(), ownerId: text('owner_id').notNull(), memberId: text('member_id').notNull(),
+  version: integer('version').notNull(), enabled: integer('enabled').notNull(), nextRunAt: text('next_run_at'),
+  archivedAt: text('archived_at'), updatedAt: text('updated_at').notNull(), inputJson: text('input_json').notNull(),
+}, table => [
+  index('workbench_moment_plan_member').on(table.ownerId, table.memberId, table.archivedAt, table.updatedAt),
+  index('workbench_moment_plan_due').on(table.enabled, table.archivedAt, table.nextRunAt),
+]);
+
+export const workbenchMomentDrafts = sqliteTable('workbench_moment_drafts', {
+  id: text('id').primaryKey(), planId: text('plan_id').notNull().references(() => workbenchMomentPlans.id),
+  ownerId: text('owner_id').notNull(), memberId: text('member_id').notNull(), requestKey: text('request_key').notNull(),
+  trigger: text('trigger').notNull(), version: integer('version').notNull(), status: text('status').notNull(),
+  inputJson: text('input_json').notNull(), outputJson: text('output_json').notNull(), nextCheckAt: text('next_check_at'),
+  leaseToken: text('lease_token'), leaseUntil: text('lease_until'),
+  createdAt: text('created_at').notNull(), updatedAt: text('updated_at').notNull(),
+}, table => [
+  uniqueIndex('workbench_moment_draft_request').on(table.ownerId, table.memberId, table.requestKey),
+  index('workbench_moment_draft_history').on(table.ownerId, table.memberId, table.createdAt),
+  index('workbench_moment_draft_due').on(table.status, table.nextCheckAt, table.leaseUntil),
+]);
+
 export const workbenchWebProspectTasks=sqliteTable('workbench_web_prospect_tasks',{
  id:text('id').primaryKey(),ownerId:text('owner_id').notNull(),memberId:text('member_id').notNull(),requestId:text('request_id').notNull(),payloadHash:text('payload_hash').notNull(),status:text('status').notNull(),createdAt:text('created_at').notNull(),dataJson:text('data_json').notNull(),
 },t=>[uniqueIndex('workbench_web_task_retry').on(t.ownerId,t.memberId,t.requestId),index('workbench_web_task_history').on(t.ownerId,t.memberId,t.createdAt)]);

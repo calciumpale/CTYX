@@ -4,14 +4,16 @@
 import {useState,useEffect,useRef,useCallback,useId,type KeyboardEvent} from 'react';
 import type {MaterialKind,MaterialInput,PublicMaterialTask} from '../lib/marketing-material-types';
 import DigitalHumanWorkspace from './DigitalHumanWorkspace';
+import MomentsMaterials from './MomentsMaterials';
 import './marketing-materials.css';
 
 type GenerationKind='image'|'video';
-type MaterialSection='generate'|'digitalhuman';
+type MaterialSection='generate'|'moments'|'digitalhuman';
 type AttemptIdentity={id:string;hash:string};
 type MaterialProps={notify:(message:string)=>void;onBusyChange?:(busy:boolean)=>void;onDirtyChange?:(dirty:boolean)=>void};
 const kinds:Record<GenerationKind,string>={image:'营销图片',video:'营销视频'};
-const sections:Record<MaterialSection,string>={generate:'图文生成',digitalhuman:'数字人'};
+const sections:Record<MaterialSection,string>={generate:'图文生成',moments:'AI 朋友圈',digitalhuman:'数字人'};
+const sectionOrder=Object.keys(sections) as MaterialSection[];
 const statuses={submitting:'正在提交',submission_unknown:'提交结果未知',queued:'排队中',processing:'生成中',saving:'保存中',completed:'已完成',failed:'生成失败',expired:'结果链接已过期'};
 
 async function api(body?:unknown){
@@ -25,19 +27,22 @@ export default function MarketingMaterials({notify,onBusyChange,onDirtyChange}:M
  const id=useId();
  const [section,setSection]=useState<MaterialSection>('generate');
  const [humanVisited,setHumanVisited]=useState(false);
- const [generationBusy,setGenerationBusy]=useState(false),[humanBusy,setHumanBusy]=useState(false);
- const [generationDirty,setGenerationDirty]=useState(false),[humanDirty,setHumanDirty]=useState(false);
- const busy=generationBusy||humanBusy,dirty=generationDirty||humanDirty;
+ const [momentsVisited,setMomentsVisited]=useState(false);
+ const [generationBusy,setGenerationBusy]=useState(false),[humanBusy,setHumanBusy]=useState(false),[momentsBusy,setMomentsBusy]=useState(false);
+ const [generationDirty,setGenerationDirty]=useState(false),[humanDirty,setHumanDirty]=useState(false),[momentsDirty,setMomentsDirty]=useState(false);
+ const busy=generationBusy||humanBusy||momentsBusy,dirty=generationDirty||humanDirty||momentsDirty;
  useEffect(()=>{onBusyChange?.(busy);return()=>onBusyChange?.(false);},[busy,onBusyChange]);
  useEffect(()=>{onDirtyChange?.(dirty);return()=>onDirtyChange?.(false);},[dirty,onDirtyChange]);
- function selectSection(next:MaterialSection){if(busy)return;if(next==='digitalhuman')setHumanVisited(true);setSection(next);}
+ function selectSection(next:MaterialSection){if(busy)return;if(next==='digitalhuman')setHumanVisited(true);if(next==='moments')setMomentsVisited(true);setSection(next);}
  function handleTabKey(event:KeyboardEvent<HTMLButtonElement>){
   if(busy||!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;
   event.preventDefault();
-  const next=event.key==='Home'?'generate':event.key==='End'?'digitalhuman':section==='generate'?'digitalhuman':'generate';
+  const current=sectionOrder.indexOf(section);
+  const index=event.key==='Home'?0:event.key==='End'?sectionOrder.length-1:(current+(event.key==='ArrowRight'?1:-1)+sectionOrder.length)%sectionOrder.length;
+  const next=sectionOrder[index];
   selectSection(next);
   const tabs=event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role=tab]');
-  tabs?.[next==='generate'?0:1]?.focus();
+  tabs?.[index]?.focus();
  }
  return <section className="material-workspace" aria-label="AI营销素材">
   <header className="material-heading"><h2>AI营销素材</h2></header>
@@ -46,6 +51,9 @@ export default function MarketingMaterials({notify,onBusyChange,onDirtyChange}:M
   </div>
   <div className="material-panel" role="tabpanel" id={`${id}-generate-panel`} aria-labelledby={`${id}-generate-tab`} hidden={section!=='generate'}>
    <GeneratedMaterials notify={notify} active={section==='generate'} onBusyChange={setGenerationBusy} onDirtyChange={setGenerationDirty}/>
+  </div>
+  <div className="material-panel" role="tabpanel" id={`${id}-moments-panel`} aria-labelledby={`${id}-moments-tab`} hidden={section!=='moments'}>
+   {momentsVisited&&<MomentsMaterials notify={notify} active={section==='moments'} onBusyChange={setMomentsBusy} onDirtyChange={setMomentsDirty}/>}
   </div>
   <div className="material-panel" role="tabpanel" id={`${id}-digitalhuman-panel`} aria-labelledby={`${id}-digitalhuman-tab`} hidden={section!=='digitalhuman'}>
    {humanVisited&&<DigitalHumanWorkspace notify={notify} active={section==='digitalhuman'} onBusyChange={setHumanBusy} onDirtyChange={setHumanDirty}/>}

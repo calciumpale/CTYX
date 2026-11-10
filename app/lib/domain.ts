@@ -16,7 +16,7 @@ import type { AgentId, ApiResult, CompanyProfile, CustomerProfile, Deal, FlowNod
 import { defaultTrainingProfile, validateTrainingProfile } from './training-profile.ts';
 import { demoTrainingGenerate } from './training-dialogue.ts';
 import type { TrainingGenerationInput } from './training-dialogue.ts';
-import { CUSTOMER_INSIGHT_INSTRUCTION, customerInsightEvidence, formatCustomerInsight, isCustomerInsightQuestion, type CustomerInsightEvidence } from './customer-insight.ts';
+import { CUSTOMER_INSIGHT_INSTRUCTION, CUSTOMER_RECORD_INSTRUCTION, customerInsightEvidence, formatCustomerInsight, formatCustomerRecordAnswer, isCustomerInsightQuestion, isCustomerRecordFollowup, isCustomerRecordQuestion, type CustomerInsightEvidence } from './customer-insight.ts';
 
 export class DomainError extends Error {
   status:number;
@@ -389,27 +389,36 @@ async function boundedSpecialist(input:GenerationInput,context:ActionContext,rou
   return groundedSpecialist(output.answer,input,!customerAdvice(input.query,input.deals))?output:{answer:route==='retrieved'?'回答中的业务事实缺少完整资料依据，请核实后回复。':boundary,mode:'demo'};
 }
 const asKnowledge=(item:KnowledgeAgentEvidence):Knowledge=>({...item,category:'共享知识库',source:'已授权知识库',status:'published',updatedAt:''});
-async function generateCustomerInsight(input: GenerationInput, deal: Deal, generate: NonNullable<ActionContext['generateInsight']>): Promise<GenerationOutput> {
-  const evidence = customerInsightEvidence(deal);
-  const result = await generate({ ...input, knowledge: [], previous: '', instruction: CUSTOMER_INSIGHT_INSTRUCTION, customerInsightEvidence: evidence });
+async function generateCustomerInsight(input: GenerationInput, deal: Deal, generate: NonNullable<ActionContext['generateInsight']>, checkRecords: boolean): Promise<GenerationOutput> {
+  const evidence = checkRecords ? [] : customerInsightEvidence(deal);
+  const instruction = checkRecords ? CUSTOMER_RECORD_INSTRUCTION : CUSTOMER_INSIGHT_INSTRUCTION;
+  const result = await generate({ ...input, knowledge: [], previous: '', instruction, customerInsightEvidence: evidence,
+    ...(checkRecords ? { salesScope: undefined } : {}) });
   if (result.mode !== 'live') fail('客户洞察需要大模型。请在设置的「服务连接」中配置并启用大模型后重试。', 503);
-  const answer = formatCustomerInsight(result.answer, evidence);
+  const answer = checkRecords ? formatCustomerRecordAnswer(result.answer) : formatCustomerInsight(result.answer, evidence);
   if (!answer) fail('大模型未返回符合要求的客户洞察，请重试。', 502);
   return { answer, mode: 'live' };
 }
 async function buildRun(state:StoredState,role:Role,query:string,context:ActionContext,now:string,options:{agentId?:unknown;dealId?:unknown;conversationRunIds?:unknown;talkTrackIds?:unknown}={}):Promise<Run> {
   const started=Date.now();const steps:TraceStep[]=[];const citations:Run['citations']=[];const usedAgents:AgentId[]=[];let mode:Run['mode']='demo';const answers:string[]=[];
   const priorRuns=conversationRuns(state,role,options.conversationRunIds);const history=boundedConversation(priorRuns);const latest=priorRuns.at(-1);
-  const directDeal=chooseDeal(state,role,query,options.dealId);const followup=!!latest&&!directDeal&&isFollowup(query);
+  const priorTopic = latest?.dealId && isCustomerRecordFollowup(query) ? priorRuns.findLast(run =>
+    run.dealId !== latest.dealId || !run.agentIds.includes('insight') || !isCustomerRecordFollowup(run.query)) : undefined;
+  const recordTopic = priorTopic && priorTopic.dealId === latest?.dealId && priorTopic.agentIds.includes('insight') &&
+    isCustomerRecordQuestion(priorTopic.query) ? priorTopic : undefined;
+  const directDeal=chooseDeal(state,role,query,options.dealId);const followup=!!latest&&!directDeal&&(isFollowup(query)||!!recordTopic);
   const deal=directDeal??(followup?chooseDeal(state,role,latest!.query,latest!.dealId):undefined);
   if(options.agentId!==undefined&&!agentIds.has(options.agentId as AgentId))fail('请选择五位领域专家之一');
+  const checkRecords = !!deal && (!options.agentId || options.agentId === 'insight') &&
+    (isCustomerRecordQuestion(query) || recordTopic?.dealId === deal.id);
+  if (checkRecords && !context.generateInsight) fail('客户洞察需要大模型。请在设置的「服务连接」中配置并启用大模型后重试。', 503);
   const explicitIntent=/培训|练习|带练|扮演|陪练|风险|合同|免租|审批|合规|资质|违约|授权|优先|预测|健康|本周|商机|漏斗|推进|拜访|方案|策略|开场|话术|谈判/.test(query);
   const inheritedRoute=followup&&!explicitIntent?latest!.agentIds.filter(id=>agentIds.has(id)):[];
-  const routed=options.agentId?[options.agentId as AgentId]:inheritedRoute.length?inheritedRoute:routeAgents(query);
+  const routed:AgentId[]=checkRecords?['insight']:options.agentId?[options.agentId as AgentId]:inheritedRoute.length?inheritedRoute:routeAgents(query);
   const previousInsight = latest?.dealId === deal?.id && latest?.agentIds.includes('insight')
     ? priorRuns.findLast(run => run.dealId === deal?.id && run.agentIds.includes('insight') && isCustomerInsightQuestion(run.query))
     : undefined;
-  const insightGenerator = deal && routed.includes('insight') && isCustomerInsightQuestion(query, previousInsight?.query) ? context.generateInsight : undefined;
+  const insightGenerator = deal && routed.includes('insight') && (checkRecords || isCustomerInsightQuestion(query, previousInsight?.query)) ? context.generateInsight : undefined;
   const needsSharedKnowledge = !insightGenerator || routed.some(id => id !== 'insight');
   const retrievalQuery=followup?`${latest!.query}\n${query}`:query;
   const portfolio=routed.includes('opportunity')&&/商机|漏斗|客户|团队|招商|销售|跟进/.test(retrievalQuery);
@@ -423,16 +432,17 @@ async function buildRun(state:StoredState,role:Role,query:string,context:ActionC
   const generate=async (agentId:AgentId,instruction?:string,previous=answers.join('\n\n'))=> {
     const tick=Date.now();const input:GenerationInput={salesScope:context.salesScope,query,agentId,deal,deals:scopedDeals,knowledge,instruction:[instruction,explicitTracks.length?'用户指定采用以下已审核话术的结构和表达方式：'+explicitTracks.map(t=>t.title).join('、')+'。根据当前客户资料改写占位符，不照搬来源项目事实。':undefined].filter(Boolean).join('\n'),previous,history,...(agentId==='risk'&&deal?{contractReviews:(state.contracts??[]).filter(c=>c.dealId===deal.id&&c.analysis).slice(0,5).map(c=>({title:c.title,reviewedAt:c.reviewedAt,analysis:c.analysis!}))}:{}),purpose:'chat'};
     const scopedInsight=agentId==='insight'&&deal&&insightGenerator;
+    if(checkRecords)input.history=recordTopic?boundedConversation([recordTopic]):[];
     const output=scopedInsight
-      ? await generateCustomerInsight(input,deal,insightGenerator)
+      ? await generateCustomerInsight(input,deal,insightGenerator,checkRecords)
       : await boundedSpecialist(input,context,prepared?.route,prepared?.answer);
     if(output.mode==='live')mode='live';usedAgents.push(agentId);answers.push(`${agentName(agentId)}\n${output.answer}`);
-    const references=scopedInsight?'基于当前项目与企业资料分析':`使用${knowledge.length}条生效资料`;
+    const references=checkRecords?'按当前问题整理官方核验入口，未查询记录库':scopedInsight?'基于当前项目与企业资料分析':`使用${knowledge.length}条生效资料`;
     step(`${agentName(agentId)}生成`,`${output.mode==='demo'?'本地规则演示，未请求外部模型':'服务端外部模型返回'}；${references}${deal?`；客户：${deal.name}`:''}${instruction?`；节点指令：${instruction}`:''}`, 'success',agentId,Date.now()-tick);
     return `${agentName(agentId)}\n${output.answer}`;
   };
     step('主 Agent 识别意图',`${role==='manager'?'销售管理者':'销售'}主 Agent ${options.agentId?'按指定专家':inheritedRoute.length?'沿用当前对话专家':'按问题关键词路由'}至${routed.map(agentName).join('、')}。`);
-    if(deal?.dataOrigin==='manual'&&!deal.companyProfile?.sources.length&&routed.includes('insight')) {
+    if(!checkRecords&&deal?.dataOrigin==='manual'&&!deal.companyProfile?.sources.length&&routed.includes('insight')) {
       const tick=Date.now();
       try {
         deal.companyProfile=await enrichDeal(deal,context);deal.version++;
@@ -441,7 +451,7 @@ async function buildRun(state:StoredState,role:Role,query:string,context:ActionC
         step('检索企业公开资料','企业资料补全暂时未完成，本次仅依据已填写的项目资料回答；未核验信息保持未知。','warning','insight',Date.now()-tick);
       }
     }
-    if(deal)citations.push(...companyCitations(deal));
+    if(deal&&!checkRecords)citations.push(...companyCitations(deal));
     const prepared=needsSharedKnowledge?await context.prepareKnowledge?.({question:query,retrievalQuery,history:history.flatMap(item=>[{role:'user' as const,content:item.query},{role:'assistant' as const,content:item.answer}]),context:deal?[{id:deal.id,kind:'customer_fact',text:JSON.stringify({needs:deal.needs,budget:deal.customerProfile?.budget})}]:[]}):undefined;
     if(prepared){
       knowledge=[...(prepared.route==='retrieved'?prepared.knowledge.map(asKnowledge):[]),...tracks.map(talkKnowledge)];

@@ -83,6 +83,42 @@ test('scoped customer insight reports missing model configuration rather than sa
   assert.equal(state.runs.length,0);
 });
 
+test('a customer violation-record question calls the model and stays inconclusive without verified records',async()=>{
+  const {state,deal,unrelated}=scopedInsightFixture();
+  deal.name='安徽老乡鸡餐饮有限公司';
+  deal.dataOrigin='research';
+  const inputs:GenerationInput[]=[];
+  const context={now,
+    prepareKnowledge:async()=>({route:'conflict' as const,knowledge:[unrelated],evidenceIds:[unrelated.id]}),
+    generateInsight:async(input:GenerationInput)=>{
+      inputs.push(input);
+      assert.match(buildModelMessages(input).map(message=>message.content).join('\n'),/行政处罚|经营异常/);
+      return {answer:JSON.stringify({checks:['penalties','registry','该企业从未违规','该企业已经被处罚'],verdict:'已被罚款'}),mode:'live' as const};
+    },
+  };
+  const first=await executeAction(state,'sales','chat',{query:'他有没有违规记录',dealId:deal.id},context);
+  const followup=await executeAction(first.state,'sales','chat',{query:'那去哪里查？',dealId:deal.id,conversationRunIds:[first.run!.id]},context);
+  const continued=await executeAction(followup.state,'sales','chat',{query:'再具体一点',conversationRunIds:[first.run!.id,followup.run!.id]},context);
+  const another=await executeAction(state,'sales','chat',{query:'这家公司的合规记录里有没有经营异常？',dealId:deal.id},context);
+  for(const {run} of [first,followup,continued,another]){
+    assert.equal(run?.mode,'live');
+    assert.deepEqual(run?.agentIds,['insight']);
+    assert.match(run!.answer,/现有资料无法确认/);
+    assert.match(run!.answer,/国家企业信用信息公示系统|信用中国/);
+    assert.doesNotMatch(run!.answer,/从未违规|已经被处罚|已被罚款|资料存在冲突/);
+    assert.deepEqual(run?.citations,[]);
+  }
+  assert.deepEqual(inputs.map(input=>input.query),['他有没有违规记录','那去哪里查？','再具体一点','这家公司的合规记录里有没有经营异常？']);
+  assert.ok(inputs.every(input=>input.deal?.id===deal.id&&input.knowledge.length===0));
+  assert.equal(inputs[2].history?.[0].query,'他有没有违规记录');
+
+  for(const query of ['这份合同有没有违规？','行政处罚的申诉流程是什么？']){
+    const other=await executeAction(first.state,'sales','chat',{query,dealId:deal.id,conversationRunIds:[first.run!.id]},context);
+    assert.match(other.run!.answer,/资料存在冲突/);
+  }
+  assert.equal(inputs.length,4);
+});
+
 test('scoped customer insight can plan discovery without evidence and rejects malformed model output',async()=>{
   const {state,deal,query}=scopedInsightFixture();
   Object.assign(deal,{companyProfile:undefined,customerProfile:undefined,summary:'',needs:[],notes:[],nextAction:''});

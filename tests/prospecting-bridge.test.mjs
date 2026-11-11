@@ -682,6 +682,49 @@ browserTest('a changed conversation after lease renewal rejects an approved repl
   assert.equal(dispatches, 0); assert.equal(clicks(), 0);
 });
 
+for (const change of ['oldest hidden before writing', 'oldest hidden after writing', 'middle removed', 'latest edited', 'new inbound']) {
+  browserTest(`reply only tolerates an unchanged visible tail when the transcript changes: ${change}`, async t => {
+    const priorRows = Array.from({ length: 3 }, (_, i) => `<div data-index="${i + 1}"><div class="messageMessageBoxmessageBox" data-message-direction="outgoing" data-message-id="old-${i}"><span data-e2e="message-text">较早的消息 ${i}</span></div></div>`).join('');
+    const { adapter, clicks } = await fixture(t, { stackChat: true, history: incomingHistory + priorRows, chatReplyEcho: 'outgoing' });
+    const input = conversationInput();
+    const observed = await adapter.readConversation(input);
+    const alterView = async () => {
+      const page = await adapter.page();
+      await page.locator('.messageMessageListlist').evaluate((list, change) => {
+        if (change.startsWith('oldest')) list.querySelector('[data-index="3"]').remove();
+        else if (change === 'middle removed') {
+          list.querySelector('[data-index="2"]').remove();
+          list.querySelector('[data-index="3"]').dataset.index = '2';
+        } else if (change === 'latest edited') {
+          list.querySelector('[data-index="0"] [data-e2e="message-text"]').textContent = '不用了，不要再联系';
+        } else {
+          const slot = list.querySelector('[data-index="0"]').cloneNode(true);
+          slot.querySelector('[data-message-id]').dataset.messageId = 'new-inbound';
+          for (const previous of list.querySelectorAll('[data-index]')) previous.dataset.index = Number(previous.dataset.index) + 1;
+          list.prepend(slot);
+        }
+      }, change);
+    };
+    if (change === 'oldest hidden before writing') await alterView();
+    let baseline;
+    const action = () => adapter.reply({ ...input, message: '这间商铺约 88 平方米。', replyId: 'reply-view', expectedSnapshotId: observed.snapshotId, actor: 'agent' }, {
+      renewBeforeDispatch: change === 'oldest hidden before writing' ? undefined : alterView,
+      beforeDispatch: async proof => { assert.equal(clicks(), 0); baseline = proof.conversation; },
+    });
+    if (change.startsWith('oldest')) {
+      assert.equal((await action()).outcome, 'submitted');
+      assert.equal(clicks(), 1);
+      assert.equal(baseline.snapshotId, observed.snapshotId);
+      assert.ok(baseline.observedSnapshotId && baseline.observedSnapshotId !== observed.snapshotId);
+      assert.equal(baseline.priorMessageKeys.length, 3);
+    } else {
+      await assert.rejects(action(), { code: 'CONVERSATION_CHANGED' });
+      assert.equal(clicks(), 0);
+      assert.equal(baseline, undefined);
+    }
+  });
+}
+
 browserTest('ambiguous direction blocks the agent while an explicit human reply still requires the same snapshot', async t => {
   const history = incomingHistory.replace('data-message-direction="incoming"', '');
   for (const actor of ['agent', 'human']) {

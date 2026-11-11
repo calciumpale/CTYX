@@ -822,6 +822,54 @@ for(const scenario of ['exact latest','no resume','other failure','later inbound
  }else assert.equal(await f.store.claim(x.device.deviceId,false,true),null);
 });
 
+for(const scenario of ['same question','after composer failure','newer inbound','newer outbound','manual takeover','expired','uncovered read'] as const)test(`one quiet recovery after a pre-dispatch snapshot change: ${scenario}`,async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);
+ await f.chat.settings('owner-a','member-a',x.campaign.id,true);
+ await readConversation(f,x,[],'snapshot-recovery-baseline');f.advance(61000);
+ const inbound={id:'snapshot-recovery-inbound',direction:'inbound' as const,text:'现在80-100平的空置商铺还有吗'};
+ await readConversation(f,x,[inbound],'snapshot-recovery-original',true);
+ const decisions:string[]=[];
+ const decide=async(_owner:string,_origin:string,request:Parameters<typeof chooseProspectChatAction>[0])=>{
+  decisions.push(request.inbound.id);
+  return {action:'reply' as const,reply:'空置记录中有一间88㎡的商铺，现况待核实。',answeredMessageIds:[request.inbound.id]};
+ };
+ const snapshotError='会话内容已有变化，请同步最新消息并重新确认回复。';
+ const composerError='私信输入框的文案与批准的内容不一致，未发送。';
+ const conversation=async()=>(await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations[0];
+ const failReply=async(error:string)=>{
+  assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',decide),true);
+  const reply=(await f.store.claim(x.device.deviceId,false,true))!;assert.equal(reply.kind,'reply');
+  await f.store.complete(x.device.deviceId,reply.id,reply.leaseToken,{outcome:'failed',error});
+  return reply;
+ };
+ if(scenario==='after composer failure'){
+  await failReply(composerError);const c=await conversation();await f.chat.resume('owner-a','member-a',c.id,c.version);
+  f.advance(61000);await readConversation(f,x,[inbound],'after-composer-resume',true);
+ }
+ const failed=await failReply(snapshotError);const before=decisions.length;let c=await conversation();assert.equal(c.mode,'human');
+ if(scenario==='manual takeover')await f.chat.takeover('owner-a','member-a',c.id,c.version);
+ f.advance(scenario==='expired'?16*60000:91000);await f.store.seen(x.device.deviceId,{authenticated:true,accountId:'MS4wSender001'});
+ await f.chat.schedule(x.device.deviceId,{quiet:true});const read=await f.store.claim(x.device.deviceId,false,true);
+ if(scenario==='manual takeover'||scenario==='expired'){assert.equal(read,null);return;}
+ assert.equal(read?.kind,'readConversation');
+ const newer=scenario==='newer inbound'?{id:'snapshot-newer-inbound',direction:'inbound' as const,text:'还有其他区域吗'}:
+  scenario==='newer outbound'?{id:'snapshot-newer-outbound',direction:'outbound' as const,text:'销售已回复'}:undefined;
+ await f.store.complete(x.device.deviceId,read!.id,read!.leaseToken,{senderAccountId:'MS4wSender001',recipientId:'MS4wRecipient001',observedAt:f.now(),snapshotId:'snapshot-recovery-verified',reliable:true,covered:scenario!=='uncovered read',messages:newer?[inbound,newer]:[inbound]});
+ const mayRecover=scenario==='same question'||scenario==='after composer failure';
+ c=await conversation();assert.equal(c.mode,mayRecover?'agent':'human');
+ assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',decide),mayRecover);
+ assert.equal(decisions.length,before+(mayRecover?1:0));
+ if(mayRecover){
+  assert.equal(decisions.at(-1),decisions[0]);
+  const retry=(await f.store.claim(x.device.deviceId,false,true))!;assert.equal(retry.kind,'reply');
+  assert.equal(retry.input.expectedSnapshotId,'snapshot-recovery-verified');assert.notEqual(retry.input.replyId,failed.input.replyId);
+  await f.store.complete(x.device.deviceId,retry.id,retry.leaseToken,{outcome:'failed',error:snapshotError});
+  f.advance(91000);await f.store.seen(x.device.deviceId,{authenticated:true,accountId:'MS4wSender001'});
+  await f.chat.schedule(x.device.deviceId,{quiet:true});assert.equal(await f.store.claim(x.device.deviceId,false,true),null);
+  assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',decide),false);
+ }
+});
+
 for(const scenario of ['exact latest','older visible','later inbound','later outbound'] as const)test(`explicit resume handles an audited untimed handoff with ${scenario}`,async t=>{
  const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);
  await f.chat.settings('owner-a','member-a',x.campaign.id,true);

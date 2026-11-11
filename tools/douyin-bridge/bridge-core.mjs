@@ -282,8 +282,8 @@ export class Journal {
     if (this.data.lastSendAt && Date.now() - this.data.lastSendAt < 60000) fail('本机发送间隔不足 60 秒，请稍后重新审核排队。', 'SEND_COOLDOWN');
     if (job.kind === 'reply' && proof?.conversation !== undefined) {
       const baseline = proof.conversation;
-      if (!object(baseline) || baseline.snapshotId !== job.input.expectedSnapshotId || typeof baseline.covered !== 'boolean' || !Array.isArray(baseline.priorMessageKeys) || baseline.priorMessageKeys.length > 500 || baseline.priorMessageKeys.some(key => !id(key)) || new Set(baseline.priorMessageKeys).size !== baseline.priorMessageKeys.length || baseline.latestMessageKey !== baseline.priorMessageKeys.at(-1)) fail('回复提交前的会话证据不完整，未发送。', 'INVALID_CONVERSATION_PROOF');
-      entry.conversationBaseline = { snapshotId: baseline.snapshotId, covered: baseline.covered, priorMessageKeys: [...baseline.priorMessageKeys], ...(baseline.latestMessageKey ? { latestMessageKey: baseline.latestMessageKey } : {}) };
+      if (!object(baseline) || baseline.snapshotId !== job.input.expectedSnapshotId || baseline.observedSnapshotId !== undefined && (!id(baseline.observedSnapshotId) || !baseline.covered) || typeof baseline.covered !== 'boolean' || !Array.isArray(baseline.priorMessageKeys) || baseline.priorMessageKeys.length > 500 || baseline.priorMessageKeys.some(key => !id(key)) || new Set(baseline.priorMessageKeys).size !== baseline.priorMessageKeys.length || baseline.latestMessageKey !== baseline.priorMessageKeys.at(-1)) fail('回复提交前的会话证据不完整，未发送。', 'INVALID_CONVERSATION_PROOF');
+      entry.conversationBaseline = { snapshotId: baseline.snapshotId, ...(baseline.observedSnapshotId ? { observedSnapshotId: baseline.observedSnapshotId } : {}), covered: baseline.covered, priorMessageKeys: [...baseline.priorMessageKeys], ...(baseline.latestMessageKey ? { latestMessageKey: baseline.latestMessageKey } : {}) };
     }
     entry.dispatchedAt = new Date().toISOString(); entry.recipientKey = recipientKey; this.data.lastSendAt = Date.now(); await this.save();
   }

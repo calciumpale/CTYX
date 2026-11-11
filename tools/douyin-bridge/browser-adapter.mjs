@@ -30,6 +30,21 @@ const requireAccount = (account, expectedId, message) => {
 };
 const digest = text => createHash('sha256').update(text).digest('hex').slice(0, 28);
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+const replyViewKey = (input, snapshotId) => JSON.stringify([input.senderAccountId, input.recipientId, input.conversationId, snapshotId]);
+const replyView = observed => {
+  const latest = observed.messages.at(-1);
+  if (!observed.reliable || !observed.proof?.covered || latest?.direction !== 'inbound') return null;
+  if (latest.id.startsWith('dom:') && observed.messages.filter(message =>
+    message.direction === latest.direction && message.text === latest.text &&
+    message.postedAt === latest.postedAt && message.contentType === latest.contentType).length !== 1) return null;
+  return { latestId: latest.id, rows: observed.proof.rowDigests };
+};
+const sameReplyView = (approved, current) => {
+  if (!approved || !current || approved.latestId !== current.latestId || current.rows.length < 3) return false;
+  const missingOldest = approved.rows.length - current.rows.length;
+  return (missingOldest === 0 || missingOldest === 1) &&
+    current.rows.every((row, index) => row === approved.rows[index + missingOldest]);
+};
 
 export function deriveKeywords(input) {
   const raw = input.keywords?.filter(value => typeof value === 'string' && value.trim());
@@ -44,6 +59,7 @@ export function deriveKeywords(input) {
 export class DouyinBrowserAdapter {
   constructor(context, { timeoutMs = 10000, confirmationMs = 12000, scrollDelayMs = 800, initialPage } = {}) {
     this.context = context; this.timeoutMs = timeoutMs; this.confirmationMs = confirmationMs; this.scrollDelayMs = scrollDelayMs;
+    this.verifiedReplyViews = new Map();
     if (initialPage && context.pages().includes(initialPage) && !initialPage.isClosed() &&
         (initialPage.url() === 'about:blank' || /^https:\/\/(?:www\.)?douyin\.com\//.test(initialPage.url()))) {
       this.activePage = initialPage; initialPage.setDefaultTimeout(timeoutMs);
@@ -804,6 +820,13 @@ export class DouyinBrowserAdapter {
       requireAccount(account, input.senderAccountId, '暂未核实读取会话的账号，请等待页面恢复。');
       if (stackChat && binding && this.readTargetBinding === binding) binding.snapshotId = snapshotId;
       await this.verifyTarget(page, root, target, stackChat, { passive: true, snapshotId, reuseOnly: true });
+      const view = replyView(confirmed);
+      if (view) {
+        const key = replyViewKey(input, snapshotId);
+        this.verifiedReplyViews.delete(key);
+        this.verifiedReplyViews.set(key, { view, checkedAt: Date.now() });
+        if (this.verifiedReplyViews.size > 12) this.verifiedReplyViews.delete(this.verifiedReplyViews.keys().next().value);
+      }
       return confirmed;
     }
   }
@@ -812,10 +835,16 @@ export class DouyinBrowserAdapter {
   }
   async send(input, { signal, renewBeforeDispatch, beforeDispatch, conversationReply = false } = {}) {
     const { page, root, target, stackChat } = await this.openConversation(input, { signal });
+    const remembered = this.verifiedReplyViews.get(replyViewKey(input, input.expectedSnapshotId));
+    const age = remembered ? Date.now() - remembered.checkedAt : Infinity;
+    let approvedView = age >= 0 && age < TARGET_READ_PROOF_INTERVAL_MS ? remembered.view : null;
     const verifyConversation = async () => {
       if (!conversationReply) return;
       const observed = await readConversationTranscript(root, { ...input, limit: 100, signal, timeoutMs: this.timeoutMs, includeProof: true });
-      if (observed.snapshotId !== input.expectedSnapshotId) fail('会话内容已有变化，请同步最新消息并重新确认回复。', 'CONVERSATION_CHANGED');
+      if (observed.snapshotId === input.expectedSnapshotId) approvedView = replyView(observed);
+      else if (input.actor !== 'agent' || !sameReplyView(approvedView, replyView(observed))) {
+        fail('会话内容已有变化，请同步最新消息并重新确认回复。', 'CONVERSATION_CHANGED');
+      }
       if (input.actor === 'agent' && !observed.reliable) fail('当前会话的消息方向或正文未能完整核实，请由人工接管。', 'CONVERSATION_UNREADABLE');
       if (input.actor === 'agent' && observed.messages.at(-1)?.direction !== 'inbound') fail('当前没有可核实的新来信，智能体未继续发送。', 'NO_INBOUND_MESSAGE');
       return observed;
@@ -866,7 +895,11 @@ export class DouyinBrowserAdapter {
     }, input.message);
     if (!draftMatches) fail('私信输入框的文案与批准的内容不一致，未发送。', 'MESSAGE_CHANGED');
     await this.guard(page, signal);
-    await beforeDispatch(conversationReply ? { conversation: { snapshotId: dispatchSnapshot.snapshotId, covered: priorProof.covered, priorMessageKeys, latestMessageKey } } : undefined);
+    await beforeDispatch(conversationReply ? { conversation: {
+      snapshotId: input.expectedSnapshotId,
+      ...(dispatchSnapshot.snapshotId !== input.expectedSnapshotId ? { observedSnapshotId: dispatchSnapshot.snapshotId } : {}),
+      covered: priorProof.covered, priorMessageKeys, latestMessageKey,
+    } } : undefined);
     // A failed or interrupted click stays ambiguous after the durable checkpoint.
     let clicked = false;
     try {

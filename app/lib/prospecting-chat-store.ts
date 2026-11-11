@@ -417,6 +417,8 @@ export function createProspectingChatStore(db:D1Database,now:()=>number=Date.now
     latestRecorded.job_id&&latestRecorded.job_status==='failed'&&!read.messages.some(message=>!bySource.has(message.id))){
     // This legacy error comes from the final draft check before the bridge's
     // dispatch checkpoint. Re-evaluate the question only after explicit resume.
+    // Group the proof predicates to keep D1's expression depth below its limit
+    // when the proof is embedded in the guarded resume updates.
     const proofSql=`SELECT 1 FROM workbench_prospect_jobs failed
      JOIN workbench_prospect_messages draft ON draft.job_id=failed.id
      JOIN workbench_prospect_conversations thread ON thread.id=draft.conversation_id
@@ -425,23 +427,31 @@ export function createProspectingChatStore(db:D1Database,now:()=>number=Date.now
      JOIN workbench_prospect_memory_bindings binding ON binding.thread_id=thread.id
      JOIN workbench_prospect_memory_sources source ON source.session_id=binding.active_session_id
      JOIN workbench_prospect_messages question ON question.id=source.message_id AND question.conversation_id=thread.id
-     WHERE failed.id=? AND failed.kind='reply' AND failed.status='failed' AND failed.started_at IS NOT NULL AND failed.error=?
-      AND json_extract(failed.result_json,'$.outcome')='failed' AND json_extract(failed.result_json,'$.summary')='会话回复未提交'
-      AND COALESCE(json_extract(failed.result_json,'$.evidence'),'')=''
-      AND draft.id=? AND draft.direction='outbound' AND draft.actor='agent' AND draft.status='failed' AND draft.posted_at IS NULL AND draft.error=failed.error
-      AND draft.owner_id=thread.owner_id AND draft.member_id=thread.member_id AND draft.source_key='reply:'||draft.id
-      AND draft.id=json_extract(failed.input_json,'$.replyId') AND draft.text=json_extract(failed.input_json,'$.message') AND json_extract(failed.input_json,'$.actor')='agent'
-      AND thread.id=? AND thread.owner_id=failed.owner_id AND thread.member_id=failed.member_id AND thread.campaign_id=failed.campaign_id AND thread.lead_id=failed.lead_id
-      AND thread.sender_id=failed.sender_id AND thread.sender_id=json_extract(failed.input_json,'$.senderAccountId') AND thread.recipient_id=json_extract(failed.input_json,'$.recipientId')
-      AND thread.id=json_extract(failed.input_json,'$.conversationId') AND thread.profile_url=json_extract(failed.input_json,'$.profileUrl')
-      AND device.id=? AND device.owner_id=thread.owner_id AND device.member_id=thread.member_id AND device.account_id=thread.sender_id AND device.enabled=1 AND device.authenticated=1 AND device.last_seen_at>?
-      AND policy.owner_id=thread.owner_id AND policy.member_id=thread.member_id AND policy.status='active' AND json_extract(policy.data_json,'$.chatEnabled')=1
-      AND policy.updated_at<=failed.updated_at AND COALESCE(json_extract(policy.data_json,'$.chatPolicyVersion'),0)=COALESCE(json_extract(failed.input_json,'$.policyVersion'),0)
-      AND binding.active_session_id=json_extract(failed.input_json,'$.sessionId') AND binding.version=json_extract(failed.input_json,'$.bindingVersion')
-      AND question.id=? AND question.direction='inbound' AND question.eligible=1 AND question.processed=1
-      AND json_array_length(json_extract(failed.input_json,'$.answeredMessageIds'))=1 AND question.id=json_extract(failed.input_json,'$.answeredMessageIds[0]')
-      AND json_extract(thread.memory_json,'$.lastDecision.action')='reply' AND json_extract(thread.memory_json,'$.lastDecision.queued')=1
-      AND question.id=json_extract(thread.memory_json,'$.lastDecision.inboundId') AND json_extract(thread.memory_json,'$.lastDecision.snapshotId')=json_extract(failed.input_json,'$.expectedSnapshotId')
+     WHERE (
+       failed.id=? AND failed.kind='reply' AND failed.status='failed' AND failed.started_at IS NOT NULL AND failed.error=?
+       AND json_extract(failed.result_json,'$.outcome')='failed' AND json_extract(failed.result_json,'$.summary')='会话回复未提交'
+       AND COALESCE(json_extract(failed.result_json,'$.evidence'),'')=''
+     ) AND (
+       draft.id=? AND draft.direction='outbound' AND draft.actor='agent' AND draft.status='failed' AND draft.posted_at IS NULL AND draft.error=failed.error
+       AND draft.owner_id=thread.owner_id AND draft.member_id=thread.member_id AND draft.source_key='reply:'||draft.id
+       AND draft.id=json_extract(failed.input_json,'$.replyId') AND draft.text=json_extract(failed.input_json,'$.message') AND json_extract(failed.input_json,'$.actor')='agent'
+     ) AND (
+       thread.id=? AND thread.owner_id=failed.owner_id AND thread.member_id=failed.member_id AND thread.campaign_id=failed.campaign_id AND thread.lead_id=failed.lead_id
+       AND thread.sender_id=failed.sender_id AND thread.sender_id=json_extract(failed.input_json,'$.senderAccountId') AND thread.recipient_id=json_extract(failed.input_json,'$.recipientId')
+       AND thread.id=json_extract(failed.input_json,'$.conversationId') AND thread.profile_url=json_extract(failed.input_json,'$.profileUrl')
+     ) AND (
+       device.id=? AND device.owner_id=thread.owner_id AND device.member_id=thread.member_id AND device.account_id=thread.sender_id
+       AND device.enabled=1 AND device.authenticated=1 AND device.last_seen_at>?
+     ) AND (
+       policy.owner_id=thread.owner_id AND policy.member_id=thread.member_id AND policy.status='active' AND json_extract(policy.data_json,'$.chatEnabled')=1
+       AND policy.updated_at<=failed.updated_at AND COALESCE(json_extract(policy.data_json,'$.chatPolicyVersion'),0)=COALESCE(json_extract(failed.input_json,'$.policyVersion'),0)
+       AND binding.active_session_id=json_extract(failed.input_json,'$.sessionId') AND binding.version=json_extract(failed.input_json,'$.bindingVersion')
+     ) AND (
+       question.id=? AND question.direction='inbound' AND question.eligible=1 AND question.processed=1
+       AND json_array_length(json_extract(failed.input_json,'$.answeredMessageIds'))=1 AND question.id=json_extract(failed.input_json,'$.answeredMessageIds[0]')
+       AND json_extract(thread.memory_json,'$.lastDecision.action')='reply' AND json_extract(thread.memory_json,'$.lastDecision.queued')=1
+       AND question.id=json_extract(thread.memory_json,'$.lastDecision.inboundId') AND json_extract(thread.memory_json,'$.lastDecision.snapshotId')=json_extract(failed.input_json,'$.expectedSnapshotId')
+     )
       AND NOT EXISTS (SELECT 1 FROM workbench_prospect_messages later WHERE later.conversation_id=thread.id AND later.rowid>question.rowid AND later.id<>draft.id)
       AND NOT EXISTS (SELECT 1 FROM workbench_prospect_contact_optouts stopped WHERE stopped.owner_id=thread.owner_id AND stopped.sender_id=thread.sender_id AND stopped.recipient_id=thread.recipient_id)`;
     const proofValues=[latestRecorded.job_id,composerChangedBeforeDispatch,latestRecorded.id,c.id,row.device_id,new Date(now()-90000).toISOString(),previous.id];

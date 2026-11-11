@@ -14,14 +14,14 @@ async function until(predicate) {
   while (!predicate()) { if (Date.now() >= deadline) assert.fail('condition did not become true'); await new Promise(resolve => setTimeout(resolve, 2)); }
 }
 function fakeController(overrides = {}) {
-  const calls = { opens: 0, browserCloses: 0, journalCloses: 0, runs: 0, navigations: 0, bindings: [], headless: [] };
+  const calls = { opens: 0, browserCloses: 0, journalCloses: 0, runs: 0, navigations: 0, bindings: [], launchOptions: [], windowStates: [] };
   const data = { entries: [] };
   const adapter = { async navigate() { calls.navigations++; }, async accountStatus() { return account; } };
-  const browser = { adapter, async close() { calls.browserCloses++; } };
+  const browser = { adapter, async close() { calls.browserCloses++; }, async setWindowState(state) { calls.windowStates.push(state); return true; } };
   const dependencies = {
     loadConfig: async () => config,
     openJournal: async () => ({ data, async bindConfig() {}, async bindAccount(id) { data.accountId = id; calls.bindings.push(id); }, async close() { calls.journalCloses++; } }),
-    openBrowser: async (_config, _profile, options) => { calls.opens++; calls.headless.push(options?.headless); return browser; },
+    openBrowser: async (_config, _profile, options) => { calls.opens++; calls.launchOptions.push(options); return browser; },
     runOnce: async () => { calls.runs++; return { worked: false, authenticated: true }; },
     sleep: async (_ms, { signal }) => { if (!signal.aborted) await new Promise(resolve => signal.addEventListener('abort', resolve, { once: true })); },
     ...overrides,
@@ -63,13 +63,15 @@ test('first connection requires one explicit account confirmation before polling
   const pending = await controller.connect();
   assert.equal(pending.phase, 'confirmation_required'); assert.equal(pending.accountId, account.accountId); assert.equal(pending.authenticated, false);
   assert.equal(calls.runs, 0); assert.equal(data.accountId, undefined); assert.deepEqual(calls.bindings, []);
-  assert.deepEqual(calls.headless, [false]);
+  assert.deepEqual(calls.launchOptions, [{ headless: false, startMinimized: false }]);
   await controller.confirmConnection(); await until(() => calls.runs === 1);
   assert.equal(controller.status().running, true); assert.equal(data.accountId, account.accountId); assert.deepEqual(calls.bindings, [account.accountId]);
-  assert.deepEqual(calls.headless, [false, true]);
+  assert.equal(calls.opens, 1);
+  assert.equal(calls.browserCloses, 0);
+  assert.deepEqual(calls.windowStates, ['minimized']);
 });
 
-test('saved login stays in the background until the operator requests a login window', async t => {
+test('saved login starts minimized and manual verification preserves the challenged page and context', async t => {
   const { controller, calls, data, adapter } = fakeController();
   data.accountId = account.accountId;
   t.after(() => controller.stop());
@@ -77,30 +79,75 @@ test('saved login stays in the background until the operator requests a login wi
   const paused = await controller.connect();
   assert.equal(paused.errorCode, 'HUMAN_ACTION_REQUIRED');
   assert.equal(calls.runs, 0);
-  assert.deepEqual(calls.headless, [true]);
+  assert.deepEqual(calls.launchOptions, [{ headless: false, startMinimized: true }]);
   assert.match(paused.message, /打开登录或验证窗口/);
+  adapter.activePage = { url: () => 'https://www.douyin.com/', isClosed: () => false };
   await controller.startLogin();
-  assert.deepEqual(calls.headless, [true, false]);
-  assert.equal(calls.navigations, 1);
+  assert.equal(calls.opens, 1);
+  assert.equal(calls.navigations, 0);
+  assert.deepEqual(calls.windowStates, ['normal']);
   assert.equal(calls.runs, 0);
   adapter.accountStatus = async () => account;
   await controller.connect();
   await until(() => calls.runs === 1);
-  assert.deepEqual(calls.headless, [true, false, true]);
+  assert.equal(calls.opens, 1);
+  assert.equal(calls.browserCloses, 0);
+  assert.deepEqual(calls.windowStates, ['normal', 'minimized']);
 });
 
-test('interactive login cannot start polling until the same account is verified in the background browser', async t => {
-  const { controller, calls, data, adapter } = fakeController();
+test('sync starts after the verified dedicated window is minimized', async t => {
+  const { controller, calls, data, browser } = fakeController();
+  const minimizing = deferred(), allowMinimize = deferred();
   t.after(() => controller.stop());
-  adapter.accountStatus = async () => calls.headless.at(-1)
-    ? { ...account, accountId: 'different-account' }
-    : account;
-  await controller.connect();
-  const paused = await controller.confirmConnection();
-  assert.equal(paused.phase, 'account_mismatch');
-  assert.deepEqual(calls.headless, [false, true]);
+  data.accountId = account.accountId;
+  browser.setWindowState = async state => {
+    assert.equal(state, 'minimized');
+    minimizing.resolve();
+    await allowMinimize.promise;
+    return true;
+  };
+  const connecting = controller.connect();
+  await Promise.race([minimizing.promise, connecting]);
+  try {
+    assert.equal(calls.runs, 0);
+    assert.equal(controller.status().running, false);
+  } finally {
+    allowMinimize.resolve();
+  }
+  await connecting;
+  await until(() => calls.runs === 1);
+  assert.equal(calls.opens, 1);
+  assert.equal(calls.browserCloses, 0);
+});
+
+test('a failure to minimize pauses sync and retains the dedicated browser for a manual retry', async t => {
+  const { controller, calls, data, browser } = fakeController();
+  data.accountId = account.accountId;
+  t.after(() => controller.stop());
+  browser.setWindowState = async () => { throw Error('fixture window error'); };
+  const paused = await controller.connect();
+  assert.equal(paused.errorCode, 'WINDOW_CONTROL');
+  assert.equal(paused.running, false);
+  assert.equal(paused.browserOpen, true);
   assert.equal(calls.runs, 0);
-  assert.equal(data.accountId, undefined);
+  assert.equal(calls.browserCloses, 0);
+
+  browser.setWindowState = async () => true;
+  await controller.connect();
+  await until(() => calls.runs === 1);
+  assert.equal(calls.opens, 1);
+});
+
+test('desktop connection and manual login cannot attach to a browser outside the dedicated profile', async t => {
+  const { controller, calls } = fakeController({ loadConfig: async () => ({ ...config, cdpUrl: 'http://127.0.0.1:9222' }) });
+  t.after(() => controller.stop());
+  for (const action of ['connect', 'startLogin']) {
+    const status = await controller[action]();
+    assert.equal(status.errorCode, 'BACKGROUND_CDP_UNSUPPORTED');
+    assert.equal(status.browserOpen, false);
+  }
+  assert.equal(calls.opens, 0);
+  assert.equal(calls.runs, 0);
 });
 
 test('confirmation cannot silently bind a different account from the one displayed', async t => {
@@ -304,8 +351,8 @@ for (const code of ['UNAUTHENTICATED', 'ACCOUNT_CHANGED']) test(`${code} during 
   assert.equal(paused.errorCode, code); assert.equal(paused.authenticated, false); assert.equal(paused.running, false); assert.equal(paused.browserOpen, true);
   assert.equal(calls.browserCloses, 0); assert.equal(calls.journalCloses, 0); assert.equal(calls.runs, 0);
   adapter.accountStatus = async () => account; await controller.connect(); await until(() => calls.runs === 1);
-  assert.deepEqual(calls.headless, [false, true]); assert.equal(data.accountId, account.accountId); assert.deepEqual(calls.bindings, []);
-  await controller.stop(); assert.equal(calls.browserCloses, 2); assert.equal(calls.journalCloses, 1);
+  assert.equal(calls.opens, 1); assert.equal(data.accountId, account.accountId); assert.deepEqual(calls.bindings, []);
+  await controller.stop(); assert.equal(calls.browserCloses, 1); assert.equal(calls.journalCloses, 1);
 });
 
 for (const challenge of ['account', 'discover', 'send']) test(`captcha during ${challenge} pauses real execution, preserves the page and never replays work`, async t => {
@@ -325,7 +372,7 @@ for (const challenge of ['account', 'discover', 'send']) test(`captcha during ${
   const response = value => new Response(JSON.stringify(value), { headers: { 'content-type': 'application/json' } });
   controller = createDesktopController({ configPath: join(directory, 'config.json'), dependencies: {
     loadConfig: async () => config, openJournal: async path => { journalPath = path; return Journal.open(path); },
-    openBrowser: async () => { opens++; return { adapter, close: async () => { closes++; } }; },
+    openBrowser: async () => { opens++; return { adapter, setWindowState: async () => true, close: async () => { closes++; } }; },
     sleep: async (_ms, { signal }) => { if (!signal.aborted) await new Promise(resolve => signal.addEventListener('abort', resolve, { once: true })); },
     runOnce: (value, options) => runOnce(value, { ...options, fetchImpl: async (url, init) => {
       if (url.endsWith('/poll')) { polls++; return response({ job }); }
@@ -456,7 +503,7 @@ test('stop after dispatch keeps real journal unknown and restart only reports th
   } };
   const controller = createDesktopController({ configPath: join(directory, 'config.json'), dependencies: {
     loadConfig: async () => config, openJournal: async path => { journalPath = path; return Journal.open(path); },
-    openBrowser: async () => ({ adapter, close: async () => {} }),
+    openBrowser: async () => ({ adapter, setWindowState: async () => true, close: async () => {} }),
     runOnce: (value, options) => runOnce(value, { ...options, fetchImpl: async (url, init) => {
       if (url.endsWith('/poll')) { if (claimed) return response({ job: null }); claimed = true; return response({ job }); }
       if (url.endsWith('/complete')) { reports++; assert.equal(JSON.parse(init.body).result.outcome, 'unknown'); }

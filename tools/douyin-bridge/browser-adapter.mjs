@@ -899,10 +899,61 @@ export class DouyinBrowserAdapter {
   }
 }
 
-export async function openBrowser(config, profileDir, { headless = false } = {}) {
+/** Apply window state only to pages in the persistent context we launched. */
+export function manageOwnedBrowserWindows(context) {
+  let minimizeNewWindows = false;
+  let queued = Promise.resolve();
+  function enqueue(action) {
+    const result = queued.then(action);
+    queued = result.catch(() => {});
+    return result;
+  }
+  async function apply(pages, state) {
+    const windows = new Set();
+    for (const page of pages) {
+      if (page.isClosed()) continue;
+      let session;
+      try {
+        session = await context.newCDPSession(page);
+        const { windowId, bounds } = await session.send('Browser.getWindowForTarget');
+        if (windows.has(windowId)) continue;
+        windows.add(windowId);
+        const needsChange = current => state === 'minimized' ? current !== 'minimized' : current === 'minimized';
+        if (!needsChange(bounds.windowState)) continue;
+        await session.send('Browser.setWindowBounds', { windowId, bounds: { windowState: state } });
+        // macOS can report the old state until the minimize animation completes.
+        const deadline = Date.now() + 1200;
+        while (true) {
+          const updated = await session.send('Browser.getWindowBounds', { windowId });
+          if (!needsChange(updated.bounds.windowState)) break;
+          if (Date.now() >= deadline) fail('专用窗口状态未切换。', 'WINDOW_CONTROL');
+          await sleep(50);
+        }
+      } catch (error) {
+        if (!page.isClosed()) throw error;
+      } finally {
+        await session?.detach().catch(() => {});
+      }
+    }
+    return windows.size > 0;
+  }
+  context.on('page', page => {
+    if (minimizeNewWindows) {
+      void enqueue(() => minimizeNewWindows && apply([page], 'minimized')).catch(() => {});
+    }
+  });
+  return state => {
+    if (state !== 'minimized' && state !== 'normal') fail('专用窗口状态无效。', 'WINDOW_CONTROL');
+    minimizeNewWindows = state === 'minimized';
+    return enqueue(() => apply(context.pages(), state));
+  };
+}
+
+export async function openBrowser(config, profileDir, { headless = false, startMinimized } = {}) {
+  const managedWindow = startMinimized !== undefined;
   let chromium; try { ({ chromium } = await import('playwright')); } catch { fail('请先在 tools/douyin-bridge 安装本地 Playwright 依赖。', 'BROWSER_MISSING'); }
   if (config.cdpUrl) {
-    if (headless) fail('后台同步需要助手的专用浏览器，不能复用已打开的浏览器。', 'BACKGROUND_CDP_UNSUPPORTED');
+    if (headless || managedWindow) fail('后台同步需要助手的专用浏览器，不能复用已打开的浏览器。', 'BACKGROUND_CDP_UNSUPPORTED');
     const browser = await chromium.connectOverCDP(config.cdpUrl);
     const context = browser.contexts()[0]; if (!context) { await browser.close(); fail('CDP 没有可用浏览器上下文。', 'BROWSER_MISSING'); }
     const adapter = new DouyinBrowserAdapter(context);
@@ -913,12 +964,23 @@ export async function openBrowser(config, profileDir, { headless = false } = {})
     } };
   }
   await mkdir(profileDir, { recursive: true, mode: 0o700 });
-  // The Mac installer bundles full Chromium. The Chromium channel uses this
-  // same binary in both modes, including when reopening the login profile.
-  let context; try { context = await chromium.launchPersistentContext(profileDir, { channel: 'chromium', headless, viewport: { width: 1320, height: 900 } }); }
+  // Leave managed windows at their native size so Playwright does not try to
+  // resize a minimized window when initializing a new tab.
+  let context; try { context = await chromium.launchPersistentContext(profileDir, {
+    channel: 'chromium', headless, viewport: managedWindow ? null : { width: 1320, height: 900 },
+  }); }
   catch { fail('无法启动专用浏览器，请安装 Chromium 并确认没有其他执行器占用。', 'BROWSER_MISSING'); }
   // This context belongs only to the pairing's dedicated profile. Never adopt
   // an arbitrary page from a user's CDP browser (the explicit-CDP path above).
   const initialPage = context.pages().find(page => !page.isClosed() && (page.url() === 'about:blank' || /^https:\/\/(?:www\.)?douyin\.com\//.test(page.url())));
-  return { adapter: new DouyinBrowserAdapter(context, { initialPage }), close: () => context.close() };
+  const setWindowState = managedWindow ? manageOwnedBrowserWindows(context) : undefined;
+  if (startMinimized) {
+    try {
+      if (!await setWindowState('minimized')) fail('没有可最小化的专用窗口。', 'WINDOW_CONTROL');
+    } catch {
+      await context.close().catch(() => {});
+      fail('专用窗口未能最小化，请打开登录或验证窗口后重试。', 'WINDOW_CONTROL');
+    }
+  }
+  return { adapter: new DouyinBrowserAdapter(context, { initialPage }), close: () => context.close(), ...(setWindowState ? { setWindowState } : {}) };
 }

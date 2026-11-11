@@ -4,9 +4,10 @@ import { mkdtemp, rm, readFile, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import { promisify } from 'node:util';
 import { BridgeError, validateConfig, saveConfig, loadConfig, normalizeMediaCrawler, validateJob, runOnce, Journal } from '../tools/douyin-bridge/bridge-core.mjs';
-import { DouyinBrowserAdapter } from '../tools/douyin-bridge/browser-adapter.mjs';
+import { DouyinBrowserAdapter, manageOwnedBrowserWindows } from '../tools/douyin-bridge/browser-adapter.mjs';
 import * as bridgeCore from '../tools/douyin-bridge/bridge-core.mjs';
 
 const config = { origin: 'https://workbench.example', deviceId: 'device-1', deviceToken: 'private-device-token' };
@@ -15,6 +16,40 @@ async function temporary(t) { const dir = await mkdtemp(join(tmpdir(), 'prospect
 async function journalFor(t) { const journal = await Journal.open(join(await temporary(t), 'journal.json')); t.after(() => journal.close()); return journal; }
 const account = () => ({ authenticated: true, accountId: 'sender-1', accountName: '我' });
 const response = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } });
+
+test('desktop window controls minimize owned windows once and restore the existing verification page', async () => {
+  const context = new EventEmitter();
+  const page = windowId => ({ windowId, isClosed: () => false });
+  const pages = [page(1), page(1)];
+  const states = new Map([[1, 'normal'], [2, 'normal']]);
+  const transitions = [];
+  let notifyPopupMinimized;
+  const popupMinimized = new Promise(resolve => { notifyPopupMinimized = resolve; });
+  context.pages = () => pages;
+  context.newCDPSession = async target => ({
+    async send(method, params) {
+      if (method === 'Browser.getWindowForTarget') return { windowId: target.windowId, bounds: { windowState: states.get(target.windowId) } };
+      if (method === 'Browser.getWindowBounds') return { bounds: { windowState: states.get(params.windowId) } };
+      assert.equal(method, 'Browser.setWindowBounds');
+      const { windowId, bounds } = params;
+      states.set(windowId, bounds.windowState);
+      transitions.push([windowId, bounds.windowState]);
+      if (windowId === 2 && bounds.windowState === 'minimized') notifyPopupMinimized();
+    },
+    async detach() {},
+  });
+
+  const setWindowState = manageOwnedBrowserWindows(context);
+  await setWindowState('minimized');
+  assert.deepEqual(transitions, [[1, 'minimized']]);
+  const verificationPage = page(2);
+  pages.push(verificationPage);
+  context.emit('page', verificationPage);
+  await popupMinimized;
+  await setWindowState('normal');
+  assert.equal(context.pages()[2], verificationPage);
+  assert.deepEqual(transitions, [[1, 'minimized'], [2, 'minimized'], [1, 'normal'], [2, 'normal']]);
+});
 
 test('doctor inspects local pairing without launching a browser or claiming a live login', async t => {
   const directory = await temporary(t), path = join(directory, 'config.json');

@@ -45,5 +45,20 @@ export function createWorkbenchKnowledgeAgent(db:D1Database,ownerId:string,origi
  };
  const prepareProperty=(request:KnowledgeAgentRequest)=>preparePropertyKnowledge(db,ownerId,request,{...(scoped?{departmentId:options.departmentId}:{}),...(!scoped&&libraryIds!==undefined?{libraryIds}:{}),generate:options.generate});
  const tools={retrieve:async(query:string)=>prefetched??retrieve(query),generate:options.generate};
- return {preflight:async(query:string)=>{const snapshot=await store.snapshot();prefetched=await retrieve(query);return {department:options.departmentId??null,libraryIds:snapshot.libraries.map(l=>l.id).slice(0,100),sourceIds:prefetched.map(e=>e.id).slice(0,20),status:'ok' as const};},prepare:async(request:KnowledgeAgentRequest)=>(await prepareProperty(request))??prepareKnowledgeContext(request,tools),answer:async(request:KnowledgeAgentRequest)=>{const max=Math.max(1,Math.min(12000,request.maxAnswerChars??2000));const prepared=await prepareProperty({...request,maxAnswerChars:max});if(!prepared)return runKnowledgeAgent(request,tools);return max>=350&&prepared.answer&&prepared.answer.length<=max?{...prepared,action:'answer' as const}:{...prepared,answer:undefined,evidenceIds:[],action:'handoff' as const};}};
+ return {
+  preflight:async(query:string)=>{const snapshot=await store.snapshot();prefetched=await retrieve(query);return {department:options.departmentId??null,libraryIds:snapshot.libraries.map(l=>l.id).slice(0,100),sourceIds:prefetched.map(e=>e.id).slice(0,20),status:'ok' as const};},
+  prepare:async(request:KnowledgeAgentRequest)=>(await prepareProperty(request))??prepareKnowledgeContext(request,tools),
+  async answer(request: KnowledgeAgentRequest) {
+   const customerReply = request.audience === 'customer';
+   const max = Math.max(1, Math.min(customerReply ? 60 : 12000, request.maxAnswerChars ?? (customerReply ? 60 : 2000)));
+   const prepared = await prepareProperty({...request,maxAnswerChars:max});
+   if (!prepared) return runKnowledgeAgent({...request,maxAnswerChars:max},tools);
+   const hasAnswer = prepared.answer && prepared.answer.length <= max;
+   const hasRecordEvidence = prepared.route === 'retrieved' && prepared.evidenceIds.length > 0;
+   if (hasAnswer && (customerReply ? hasRecordEvidence : max >= 350)) {
+    return {...prepared,action:'answer' as const};
+   }
+   return {...prepared,answer:undefined,evidenceIds:[],action:'handoff' as const};
+  },
+ };
 }

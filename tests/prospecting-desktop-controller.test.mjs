@@ -14,14 +14,14 @@ async function until(predicate) {
   while (!predicate()) { if (Date.now() >= deadline) assert.fail('condition did not become true'); await new Promise(resolve => setTimeout(resolve, 2)); }
 }
 function fakeController(overrides = {}) {
-  const calls = { opens: 0, browserCloses: 0, journalCloses: 0, runs: 0, navigations: 0, bindings: [] };
+  const calls = { opens: 0, browserCloses: 0, journalCloses: 0, runs: 0, navigations: 0, bindings: [], headless: [] };
   const data = { entries: [] };
   const adapter = { async navigate() { calls.navigations++; }, async accountStatus() { return account; } };
   const browser = { adapter, async close() { calls.browserCloses++; } };
   const dependencies = {
     loadConfig: async () => config,
     openJournal: async () => ({ data, async bindConfig() {}, async bindAccount(id) { data.accountId = id; calls.bindings.push(id); }, async close() { calls.journalCloses++; } }),
-    openBrowser: async () => { calls.opens++; return browser; },
+    openBrowser: async (_config, _profile, options) => { calls.opens++; calls.headless.push(options?.headless); return browser; },
     runOnce: async () => { calls.runs++; return { worked: false, authenticated: true }; },
     sleep: async (_ms, { signal }) => { if (!signal.aborted) await new Promise(resolve => signal.addEventListener('abort', resolve, { once: true })); },
     ...overrides,
@@ -63,8 +63,44 @@ test('first connection requires one explicit account confirmation before polling
   const pending = await controller.connect();
   assert.equal(pending.phase, 'confirmation_required'); assert.equal(pending.accountId, account.accountId); assert.equal(pending.authenticated, false);
   assert.equal(calls.runs, 0); assert.equal(data.accountId, undefined); assert.deepEqual(calls.bindings, []);
+  assert.deepEqual(calls.headless, [false]);
   await controller.confirmConnection(); await until(() => calls.runs === 1);
   assert.equal(controller.status().running, true); assert.equal(data.accountId, account.accountId); assert.deepEqual(calls.bindings, [account.accountId]);
+  assert.deepEqual(calls.headless, [false, true]);
+});
+
+test('saved login stays in the background until the operator requests a login window', async t => {
+  const { controller, calls, data, adapter } = fakeController();
+  data.accountId = account.accountId;
+  t.after(() => controller.stop());
+  adapter.accountStatus = async () => { throw new BridgeError('fixture challenge', 'HUMAN_ACTION_REQUIRED'); };
+  const paused = await controller.connect();
+  assert.equal(paused.errorCode, 'HUMAN_ACTION_REQUIRED');
+  assert.equal(calls.runs, 0);
+  assert.deepEqual(calls.headless, [true]);
+  assert.match(paused.message, /打开登录或验证窗口/);
+  await controller.startLogin();
+  assert.deepEqual(calls.headless, [true, false]);
+  assert.equal(calls.navigations, 1);
+  assert.equal(calls.runs, 0);
+  adapter.accountStatus = async () => account;
+  await controller.connect();
+  await until(() => calls.runs === 1);
+  assert.deepEqual(calls.headless, [true, false, true]);
+});
+
+test('interactive login cannot start polling until the same account is verified in the background browser', async t => {
+  const { controller, calls, data, adapter } = fakeController();
+  t.after(() => controller.stop());
+  adapter.accountStatus = async () => calls.headless.at(-1)
+    ? { ...account, accountId: 'different-account' }
+    : account;
+  await controller.connect();
+  const paused = await controller.confirmConnection();
+  assert.equal(paused.phase, 'account_mismatch');
+  assert.deepEqual(calls.headless, [false, true]);
+  assert.equal(calls.runs, 0);
+  assert.equal(data.accountId, undefined);
 });
 
 test('confirmation cannot silently bind a different account from the one displayed', async t => {
@@ -268,8 +304,8 @@ for (const code of ['UNAUTHENTICATED', 'ACCOUNT_CHANGED']) test(`${code} during 
   assert.equal(paused.errorCode, code); assert.equal(paused.authenticated, false); assert.equal(paused.running, false); assert.equal(paused.browserOpen, true);
   assert.equal(calls.browserCloses, 0); assert.equal(calls.journalCloses, 0); assert.equal(calls.runs, 0);
   adapter.accountStatus = async () => account; await controller.connect(); await until(() => calls.runs === 1);
-  assert.equal(calls.opens, 1); assert.equal(data.accountId, account.accountId); assert.deepEqual(calls.bindings, []);
-  await controller.stop(); assert.equal(calls.browserCloses, 1); assert.equal(calls.journalCloses, 1);
+  assert.deepEqual(calls.headless, [false, true]); assert.equal(data.accountId, account.accountId); assert.deepEqual(calls.bindings, []);
+  await controller.stop(); assert.equal(calls.browserCloses, 2); assert.equal(calls.journalCloses, 1);
 });
 
 for (const challenge of ['account', 'discover', 'send']) test(`captcha during ${challenge} pauses real execution, preserves the page and never replays work`, async t => {

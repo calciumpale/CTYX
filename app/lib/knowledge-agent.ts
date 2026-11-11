@@ -7,6 +7,8 @@ export interface KnowledgeAgentRequest {
  history?:{role:'user'|'assistant';content:string}[];instructions?:string;maxAnswerChars?:number;retrievalQuery?:string;
  /** Resolved filters from the caller's persisted prior run; never an authorization scope. */
  propertyQuery?:PropertyQuery;
+ /** Customer-facing answers use only fields suitable for a private message. */
+ audience?:'customer';
 }
 export interface KnowledgeAgentResult {action:'answer'|'unavailable'|'handoff';answer?:string;evidenceIds:string[];knowledge:KnowledgeAgentEvidence[];route:'direct'|'retrieved'|'no_evidence'|'failed'|'conflict';recordLookup?:{kind:'property';total:number;complete:boolean;query?:PropertyQuery};}
 export interface KnowledgeAgentTools {retrieve:(query:string)=>Promise<KnowledgeAgentEvidence[]>;generate?:(messages:ModelMessage[],options?:{phase:'route'|'answer'})=>Promise<string>;}

@@ -3,6 +3,7 @@ import type {KnowledgeAgentRequest,KnowledgeAgentTools,KnowledgePreparedContext}
 import {readPropertySources,type PropertySourceOptions} from './property-source-store.ts';
 import {parsePropertySources} from './property-records.ts';
 import {formatPropertyAnswer,isPropertyQuestion,matchPropertyRows,parsePropertyQuery,type PropertyQuery} from './property-query.ts';
+import {formatCustomerPropertyReply} from './property-customer-reply.ts';
 
 export const isPropertyFollowup=(text:string)=>/^(?:第\s*\d+\s*页|下一页|上一?页|还有|再|那|改成|换成|只要|只看|面积|业态|位置|不要|排除|不考虑)/.test(text)||!isPropertyQuestion(text)&&/(?:看看还有|\d+(?:到|至|-)?\d*\s*(?:平|㎡)|在租|空置)/.test(text);
 const freshPropertyQuery=(text:string)=>isPropertyQuestion(text)&&(!isPropertyFollowup(text)||/重新|不考虑之前|所有|全部/.test(text));
@@ -59,6 +60,7 @@ function applyDelta(base:PropertyQuery,delta:PropertyQuery,text:string):Property
 }
 /** Bypasses free-form generation only for rows from the caller's authorized inventory sources. */
 export async function preparePropertyKnowledge(db:D1Database,ownerId:string,request:KnowledgeAgentRequest,options:PropertySourceOptions&{generate?:KnowledgeAgentTools['generate']}={}):Promise<KnowledgePreparedContext|undefined>{
+ if(request.audience==='customer'&&request.intent!=='business')return undefined;
  if(request.intent==='customer_memory'&&/我|之前|上次|刚才/.test(request.question)&&!/现在|当前|最新|实际|空置|在租/.test(request.question))return undefined;
  const question=redactKnowledgeText(request.question).slice(0,2000);
  const saved=savedPropertyQuery(request.propertyQuery);
@@ -74,8 +76,14 @@ export async function preparePropertyKnowledge(db:D1Database,ownerId:string,requ
   const first=await parsePropertyQuery(turns[0],rows,extract);
   let query=base?applyDelta(base,first,question):first;
   for(const turn of turns.slice(1))query=applyDelta(query,await parsePropertyQuery(turn,rows,extract),turn);
-  const matches=rows.length? matchPropertyRows(rows,query):[];
-  const formatted=formatPropertyAnswer(matches,query,{...loaded,sourceCount:loaded.sources.length},request.maxAnswerChars??12000);
+  const customerReply = request.audience === 'customer';
+  if (customerReply && query.status === 'any' && /有(?:没有|无|吗)|还有|想租|找|推荐/.test(question) && !/在租|已租|履约/.test(question)) {
+   query.status = 'vacant';
+  }
+  const matches=matchPropertyRows(rows,query);
+  const formatted=customerReply
+   ? formatCustomerPropertyReply(matches,query,loaded.complete,request.maxAnswerChars??60)
+   : formatPropertyAnswer(matches,query,{...loaded,sourceCount:loaded.sources.length},request.maxAnswerChars??12000);
   const knowledge=formatted.rows.map(row=>({id:`property-record:${row.id}`,title:`${row.source.fileName||row.source.title} · ${row.section} · ${row.rowLabel}`,content:row.raw}));
   return{route:matches.length?'retrieved':'no_evidence',answer:formatted.answer,knowledge,evidenceIds:knowledge.map(item=>item.id),recordLookup:{kind:'property',total:matches.length,complete:loaded.complete,query}};
  }catch{return{route:'failed',answer:'房源资料暂时未能完整读取，请稍后重试。本次没有据此判断是否存在符合条件的房源。',knowledge:[],evidenceIds:[],recordLookup:{kind:'property',total:0,complete:false}};}

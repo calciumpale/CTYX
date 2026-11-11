@@ -899,9 +899,10 @@ export class DouyinBrowserAdapter {
   }
 }
 
-export async function openBrowser(config, profileDir) {
+export async function openBrowser(config, profileDir, { headless = false } = {}) {
   let chromium; try { ({ chromium } = await import('playwright')); } catch { fail('请先在 tools/douyin-bridge 安装本地 Playwright 依赖。', 'BROWSER_MISSING'); }
   if (config.cdpUrl) {
+    if (headless) fail('后台同步需要助手的专用浏览器，不能复用已打开的浏览器。', 'BACKGROUND_CDP_UNSUPPORTED');
     const browser = await chromium.connectOverCDP(config.cdpUrl);
     const context = browser.contexts()[0]; if (!context) { await browser.close(); fail('CDP 没有可用浏览器上下文。', 'BROWSER_MISSING'); }
     const adapter = new DouyinBrowserAdapter(context);
@@ -912,7 +913,9 @@ export async function openBrowser(config, profileDir) {
     } };
   }
   await mkdir(profileDir, { recursive: true, mode: 0o700 });
-  let context; try { context = await chromium.launchPersistentContext(profileDir, { headless: false, viewport: { width: 1320, height: 900 } }); }
+  // The Mac installer bundles full Chromium. The Chromium channel uses this
+  // same binary in both modes, including when reopening the login profile.
+  let context; try { context = await chromium.launchPersistentContext(profileDir, { channel: 'chromium', headless, viewport: { width: 1320, height: 900 } }); }
   catch { fail('无法启动专用浏览器，请安装 Chromium 并确认没有其他执行器占用。', 'BROWSER_MISSING'); }
   // This context belongs only to the pairing's dedicated profile. Never adopt
   // an arbitrary page from a user's CDP browser (the explicit-CDP path above).

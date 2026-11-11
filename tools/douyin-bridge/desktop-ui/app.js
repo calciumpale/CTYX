@@ -23,13 +23,15 @@ function render(state){
  element('connect').textContent=state.running?(state.authenticated?'已连接':'重新核验账号'):state.busy?'正在连接…':'连接抖音';
  element('confirm-connect').hidden=!needsConfirmation;
  element('confirm-connect').disabled=disabled||!needsConfirmation||!state.serviceReady;
+ element('login').hidden=state.running||needsConfirmation;
+ element('login').disabled=disabled||state.running||!state.paired||!state.serviceReady;
  element('stop').disabled=stoppingAction||(!state.running&&!state.browserOpen&&!state.busy);
  element('stop').textContent=state.busy&&!state.running?'取消连接':'停止助手';
  element('heartbeat-status').textContent=`${heartbeatLabels[state.heartbeatState]||heartbeatLabels.idle} · ${formatTime(state.lastHeartbeatAt)}`;
  element('verified-at').textContent=formatTime(state.lastVerifiedAt);
 }
 async function action(path,body={}){const stopping=path==='/api/stop';if(stopping?stoppingAction:busy)return;activeActions++;busy=true;if(stopping)stoppingAction=true;showError('');if(lastState)render(lastState);try{render(await request(path,body));}catch(error){showError(error.message);}finally{activeActions--;busy=activeActions>0;if(stopping)stoppingAction=false;try{render(await request('/api/state'));}catch{/* Preserve the displayed error. */}}}
-for(const id of ['import-download','connect','confirm-connect','stop'])element(id).addEventListener('click',()=>action(`/api/${id}`));
+for(const id of ['import-download','connect','confirm-connect','login','stop'])element(id).addEventListener('click',()=>action(`/api/${id}`));
 element('config-file').addEventListener('change',async event=>{const file=event.target.files?.[0];if(!file)return;if(file.size>65536){showError('请选择工作台下载的配对 JSON 文件。');return;}try{const config=JSON.parse(await file.text());await action('/api/config',{config});}catch{showError('配置文件无法读取，请重新下载。');}finally{event.target.value='';}});
 async function initialize(){
  try{const launchToken=location.hash.slice(1);history.replaceState(null,'',location.pathname);const session=await request('/api/session',{token:launchToken});csrf=session.csrf;render(await request('/api/state'));setInterval(async()=>{try{render(await request('/api/state'));}catch(error){showError(error.message);}},1000);}

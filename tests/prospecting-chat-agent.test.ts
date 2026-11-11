@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {chooseProspectChatAction} from '../app/lib/prospecting-chat-agent.ts';
 import type {ProspectChatAgentInput} from '../app/lib/prospecting-chat-types.ts';
+import type {KnowledgeAgentRequest, KnowledgeAgentResult} from '../app/lib/knowledge-agent.ts';
 
 const input=(text:string):ProspectChatAgentInput=>({
   campaign:{name:'海盐任务',requirements:'海盐商铺租赁，提供铺位筛选与预约看铺服务',minIntentScore:70},
@@ -527,6 +528,63 @@ test('only grounded shared answers identify the current inbound as answered',asy
  const answered=await chooseProspectChatAction(request,{answerKnowledge:async()=>({action:'answer',answer:source.content,evidenceIds:[source.id],knowledge:[source],route:'retrieved'})});assert.deepEqual(answered.answeredMessageIds,['in-1']);
  const fallback=await chooseProspectChatAction(request,{});assert.equal(fallback.answeredMessageIds,undefined);
  const greeting=await chooseProspectChatAction(input('你好'),{answerKnowledge:async()=>({action:'answer',answer:'您好，很高兴为您解答。',evidenceIds:[],knowledge:[],route:'direct'})});assert.equal(greeting.answeredMessageIds,undefined);
+});
+
+const inventoryQuestion='现在80-100平的空置商铺还有吗';
+const inventoryRecord={id:'property-record:shop-a',title:'空置房源 · A12',content:'商铺编号：A12；租赁状态：空置；面积：88平方米'};
+const inventoryAnswer:KnowledgeAgentResult={
+  action:'answer',answer:'空置表匹配1条，A12，面积88㎡。现况待核实。',
+  evidenceIds:[inventoryRecord.id],knowledge:[inventoryRecord],route:'retrieved',
+  recordLookup:{kind:'property',total:1,complete:true},
+};
+
+test('the customer inventory inquiry uses the scoped compact record answer with its row citation',async()=>{
+  let requested:KnowledgeAgentRequest|undefined;
+  const result=await chooseProspectChatAction(input(inventoryQuestion),{
+    preflightKnowledge:async()=>({department:'zs',libraryIds:['inventory'],sourceIds:['knowledge-document:preflight'],status:'ok'}),
+    answerKnowledge:async request=>{requested=request;return inventoryAnswer;},
+  });
+  assert.equal(requested?.question,inventoryQuestion);
+  assert.equal(requested?.intent,'business');
+  assert.equal(requested?.audience,'customer');
+  assert.equal(requested?.maxAnswerChars,60);
+  assert.equal(result.action,'reply');
+  assert.equal(result.reply,inventoryAnswer.answer);
+  assert.equal(result.route,'retrieve');
+  assert.deepEqual(result.evidenceIds,[inventoryRecord.id]);
+  assert.deepEqual(result.knowledgeLookup,{department:'zs',libraryIds:['inventory'],sourceIds:[inventoryRecord.id],status:'ok'});
+  assert.deepEqual(result.answeredMessageIds,['in-1']);
+});
+
+test('customer inventory lookups with missing, unverified, or unsafe record answers transfer to sales',async()=>{
+  const failedAnswers:KnowledgeAgentResult[]=[
+    {...inventoryAnswer,action:'handoff',route:'no_evidence',answer:undefined,knowledge:[],evidenceIds:[],recordLookup:{kind:'property',total:0,complete:true}},
+    {...inventoryAnswer,action:'handoff',route:'failed',answer:undefined,knowledge:[],evidenceIds:[]},
+    {...inventoryAnswer,evidenceIds:[]},
+    {...inventoryAnswer,evidenceIds:['property-record:unretrieved']},
+    {...inventoryAnswer,route:'direct'},
+    {...inventoryAnswer,answer:'A12，面积88㎡。联系电话13812345678。'},
+  ];
+  for(const answer of failedAnswers){
+    const result=await chooseProspectChatAction(input(inventoryQuestion),{answerKnowledge:async()=>answer});
+    assert.equal(result.action,'handoff',JSON.stringify(answer));
+    assert.equal(result.reply,undefined);
+    assert.equal(result.answeredMessageIds,undefined);
+    assert.equal(result.memory?.stage,'handoff');
+  }
+});
+
+test('shared knowledge gaps hand off business questions and keep ordinary reception available',async()=>{
+  const unavailable:KnowledgeAgentResult={action:'unavailable',route:'no_evidence',knowledge:[],evidenceIds:[]};
+  for(const answerKnowledge of [async()=>unavailable,async()=>{throw new Error('provider secret');}]){
+    const factual=await chooseProspectChatAction(input('具体地址在哪里？'),{answerKnowledge});
+    assert.equal(factual.action,'handoff');
+    assert.match(factual.reason??'',/资料.*核实/);
+    assert.doesNotMatch(factual.reason??'',/secret/);
+    const declarative=await chooseProspectChatAction(input('我想租个铺位'),{answerKnowledge});
+    assert.equal(declarative.action,'reply');
+    assert.match(declarative.reply??'',/经营什么业态/);
+  }
 });
 test('long or unsafe manually edited customer facts cannot bypass recap reply guards',async()=>{
  const {emptyTaskMemory}=await import('../app/lib/prospecting-memory.ts');const now='2026-11-08T08:00:00Z';

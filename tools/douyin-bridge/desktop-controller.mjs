@@ -15,6 +15,7 @@ const PUBLIC_ERRORS = {
   JOURNAL_FORMAT: '本地发送记录无法读取，请保留记录并修复，不要删除记录重发。',
   PAIRING_CHANGED: '本地记录属于其他设备配对，请重新导入正确的配置。',
   BROWSER_MISSING: '专用浏览器未能打开，请检查浏览器组件安装后重试。',
+  BACKGROUND_CDP_UNSUPPORTED: '后台同步需要助手的专用浏览器，请导入工作台下载的配对配置。',
   HUMAN_ACTION_REQUIRED: '同步已暂停，当前浏览器页面已保留。请在抖音页面手动完成安全验证，再点击“连接抖音”。失败的搜索需在工作台重新发起。',
   ACCOUNT_CHANGED: '浏览器账号与已配对账号不一致，请切回原账号或重新配对。',
   UNAUTHENTICATED: '请在打开的抖音页面完成登录，再点击“连接抖音”。',
@@ -41,6 +42,8 @@ export class DesktopController {
   #config;
   #journal;
   #browser;
+  #browserHeadless;
+  #profileDir;
   #actionPromise;
   #actionAbort;
   #loopPromise;
@@ -131,6 +134,9 @@ export class DesktopController {
 
   #publicFailure(error) {
     const code = Object.hasOwn(PUBLIC_ERRORS, error?.code) ? error.code : 'DESKTOP_ERROR';
+    if (this.#browserHeadless && (code === 'HUMAN_ACTION_REQUIRED' || code === 'UNAUTHENTICATED')) {
+      return { errorCode: code, message: '后台同步已暂停。点击“打开登录或验证窗口”完成抖音验证，再点击“连接抖音”。' };
+    }
     return { errorCode: code, message: PUBLIC_ERRORS[code] || '操作未完成，请检查专用浏览器和本机连接后重试。' };
   }
 
@@ -145,6 +151,7 @@ export class DesktopController {
 
   async #closeBrowser() {
     const browser = this.#browser; this.#browser = undefined;
+    this.#browserHeadless = undefined;
     if (!browser) return true;
     try { await browser.close(); return true; } catch { return false; }
   }
@@ -158,7 +165,16 @@ export class DesktopController {
     return closedBrowser && closedJournal;
   }
 
-  async #ensureSession(signal) {
+  async #ensureBrowser(signal, headless) {
+    if (this.#browser && this.#browserHeadless === headless) return;
+    if (!await this.#closeBrowser()) throw new BridgeError('专用浏览器未能关闭。', 'RESOURCE_RELEASE');
+    this.#check(signal);
+    this.#browser = await this.#deps.openBrowser(this.#config, this.#profileDir, { headless });
+    this.#browserHeadless = headless;
+    this.#check(signal);
+  }
+
+  async #ensureSession(signal, { headless, openFirstLogin = false } = {}) {
     const config = validateConfig(await this.#deps.loadConfig(this.#configPath));
     this.#check(signal);
     if (this.#journal && (this.#config?.origin !== config.origin || this.#config?.deviceId !== config.deviceId)) {
@@ -168,13 +184,33 @@ export class DesktopController {
     this.#config = config;
     const scope = createHash('sha256').update(`${config.origin}\n${config.deviceId}`).digest('hex').slice(0, 16);
     const stateDir = join(dirname(this.#configPath), 'douyin-bridge-state', scope);
+    this.#profileDir = join(stateDir, 'browser-profile');
     if (!this.#journal) this.#journal = await this.#deps.openJournal(join(stateDir, 'journal.json'));
     this.#check(signal);
     await this.#journal.bindConfig(config);
     this.#check(signal);
-    if (!this.#browser) this.#browser = await this.#deps.openBrowser(config, join(stateDir, 'browser-profile'));
-    this.#check(signal);
+    await this.#ensureBrowser(signal, headless ?? this.#browserHeadless ?? !(openFirstLogin && !this.#journal.data.accountId));
     this.#set({ configured: true });
+  }
+
+  #setLoginRequired() {
+    this.#set({ phase: 'login_required', authenticated: false, running: false, errorCode: 'UNAUTHENTICATED',
+      message: '登录已失效。点击“打开登录或验证窗口”完成登录，再点击“连接抖音”。' });
+  }
+
+  async #verifyBackgroundAccount(account, signal) {
+    if (this.#browserHeadless) return account;
+    this.#set({ phase: 'starting', message: '正在后台重新核验已确认的账号。' });
+    await this.#ensureBrowser(signal, true);
+    const observed = await this.#browser.adapter.accountStatus({ signal, expectedAccountId: account.accountId });
+    this.#check(signal);
+    const verified = this.#account(observed);
+    if (!verified.authenticated) { this.#setLoginRequired(); return null; }
+    if (verified.accountId !== account.accountId && !verifiedAccountUpgrade(account.accountId, observed)) {
+      this.#setAccountMismatch(verified);
+      return null;
+    }
+    return verified;
   }
 
   async #perform(phase, work) {
@@ -203,7 +239,7 @@ export class DesktopController {
 
   async startLogin() {
     return this.#perform('opening_browser', async signal => {
-      await this.#ensureSession(signal);
+      await this.#ensureSession(signal, { headless: false });
       await this.#browser.adapter.navigate(HOME, signal);
       this.#check(signal);
       this.#set({ phase: 'logging_in', authenticated: false, running: false, message: '请在抖音页面完成登录，再点击“连接抖音”核实账号。此时不会领取任务。' });
@@ -240,7 +276,8 @@ export class DesktopController {
         this.#set({ ...account, authenticated: false, phase: 'logging_in', running: false, message: '请先点击“连接抖音”，完成账号核实后再开始同步。' });
         return;
       }
-      this.#startLoop(account);
+      const verified = await this.#verifyBackgroundAccount(account, signal);
+      if (verified) this.#startLoop(verified);
     });
   }
 
@@ -254,7 +291,7 @@ export class DesktopController {
     this.#recovery = createConnectionRecovery({ now: this.#deps.now });
     this.#set({ ...account, phase: 'running', running: true, recoveryAttempt: 0, nextRetryAt: undefined,
       lastVerifiedAt: new Date(this.#deps.now()).toISOString(), errorCode: undefined, verificationReason: undefined,
-      message: '抖音已连接，正在同步工作台任务。' });
+      message: '抖音已连接，正在后台同步工作台任务。' });
     this.#startHeartbeat(this.#runAbort.signal);
     this.#loopPromise = this.#runLoop(this.#runAbort.signal);
   }
@@ -277,7 +314,7 @@ export class DesktopController {
   async #connect(confirmAccountId) {
     return this.#perform('connecting', async signal => {
       this.#set({ message: '正在恢复已保存的抖音登录，请稍候。' });
-      await this.#ensureSession(signal);
+      await this.#ensureSession(signal, { openFirstLogin: true });
       const deadline = Date.now() + 60000;
       let firstCheck = true, loginVerificationRetried = false;
       do {
@@ -297,14 +334,21 @@ export class DesktopController {
           if (!bound && confirmAccountId !== account.accountId) {
             this.#set({ ...account, phase: 'confirmation_required', authenticated: false, running: false, message: '首次连接，请确认这是要用于工作台的抖音账号。确认后会开始同步任务。' }); return;
           }
-          if (!bound) await this.#journal.bindAccount(account.accountId);
-          this.#check(signal); this.#startLoop(account); return;
+          const verified = await this.#verifyBackgroundAccount(account, signal);
+          if (!verified) return;
+          if (!bound) await this.#journal.bindAccount(verified.accountId);
+          this.#check(signal); this.#startLoop(verified); return;
         }
-        this.#set({ phase: 'logging_in', authenticated: false, running: false, message: '正在等待抖音确认登录。若页面要求登录，请扫码；登录后会自动继续，也可点击“取消连接”。' });
+        if (this.#browserHeadless && observed?.errorCode === 'UNAUTHENTICATED') { this.#setLoginRequired(); return; }
+        this.#set({ phase: 'logging_in', authenticated: false, running: false, message: this.#browserHeadless
+          ? '正在后台核实已保存的账号。若需重新登录，可先取消连接，再打开登录或验证窗口。'
+          : '正在等待抖音确认登录。若页面要求登录，请扫码；登录后会自动继续，也可点击“取消连接”。' });
         if (Date.now() >= deadline) break;
         await this.#deps.sleep(Math.min(1000, deadline - Date.now()), { signal }); this.#check(signal);
       } while (Date.now() < deadline);
-      this.#set({ phase: 'logging_in', authenticated: false, running: false, message: '暂未能核实登录，抖音页面已保留。完成登录或切回原账号后，再点击“连接抖音”。' });
+      this.#set({ phase: 'logging_in', authenticated: false, running: false, message: this.#browserHeadless
+        ? '暂未能核实已保存的账号。点击“打开登录或验证窗口”后重新连接。'
+        : '暂未能核实登录，抖音页面已保留。完成登录或切回原账号后，再点击“连接抖音”。' });
     });
   }
 
@@ -338,7 +382,7 @@ export class DesktopController {
                 verificationReason: result.verificationReason, errorCode: undefined,
                 message: recovery.manualRequired ? '自动核验暂未完成，专用浏览器已保留。请检查抖音页面后点击“重新核验账号”。' : '暂未核实当前账号，等待账号恢复；下次核验时间前不会自动刷新，专用浏览器保持打开，本轮不领取任务。' });
             } else {
-              exitState = { phase: 'login_required', authenticated: false, errorCode: 'UNAUTHENTICATED', message: '登录或账号确认已失效，同步已暂停，专用浏览器已保留。请完成登录或切回已配对账号，再点击“连接抖音”。' };
+              exitState = { phase: 'login_required', authenticated: false, ...this.#publicFailure({ code: 'UNAUTHENTICATED' }) };
               break;
             }
           } else {

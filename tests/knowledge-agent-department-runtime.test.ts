@@ -153,3 +153,38 @@ test('fresh property searches and topic resets ignore saved filters while saved 
  assert.doesNotMatch(JSON.stringify(result),/PRIVATE-YY|secret\.xlsx/);
  assert.equal(result.knowledge.length,0,'scope fields are rejected rather than interpreted as filters');
 });
+
+test('customer inventory lookup answers the reported private message from matching vacant rows within 60 characters', async t => {
+ const f = fixture();
+ t.after(() => f.sqlite.close());
+ for (const [department, title, address, area] of [
+  ['zs', '空置房源', '3-3-2号商铺', '86'],
+  ['zs', '空置房源', '5-3-4号商铺', '86.28'],
+  ['zs', '在租房源', '在租专用地址', '92'],
+  ['yy', '空置房源', '他部门地址', '88'],
+ ] as const) {
+  const library = await f.store.createLibrary(title, department);
+  await f.store.upload({
+   libraryId: library.id, title, fileName: title + '.xlsx', strategy: 'flat',
+   text: '## 工作表：' + title + '\n第1行：A1=区块；B1=地址；C1=面积；D1=建议业态；E1=备注\n' +
+    '第2行：A2=绮园商业街；B2=' + address + '；C2=' + area + '；D2=轻餐饮；E2=内部备注 13800138000',
+  });
+ }
+ const agent = createWorkbenchKnowledgeAgent(f.db, 'alice', 'https://example.test', {departmentId:'zs'});
+ const question = '现在80-100平的空置商铺还有吗';
+ const answer = await agent.answer({question, intent:'business', audience:'customer', maxAnswerChars:60});
+ assert.equal(answer.action, 'answer');
+ assert.equal(answer.recordLookup?.total, 2);
+ assert.equal(answer.route, 'retrieved');
+ assert.ok(answer.answer && answer.answer.length <= 60);
+ assert.match(answer.answer, /绮园商业街.*(?:3-3-2|5-3-4)号商铺/);
+ assert.match(answer.answer, /面积86(?:\.28)?/);
+ assert.match(answer.answer, /单位未标/);
+ assert.doesNotMatch(answer.answer, /内部备注|13800138000|在租专用地址|他部门地址|\.xlsx|第2行/);
+ assert.ok(answer.evidenceIds.length);
+ assert.ok(answer.evidenceIds.every(id => answer.knowledge.some(source => source.id === id)));
+ const unmatched = await agent.answer({question:'现在800-1000平的空置商铺还有吗', intent:'business', audience:'customer', maxAnswerChars:60});
+ assert.equal(unmatched.action, 'handoff');
+ assert.equal(unmatched.route, 'no_evidence');
+ assert.equal(unmatched.answer, undefined);
+});

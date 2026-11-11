@@ -57,6 +57,55 @@ test('routine reads refresh human conversations after thirty seconds without dup
  await f.chat.schedule(x.device.deviceId);assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM workbench_prospect_jobs WHERE kind='readConversation' AND status IN ('queued','running')").get()?.n,1);
 });
 
+test('quiet sync paces automatic reads across the device and leaves human threads for manual sync',async t=>{
+ const f=fixture();
+ t.after(()=>f.sqlite.close());
+ const x=await prepared(f);
+ await f.chat.settings('owner-a','member-a',x.campaign.id,true);
+ const base=f.sqlite.prepare('SELECT * FROM workbench_prospect_conversations WHERE id=?').get(x.conversation.id)!;
+ function addConversation(suffix:string,mode:'agent'|'human'){
+  const id=x.conversation.id+suffix;
+  const recipientId='MS4wRecipient'+suffix.replace('-','');
+  const row={...base,id,recipient_id:recipientId,profile_url:'https://www.douyin.com/user/'+recipientId,mode,
+   handoff_reason:mode==='human'?'已由销售接管':null};
+  f.sqlite.prepare(`INSERT INTO workbench_prospect_conversations (${Object.keys(row).join(',')}) VALUES (${Object.keys(row).map(()=>'?').join(',')})`).run(...Object.values(row) as never[]);
+  return id;
+ }
+ const second=addConversation('-b','agent');
+ const human=addConversation('-h','human');
+ const schedule=()=>f.chat.schedule(x.device.deviceId,{quiet:true});
+ const claim=()=>f.store.claim(x.device.deviceId,false,true);
+ async function complete(job:NonNullable<Awaited<ReturnType<typeof claim>>>,snapshotId:string){
+  await f.store.complete(x.device.deviceId,job.id,job.leaseToken,{
+   senderAccountId:job.input.senderAccountId,recipientId:job.input.recipientId,observedAt:f.now(),snapshotId,reliable:true,messages:[],
+  });
+ }
+ await Promise.all([schedule(),schedule()]);
+ assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM workbench_prospect_jobs WHERE kind='readConversation' AND status='queued'").get()?.n,1);
+ const first=await claim();
+ assert.equal(first?.input.conversationId,x.conversation.id);
+ await complete(first!,'quiet-first');
+ f.advance(30000);
+ await schedule();
+ assert.equal(await claim(),null);
+ assert.equal(await f.chat.sync('owner-a','member-a',x.campaign.id,human),true);
+ const manual=await claim();
+ assert.equal(manual?.input.conversationId,human);
+ assert.equal(manual?.input.manualSync,true);
+ await complete(manual!,'quiet-manual');
+ f.advance(60000);
+ await f.store.seen(x.device.deviceId,{authenticated:true,accountId:'MS4wSender001'});
+ await schedule();
+ const next=await claim();
+ assert.equal(next?.input.conversationId,second);
+ await complete(next!,'quiet-next');
+ f.sqlite.prepare("UPDATE workbench_prospect_conversations SET mode='human',handoff_reason='已由销售接管' WHERE owner_id='owner-a'").run();
+ f.advance(90000);
+ await f.store.seen(x.device.deviceId,{authenticated:true,accountId:'MS4wSender001'});
+ await schedule();
+ assert.equal(await claim(),null);
+});
+
 for(const outcome of ['failed','unreliable'] as const)test(`${outcome} reads retain the last reliable observation and retry after fifteen seconds`,async t=>{
  const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);await f.chat.settings('owner-a','member-a',x.campaign.id,true);
  const baseline=f.now();await readConversation(f,x,[],'reliable-baseline');f.advance(61000);await f.store.seen(x.device.deviceId,{authenticated:true,accountId:'MS4wSender001'});
@@ -730,6 +779,52 @@ test('explicit resume does not replay an already eligible question answered dire
  const inbound={id:'resume-eligible-answered',direction:'inbound' as const,text:'80平空铺有吗',postedAt:f.now()};await readConversation(f,x,[inbound]);let c=(await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations[0];await f.chat.takeover('owner-a','member-a',c.id,c.version);c=(await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations[0];await f.chat.resume('owner-a','member-a',c.id,c.version);
  f.advance(31000);await readConversation(f,x,[inbound,{id:'resume-direct-answer',direction:'outbound',text:'销售已在抖音中答复',postedAt:f.now()}],'resume-with-human-answer');
  assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',async()=>{assert.fail('an eligible but answered question must not replay');}),false);
+});
+
+for(const scenario of ['exact latest','older visible','later inbound','later outbound'] as const)test(`explicit resume handles an audited untimed handoff with ${scenario}`,async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);
+ await f.chat.settings('owner-a','member-a',x.campaign.id,true);
+ await readConversation(f,x,[],'audited-resume-baseline');f.advance(31000);
+ const older={id:'audited-resume-older',direction:'inbound' as const,text:'我在找商铺'};
+ const latest={id:'audited-resume-latest',direction:'inbound' as const,text:'现在80-100平的空置商铺还有吗'};
+ await readConversation(f,x,[older,latest],'audited-resume-question');
+ assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',async()=>({action:'handoff',reason:'现有资料无法确认客户问题，请核实后回复。'})),true);
+ const conversation=async()=>(await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations[0];
+ let c=await conversation();assert.equal(c.mode,'human');
+ assert.equal(f.sqlite.prepare("SELECT processed FROM workbench_prospect_messages WHERE source_key='audited-resume-latest'").get()?.processed,1);
+ if(scenario==='later inbound'||scenario==='later outbound'){
+  f.advance(31000);
+  const later={id:'audited-resume-later',direction:scenario==='later inbound'?'inbound' as const:'outbound' as const,text:'这条消息比先前的问题晚'};
+  await readConversation(f,x,[latest,later],'audited-resume-newer');c=await conversation();
+ }
+ await f.chat.resume('owner-a','member-a',c.id,c.version);
+ const libraryStore=createKnowledgeLibraryStore(f.db,'owner-a');
+ const library=await libraryStore.createLibrary('空置房源','zs');
+ await libraryStore.upload({
+  libraryId:library.id,title:'空置房源',fileName:'空置房源.xlsx',strategy:'flat',
+  text:'## 工作表：空置房源\n第1行：A1=区块；B1=地址；C1=面积；D1=建议业态\n第2行：A2=绮园商业街；B2=3-3-2号商铺；C2=86；D2=轻餐饮',
+ });
+ const seen:string[]=[];
+ const decide=async(owner:string,origin:string,request:Parameters<typeof chooseProspectChatAction>[0])=>{
+  seen.push(...request.pending!.map(message=>message.text));
+  const agent=createWorkbenchKnowledgeAgent(f.db,owner,origin,{departmentId:'zs'});
+  return chooseProspectChatAction(request,{preflightKnowledge:agent.preflight,answerKnowledge:agent.answer});
+ };
+ assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',decide),false);
+ f.advance(31000);
+ await readConversation(f,x,scenario==='older visible'?[older]:[latest],'audited-resume-verified');
+ const mayReply=scenario==='exact latest';
+ assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',decide),mayReply);
+ assert.deepEqual(seen,mayReply?[latest.text]:[]);
+ if(mayReply){
+  assert.equal((await conversation()).handoffReason,undefined);
+  const queued=f.sqlite.prepare("SELECT input_json FROM workbench_prospect_jobs WHERE kind='reply' AND status='queued'").all();
+  assert.equal(queued.length,1);
+  const reply=JSON.parse(String(queued[0].input_json));
+  assert.match(reply.message,/绮园商业街3-3-2号商铺，面积86/);
+  assert.equal(reply.answeredMessageIds.length,1);
+  assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',decide),false);
+ }
 });
 
 

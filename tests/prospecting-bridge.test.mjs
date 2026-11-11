@@ -98,6 +98,21 @@ test('journal never reports one device results using another device credentials'
   assert.equal(requests, 0);
 });
 
+test('default bridge polling omits the quiet conversation capability', async t => {
+  const journal = await journalFor(t);
+  let polled = false;
+  await runOnce(config, {
+    adapter: { accountStatus: account }, journal,
+    fetchImpl: async (url, request) => {
+      assert.ok(url.endsWith('/poll'));
+      assert.equal(Object.hasOwn(JSON.parse(request.body), 'quietConversationSync'), false);
+      polled = true;
+      return response({ job: null });
+    },
+  });
+  assert.equal(polled, true);
+});
+
 test('reporting failures retry completion only, never repeat a browser send', async t => {
   const journal = await journalFor(t); let sends = 0, completes = 0, polls = 0;
   const adapter = { accountStatus: account, async send(input, { beforeDispatch }) { await beforeDispatch(); sends++; return { outcome: 'submitted', evidence: '观察到新消息' }; } };

@@ -357,7 +357,7 @@ export class DesktopController {
             nextRetryAt: undefined, message: '正在重新核验抖音账号，聊天页面保持原样。' });
           const result = await this.#deps.runOnce(this.#config, {
             adapter: this.#browser.adapter, journal: this.#journal, signal,
-            recoverAccount,
+            recoverAccount, quietConversationSync: true,
             // Never forward raw strings into the desktop panel. The result below
             // provides enough public progress without exposing task bodies.
             logger: () => {},

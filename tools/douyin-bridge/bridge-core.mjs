@@ -332,7 +332,10 @@ export async function deviceStatusHeartbeat(rawConfig, { fetchImpl = fetch, sign
 
 const VERIFICATION_REASONS = new Set(['owner_proof_missing', 'identity_route_changed', 'task_header_missing', 'account_ambiguous', 'account_read_interrupted', 'navigation_failed', 'owner_route_changed', 'owner_controls_timeout', 'owner_controls_replaced', 'owner_handle_missing', 'owner_duplicate_same_handle', 'owner_handle_conflict', 'owner_read_interrupted']);
 
-export async function runOnce(rawConfig, { adapter, journal, fetchImpl = fetch, signal, heartbeatMs = 30000, jobTimeoutMs = 600000, recoverAccount = false, logger = () => {} } = {}) {
+export async function runOnce(rawConfig, {
+  adapter, journal, fetchImpl = fetch, signal, heartbeatMs = 30000, jobTimeoutMs = 600000,
+  recoverAccount = false, quietConversationSync = false, logger = () => {},
+} = {}) {
   const config = validateConfig(rawConfig);
   await journal.bindConfig(config);
   const request = (action, body, requestSignal = signal) => apiRequest(config, action, body, { fetchImpl, signal: requestSignal });
@@ -371,7 +374,12 @@ export async function runOnce(rawConfig, { adapter, journal, fetchImpl = fetch, 
   if (account.authenticated && !journal.data.accountId) await journal.bindAccount(account.accountId);
   const verifiedReadOnlyAccountId = verifiedAccountUpgrade(account.verifiedReadOnlyAccountId, account) ? account.verifiedReadOnlyAccountId : undefined;
   const accountClaim = account.authenticated === true || changed ? { accountId: account.accountId, accountName: account.accountName } : {};
-  const polled = await request('poll', { deviceId: config.deviceId, authenticated: account.authenticated === true, ...accountClaim, message: account.message, sendRetryVersion: 1, conversationVersion: 1, ...(verifiedReadOnlyAccountId ? { verifiedReadOnlyAccountId } : {}) });
+  const polled = await request('poll', {
+    deviceId: config.deviceId, authenticated: account.authenticated === true, ...accountClaim,
+    message: account.message, sendRetryVersion: 1, conversationVersion: 1,
+    ...(quietConversationSync === true ? { quietConversationSync: true } : {}),
+    ...(verifiedReadOnlyAccountId ? { verifiedReadOnlyAccountId } : {}),
+  });
   if (!object(polled) || !Object.hasOwn(polled, 'job')) fail('工作台未返回有效任务。', 'API_FORMAT');
   if (verifiedReadOnlyAccountId && polled.verifiedAccountId !== account.accountId) fail('工作台未确认同账号身份升级，请保持原配对并重新确认账号。', 'ACCOUNT_CHANGED');
   if (upgrading) await journal.bindAccount(account.accountId);

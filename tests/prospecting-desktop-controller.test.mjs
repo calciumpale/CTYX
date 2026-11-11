@@ -58,6 +58,25 @@ test('one-click connection verifies the saved account once and starts syncing wi
   await controller.connect(); assert.equal(checks.length, 1); assert.equal(calls.runs, 1);
 });
 
+test('desktop polling requests quiet automatic conversation sync', async t => {
+  const pollBodies = [];
+  const { controller, data } = fakeController({
+    runOnce: (value, options) => runOnce(value, {
+      ...options,
+      fetchImpl: async (url, request) => {
+        assert.ok(url.endsWith('/poll'));
+        pollBodies.push(JSON.parse(request.body));
+        return Response.json({ job: null });
+      },
+    }),
+  });
+  data.accountId = account.accountId;
+  t.after(() => controller.stop());
+  await controller.connect();
+  await until(() => pollBodies.length === 1);
+  assert.equal(pollBodies[0].quietConversationSync, true);
+});
+
 test('first connection requires one explicit account confirmation before polling', async t => {
   const { controller, calls, data } = fakeController(); t.after(() => controller.stop());
   const pending = await controller.connect();

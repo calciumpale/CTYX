@@ -58,6 +58,12 @@ const recoverableReadPauseSql=`status='active' AND EXISTS (SELECT 1 FROM workben
 const messageSelect='SELECT m.*,m.rowid AS row_order,j.status AS job_status,j.error AS job_error,j.result_json AS job_result_json FROM workbench_prospect_messages m LEFT JOIN workbench_prospect_jobs j ON j.id=m.job_id';
 const sendText=(value:unknown)=>{if(typeof value!=='string'||!value.trim()||value.length>1000||/[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(value))throw new DomainError('回复内容需为1至1000个字符');return value;};
 const MANUAL_SYNC_INTERVAL_MS=8000;
+const QUIET_READ_INTERVAL_MS=90000;
+const quietReadBlockSql = `SELECT 1 FROM workbench_prospect_jobs
+ WHERE device_id=? AND kind='readConversation'
+ AND (status IN ('queued','running') OR (
+  status!='cancelled' AND COALESCE(json_extract(input_json,'$.manualSync'),0)=0 AND updated_at>?
+ ))`;
 // Kept out of the eligible=1 processing queue until a reliable read confirms it.
 const UNVERIFIED_STOP=-1;
 const UNVERIFIED_AUTO_INBOUND=-2;
@@ -201,17 +207,19 @@ export function createProspectingChatStore(db:D1Database,now:()=>number=Date.now
    db.prepare('UPDATE workbench_prospect_conversations SET processing_token=NULL WHERE id=? AND processing_token=?').bind(id,token),
   ]);if(!results[0].meta.changes)throw conflict();
  }
- async function queueRead(c:ConversationRow,d:DeviceRow,manual?:{observeOnly:boolean}){
+ async function queueRead(c:ConversationRow,d:DeviceRow,manual?:{observeOnly:boolean},quiet=false){
   const view=await memoryStore.getView(c.owner_id,c.member_id,c.id);const time=stamp(),input={sessionId:view.sessionId,bindingVersion:view.bindingVersion,senderAccountId:c.sender_id,recipientId:c.recipient_id,profileUrl:c.profile_url,conversationId:c.id,limit:80,...(manual?{manualSync:true,observeOnly:manual.observeOnly}:{})};
   const cooldown=manual?`AND NOT EXISTS (SELECT 1 FROM workbench_prospect_jobs WHERE ${conversationReads} AND updated_at>?)`:'';
   const recent=manual?[...conversationReadKeys(c),new Date(now()-MANUAL_SYNC_INTERVAL_MS).toISOString()]:[];
+  const deviceCooldown=quiet?`AND NOT EXISTS (${quietReadBlockSql})`:'';
+  const deviceRecent=quiet?[d.id,new Date(now()-QUIET_READ_INTERVAL_MS).toISOString()]:[];
   const queued=await db.prepare(`INSERT OR IGNORE INTO workbench_prospect_jobs(id,owner_id,member_id,device_id,campaign_id,lead_id,kind,status,input_json,active_key,sender_id,created_at,updated_at)
    SELECT ?,?,?,?,?,?,'readConversation','queued',?,?,?,?,?
    WHERE EXISTS (SELECT 1 FROM workbench_prospect_campaigns p JOIN workbench_prospect_devices d ON d.owner_id=p.owner_id AND d.member_id=p.member_id
      JOIN workbench_member_accounts m ON m.account_id=p.member_id AND m.owner_id=p.owner_id
      WHERE p.id=? AND p.status='active' AND d.id=? AND d.enabled=1 AND d.authenticated=1 AND d.account_id=?
        AND m.enabled=1 AND m.role IN ('sales','manager') AND (?=1 OR json_extract(p.data_json,'$.chatEnabled')=1))
-   ${cooldown}`).bind(`pj-${crypto.randomUUID()}`,c.owner_id,c.member_id,d.id,c.campaign_id,c.lead_id,JSON.stringify(input),`chat-read:${c.id}`,c.sender_id,time,time,c.campaign_id,d.id,c.sender_id,manual?1:0,...recent).run();
+   ${cooldown} ${deviceCooldown}`).bind(`pj-${crypto.randomUUID()}`,c.owner_id,c.member_id,d.id,c.campaign_id,c.lead_id,JSON.stringify(input),`chat-read:${c.id}`,c.sender_id,time,time,c.campaign_id,d.id,c.sender_id,manual?1:0,...recent,...deviceRecent).run();
   return Boolean(queued.meta.changes);
  }
  async function sync(ownerId:string,memberId:string,campaignId:string,conversationId:string){
@@ -229,18 +237,28 @@ export function createProspectingChatStore(db:D1Database,now:()=>number=Date.now
   return Boolean(await db.prepare("SELECT 1 FROM workbench_prospect_jobs WHERE device_id=? AND status='queued' AND kind='readConversation' AND json_extract(input_json,'$.manualSync')=1 LIMIT 1").bind(deviceId).first());
  }
  async function hasQueuedConversationWork(deviceId:string){return Boolean(await db.prepare("SELECT 1 FROM workbench_prospect_jobs WHERE device_id=? AND status='queued' AND kind IN ('readConversation','reply') LIMIT 1").bind(deviceId).first());}
- async function schedule(deviceId:string){
+ async function schedule(deviceId:string,{quiet=false}:{quiet?:boolean}={}){
   const d=await db.prepare("SELECT d.* FROM workbench_prospect_devices d JOIN workbench_member_accounts m ON m.account_id=d.member_id AND m.owner_id=d.owner_id WHERE d.id=? AND d.enabled=1 AND d.authenticated=1 AND m.enabled=1 AND m.role IN ('sales','manager')").bind(deviceId).first<DeviceRow>();if(!d?.account_id||d.account_id.startsWith('dy-readonly-'))return;
+  if(quiet&&await db.prepare(quietReadBlockSql+' LIMIT 1').bind(deviceId,new Date(now()-QUIET_READ_INTERVAL_MS).toISOString()).first())return;
   await materialize(d.owner_id,d.member_id);
+  // A paused human thread only needs automatic reads when a previous send must
+  // be reconciled. Manual sync and the reply queue have their own timing.
+  const quietThreads=quiet?`AND (c.mode='agent' OR EXISTS (
+   SELECT 1 FROM workbench_prospect_jobs uncertain
+   WHERE uncertain.owner_id=c.owner_id AND uncertain.sender_id=c.sender_id
+    AND json_extract(uncertain.input_json,'$.recipientId')=c.recipient_id AND ${unresolvedOutboundSql('uncertain')}
+  ))`:'';
+  const resumeFirst=quiet?`CASE WHEN c.mode='agent' AND c.handoff_reason='${RESUME_PENDING}' THEN 0 ELSE 1 END,`:'';
   // Completed attempts govern pacing even when no reliable observation exists.
   // Rotating by attempt time lets unread or failing conversations share the device.
   const c=await db.prepare(`SELECT c.* FROM workbench_prospect_conversations c JOIN workbench_prospect_campaigns p ON p.id=c.campaign_id
    LEFT JOIN workbench_prospect_jobs attempted ON attempted.id=(SELECT j.id FROM workbench_prospect_jobs j WHERE j.owner_id=c.owner_id AND j.member_id=c.member_id AND j.sender_id=c.sender_id AND j.kind='readConversation' AND json_extract(j.input_json,'$.conversationId')=c.id ORDER BY j.created_at DESC,j.rowid DESC LIMIT 1)
    WHERE c.owner_id=? AND c.member_id=? AND c.sender_id=? AND c.status='active' AND p.status='active' AND json_extract(p.data_json,'$.chatEnabled')=1
+    ${quietThreads}
     AND (attempted.id IS NULL OR attempted.updated_at<=CASE WHEN attempted.status='done' AND COALESCE(json_extract(attempted.result_json,'$.reliable'),json_extract(attempted.result_json,'$.summary') LIKE '已同步%')=1 THEN ? ELSE ? END)
     AND NOT EXISTS (SELECT 1 FROM workbench_prospect_jobs j WHERE j.active_key=('chat-read:'||c.id))
-   ORDER BY COALESCE(attempted.updated_at,''),c.id LIMIT 1`).bind(d.owner_id,d.member_id,d.account_id,new Date(now()-30000).toISOString(),new Date(now()-15000).toISOString()).first<ConversationRow>();if(!c)return;
-  await queueRead(c,d);
+   ORDER BY ${resumeFirst} COALESCE(attempted.updated_at,''),c.id LIMIT 1`).bind(d.owner_id,d.member_id,d.account_id,new Date(now()-30000).toISOString(),new Date(now()-15000).toISOString()).first<ConversationRow>();if(!c)return;
+  await queueRead(c,d,undefined,quiet);
  }
  function closeStatements(c:ConversationRow,reason:string,memory:ReturnType<typeof normalizeChatMemory>,guard:string,values:unknown[]){
   const time=stamp();memory.stage='closed';
@@ -382,7 +400,14 @@ export function createProspectingChatStore(db:D1Database,now:()=>number=Date.now
   }
   if(recovering&&resuming&&last?.direction==='inbound'){
    const previous=bySource.get(last.id),postedAt=last.postedAt??previous?.posted_at;
-   const fresh=resumeFreshness.get(last.id)===true;
+   const lastDecision=object(audit.lastDecision);
+   const taskStartedAt=taskView.bindingVersion===1?c.opened_at:binding.updated_at;
+   // A reliable read can re-identify an untimed question already processed as a
+   // handoff. Only the latest recorded turn may resume, and only without any reply.
+   const auditedUnanswered=!postedAt&&!stopObserved&&c.has_baseline===1&&taskView.isActive&&previous?.eligible===1&&previous.processed===1&&
+    platformExisting.at(-1)?.id===previous.id&&sessionIds.has(previous.id)&&!taskView.state.ignoredSourceIds.includes(previous.id)&&
+    Date.parse(previous.created_at)>=Date.parse(taskStartedAt)&&lastDecision.inboundId===previous.id&&lastDecision.action==='handoff'&&lastDecision.queued===false;
+   const fresh=resumeFreshness.get(last.id)===true||auditedUnanswered;
    const confirmedOut=existing.filter(m=>m.direction==='outbound'&&(m.status==='sent'||m.job_status==='done'||!m.job_id&&m.status==='received'&&c.last_read_at&&m.created_at<=c.last_read_at)).at(-1);
    const answered=!!confirmedOut&&(previous?(confirmedOut.row_order??0)>(previous.row_order??0):!!postedAt&&!!confirmedOut.posted_at&&Date.parse(confirmedOut.posted_at)>Date.parse(postedAt));
    if(answered)statements.push(db.prepare(`UPDATE workbench_prospect_messages SET processed=1 WHERE conversation_id=? AND direction='inbound' AND eligible=1 AND source_key IN (SELECT value FROM json_each(?)) AND ${resumeGuard}`).bind(c.id,JSON.stringify(read.messages.filter(m=>m.direction==='inbound').map(m=>m.id)),...values,c.id,c.version,RESUME_PENDING));

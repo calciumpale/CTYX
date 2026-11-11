@@ -117,7 +117,7 @@ export function createProspectingService(deps:Dependencies){
     const acknowledgement=verifiedAccountId?{verifiedAccountId}:{};
     const claim=()=>store.claim(deviceId,input.sendRetryVersion===1,supportsConversations);
     // Persist due inbox observations before prospect analysis or early returns.
-    if(supportsConversations)await store.chat.schedule(deviceId);
+    if(supportsConversations)await store.chat.schedule(deviceId,{quiet:input.quietConversationSync===true});
     if(supportsConversations)await store.chat.rememberOne(device.owner_id,device.member_id,new URL(request.url).origin,deps.rememberChat);
     if(supportsConversations&&await store.chat.hasQueuedManualSync(deviceId)){
      if(request.signal.aborted)throw new DomainError('请求已取消，未领取新任务',409);

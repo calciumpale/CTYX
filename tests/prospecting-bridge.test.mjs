@@ -760,14 +760,18 @@ browserTest('short replies tolerate UI row ordering changes only when all canoni
   assert.equal(baseline.priorMessageKeys.length, 2);
 });
 
-for (const change of ['oldest hidden after writing', 'oldest hidden before writing', 'latest edited', 'new identical inbound', 'earlier identical inbound hidden']) {
+for (const change of ['oldest hidden after writing', 'oldest hidden after writing into empty editor', 'oldest hidden before writing', 'latest edited', 'new identical inbound', 'earlier identical inbound hidden']) {
   browserTest(`repeated inbound DOM text requires an unchanged same-pass proof: ${change}`, async t => {
     const latest = incomingHistory.replace(' data-message-id="inbound-current"', '');
     const repeatedIndex = change === 'earlier identical inbound hidden' ? 19 : 3;
     const olderRows = Array.from({ length: 19 }, (_, i) => i + 1 === repeatedIndex
       ? latest.replace('data-index="0"', `data-index="${i + 1}"`)
       : `<div data-index="${i + 1}"><div class="messageMessageBoxmessageBox" data-message-direction="outgoing" data-message-id="old-${i}"><span data-e2e="message-text">较早的消息 ${i}</span></div></div>`).join('');
-    const { adapter, clicks } = await fixture(t, { stackChat: true, history: latest + olderRows, chatReplyEcho: 'outgoing' });
+    const replacingLongDraft = change.startsWith('oldest hidden after writing');
+    const { adapter, clicks } = await fixture(t, {
+      stackChat: true, history: latest + olderRows, chatReplyEcho: 'outgoing',
+      slateDraft: replacingLongDraft ? 'placeholder' : false,
+    });
     const input = conversationInput();
     const observed = await adapter.readConversation(input);
     assert.equal(observed.reliable, true);
@@ -794,12 +798,19 @@ for (const change of ['oldest hidden after writing', 'oldest hidden before writi
     const beforeWriting = change === 'oldest hidden before writing';
     if (beforeWriting) await alterView();
     const proofs = [];
-    const action = () => adapter.reply({ ...input, message: '这间商铺约 88 平方米。', replyId: 'reply-same-pass',
+    const message = replacingLongDraft
+      ? ['空置表匹配10条', ...Array.from({ length: 10 }, (_, i) => `测试街区一层${i + 1}号铺，面积${80 + i}㎡，具体业态和租赁条件以现场确认为准`), '现况待核实'].join('。') + '。'
+      : '这间商铺约 88 平方米。';
+    if (replacingLongDraft) {
+      assert.ok(message.length > 300 && message.length <= 500);
+      if (change === 'oldest hidden after writing') await (await adapter.page()).locator('[data-slate-editor]').fill('旧回复未提交。\n第二行。');
+    }
+    const action = () => adapter.reply({ ...input, message, replyId: 'reply-same-pass',
       expectedSnapshotId: observed.snapshotId, actor: 'agent' }, {
       renewBeforeDispatch: beforeWriting ? undefined : alterView,
       beforeDispatch: async proof => { assert.equal(clicks(), 0); proofs.push(proof.conversation); },
     });
-    if (change === 'oldest hidden after writing') {
+    if (replacingLongDraft) {
       assert.equal((await action()).outcome, 'submitted');
       assert.equal(clicks(), 1);
       assert.equal(proofs.length, 1);

@@ -901,6 +901,39 @@ for(const scenario of ['same question','after composer failure','newer inbound',
  }
 });
 
+for(const scenario of ['structured multiline','generic multiline','already one paragraph','different citations'] as const)test(`paragraph recovery admits only the approved multiline property reply: ${scenario}`,async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);
+ await f.chat.settings('owner-a','member-a',x.campaign.id,true);
+ await readConversation(f,x,[],'paragraph-baseline');f.advance(61000);
+ const inbound={id:'paragraph-inbound',direction:'inbound' as const,text:'现在80-100平的空置商铺还有吗'};
+ await readConversation(f,x,[inbound],'paragraph-original',true);
+ const decisions:string[]=[];const sourceId=scenario==='generic multiline'?'knowledge-document:fixture':'property-record:fixture';
+ const decide=async(_owner:string,_origin:string,request:Parameters<typeof chooseProspectChatAction>[0])=>{
+  decisions.push(request.inbound.id);
+  const reply=decisions.length===1&&scenario!=='already one paragraph'?'有一间88㎡商铺。\n现况待核实。':'有一间88㎡商铺，现况待核实。';
+  return {action:'reply' as const,reply,answeredMessageIds:[request.inbound.id],evidenceIds:[scenario==='different citations'?'property-record:other':sourceId],
+   knowledgeLookup:{department:'zs' as const,status:'ok' as const,libraryIds:['synthetic-library'],sourceIds:[sourceId]}};
+ };
+ const composerError='私信输入框的文案与批准的内容不一致，未发送。';
+ assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',decide),true);
+ const failed=(await f.store.claim(x.device.deviceId,false,true))!;
+ await f.store.complete(x.device.deviceId,failed.id,failed.leaseToken,{outcome:'failed',error:composerError});
+ f.advance(91000);await f.store.seen(x.device.deviceId,{authenticated:true,accountId:'MS4wSender001'});
+ await f.chat.schedule(x.device.deviceId,{quiet:true});assert.equal(await f.store.claim(x.device.deviceId,false,true),null);
+ await f.chat.schedule(x.device.deviceId,{quiet:true,replySamePassProofVersion:1});
+ const read=await f.store.claim(x.device.deviceId,false,true,true);
+ if(scenario!=='structured multiline'){assert.equal(read,null);return;}
+ assert.equal(read?.kind,'readConversation');assert.equal(read?.input.replySamePassProofVersion,1);
+ await f.store.complete(x.device.deviceId,read!.id,read!.leaseToken,{senderAccountId:'MS4wSender001',recipientId:'MS4wRecipient001',observedAt:f.now(),snapshotId:'paragraph-verified',reliable:true,covered:true,messages:[inbound]});
+ assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',decide),true);
+ assert.deepEqual(decisions,[decisions[0],decisions[0]]);
+ const regenerated=(await f.store.claim(x.device.deviceId,false,true,true))!;assert.equal(regenerated.kind,'reply');
+ assert.equal(regenerated.input.expectedSnapshotId,'paragraph-verified');assert.doesNotMatch(regenerated.input.message??'',/\n/);
+ await f.store.complete(x.device.deviceId,regenerated.id,regenerated.leaseToken,{outcome:'failed',error:composerError});
+ f.advance(91000);await f.store.seen(x.device.deviceId,{authenticated:true,accountId:'MS4wSender001'});
+ await f.chat.schedule(x.device.deviceId,{quiet:true,replySamePassProofVersion:1});assert.equal(await f.store.claim(x.device.deviceId,false,true,true),null);
+});
+
 for(const scenario of ['legacy shop search','ordinary conflict','nonlegacy evidence','manual takeover','newer message','expired','uncovered read'] as const)test(`verified quiet read re-evaluates only the old shop-search routing miss: ${scenario}`,async t=>{
  const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);
  await f.chat.settings('owner-a','member-a',x.campaign.id,true);

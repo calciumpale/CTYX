@@ -830,6 +830,9 @@ export class DouyinBrowserAdapter {
     };
     const existing = await priorSubmission(); if (existing) return existing;
     const composer = await this.uniqueVisible(root.locator(stackChat ? '[data-e2e="msg-input"] [contenteditable="true"]' : COMPOSER), '未找到唯一消息输入框，未发送。');
+    // Chromium can retain Slate's empty placeholder line break when a
+    // multiline replacement is inserted directly into the empty editor.
+    if (input.message.includes('\n') && await composer.getAttribute('data-slate-editor') === 'true') await composer.fill('');
     await composer.fill(input.message);
     const sendControl = stackChat ? root.locator('[data-e2e="msg-input"] .e2e-send-msg-btn') : root.getByRole('button', { name: /^发送$/ });
     const sendButton = await this.uniqueVisible(sendControl, '未找到唯一发送按钮，未发送。');

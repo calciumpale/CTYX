@@ -357,6 +357,10 @@ async function fixture(t, { echo = true, wrongTarget = false, challenge = false,
   const context = await browser.newContext(); let clicks = 0;
   await context.exposeBinding('countSend', () => { clicks++; });
   const header = '<header><a aria-label="我的主页" href="' + (selfProfile ? '/user/self' : '/user/sender-1') + '">我</a></header>';
+  const slateAttributes = slateDraft === 'placeholder' ? 'data-slate-editor="true" style="white-space:pre-wrap"'
+    : slateDraft ? 'data-slate-editor="true" oninput="this.append(String.fromCodePoint(8203))"' : '';
+  const slatePlaceholder = slateDraft === 'placeholder'
+    ? '<div data-slate-node="element"><span data-slate-node="text"><span data-slate-leaf="true"><span data-slate-zero-width="n" data-slate-length="0">&#xfeff;<br></span></span></span></div>' : '';
   const stackEcho = "const row=document.createElement('div');row.className='messageMessageBoxmessageBox';const text=document.createElement('span');text.textContent=document.querySelector('[contenteditable]').innerText.replace(/\\u200B$/, '');const list=document.querySelector('.messageMessageListlist');" +
     (chatReplyEcho ? "row.dataset.messageDirection='" + chatReplyEcho + "';row.dataset.messageStatus='" + chatReplyStatus + "';row.dataset.messageId='new-echo';text.dataset.e2e='message-text';row.append(text);for(const previous of list.querySelectorAll('[data-index]'))previous.dataset.index=Number(previous.dataset.index)+1;const slot=document.createElement('div');slot.dataset.index='0';slot.append(row);list.prepend(slot);" : "row.append('10:00 ',text);list.append(row);");
   await context.route('**/*', async route => {
@@ -376,7 +380,7 @@ async function fixture(t, { echo = true, wrongTarget = false, challenge = false,
               </div></header>
               <div class="messageMessageListwrapper"><div class="messageMessageListlist">${history}</div></div>
               <div data-e2e="msg-input">
-                <div contenteditable="true" data-placeholder="发送消息" ${slateDraft ? 'data-slate-editor="true" oninput="this.append(String.fromCodePoint(8203))"' : ''}></div>
+                <div contenteditable="true" data-placeholder="发送消息" ${slateAttributes}>${slatePlaceholder}</div>
                 <svg class="e2e-send-msg-btn" width="40" height="40" onclick="countSend(); ${echo ? stackEcho : ''}"><rect width="40" height="40"></rect></svg>
               </div>
             </div>
@@ -653,6 +657,19 @@ browserTest('an approved agent reply requires a fresh reliable incoming snapshot
   const observed = await adapter.readConversation(conversationInput()); let dispatches = 0;
   const result = await adapter.reply({ ...conversationInput(), message: '这个店面约80平方米，方便进一步了解吗？', replyId: 'reply-one', expectedSnapshotId: observed.snapshotId, actor: 'agent' }, { beforeDispatch: async () => { dispatches++; } });
   assert.equal(result.outcome, 'submitted'); assert.equal(dispatches, 1); assert.equal(clicks(), 1);
+});
+
+browserTest('a multiline inventory reply replaces the Slate placeholder and submits the exact draft once', async t => {
+  const { adapter, clicks } = await fixture(t, { stackChat: true, history: incomingHistory, slateDraft: 'placeholder', chatReplyEcho: 'outgoing' });
+  const input = conversationInput();
+  const observed = await adapter.readConversation(input);
+  const message = ['您好，目前匹配到以下商铺。', ...Array.from({ length: 10 }, (_, i) => `${i + 1}. 测试街区一层 ${80 + i} 平方米，可进一步核实适用业态及最新租赁条件。`)].join('\n');
+  assert.ok(message.length > 300 && message.length <= 500);
+  const result = await adapter.reply({ ...input, message, replyId: 'reply-inventory', expectedSnapshotId: observed.snapshotId, actor: 'agent' }, {
+    beforeDispatch: async () => assert.equal(clicks(), 0),
+  });
+  assert.equal(result.outcome, 'submitted');
+  assert.equal(clicks(), 1);
 });
 
 browserTest('a changed conversation after lease renewal rejects an approved reply before dispatch', async t => {

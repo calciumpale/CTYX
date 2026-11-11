@@ -848,7 +848,7 @@ for(const scenario of ['same question','after composer failure','newer inbound',
  }
  const failed=await failReply(snapshotError);const before=decisions.length;let c=await conversation();assert.equal(c.mode,'human');
  if(scenario==='manual takeover')await f.chat.takeover('owner-a','member-a',c.id,c.version);
- f.advance(scenario==='expired'?16*60000:91000);await f.store.seen(x.device.deviceId,{authenticated:true,accountId:'MS4wSender001'});
+ f.advance(scenario==='expired'?61*60000:91000);await f.store.seen(x.device.deviceId,{authenticated:true,accountId:'MS4wSender001'});
  await f.chat.schedule(x.device.deviceId,{quiet:true});const read=await f.store.claim(x.device.deviceId,false,true);
  if(scenario==='manual takeover'||scenario==='expired'){assert.equal(read,null);return;}
  assert.equal(read?.kind,'readConversation');

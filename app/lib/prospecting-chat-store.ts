@@ -20,7 +20,7 @@ const publicConversation=(r:ConversationRow):ProspectChatConversation=>({id:r.id
 const retryableResult=(value:unknown)=>{const v=object(value);return v.outcome==='failed'&&v.retryable===true&&v.errorCode==='ACCOUNT_VERIFICATION_PENDING';};
 const composerChangedBeforeDispatch='私信输入框的文案与批准的内容不一致，未发送。';
 const snapshotChangedBeforeDispatch='会话内容已有变化，请同步最新消息并重新确认回复。';
-const snapshotRecoveryMs=15*60_000;
+const snapshotRecoveryMs=60*60_000;
 const staleReplyCancellation='会话或任务已改变，原待发回复已取消';
 const cancelledReplyRecoveryMs=15*60_000;
 function publicMessage(r:MessageRow):ProspectChatMessage{

@@ -4,9 +4,12 @@ import {DatabaseSync} from 'node:sqlite';
 import {readFileSync,readdirSync} from 'node:fs';
 import {createSeed} from '../app/lib/seed.ts';
 import {createMemberAuthStore} from '../app/lib/member-auth.ts';
-import {previewDepartmentSetup,applyDepartmentSetup} from '../app/lib/workspace-departments-store.ts';
+import {previewDepartmentSetup,applyDepartmentSetup,appendDepartmentStageExamples as append} from '../app/lib/workspace-departments-store.ts';
 import {projectState,executeAction} from '../app/lib/domain.ts';
-import type {DepartmentDataset} from '../app/lib/workspace-departments.ts';
+import {DEPARTMENTS,type DepartmentDataset} from '../app/lib/workspace-departments.ts';
+import {salesMutationEvents} from '../app/lib/sales-report-domain.ts';
+import {salesReportEligible} from '../app/lib/sales-project-eligibility.ts';
+import type {Deal,WorkbenchState} from '../app/lib/types.ts';
 const dataset=JSON.parse(readFileSync(new URL('../data/prospect-companies/2026-11-08.json',import.meta.url),'utf8')) as DepartmentDataset;
 async function fixture(){const sqlite=new DatabaseSync(':memory:');for(const name of readdirSync(new URL('../drizzle/',import.meta.url)).filter(x=>x.endsWith('.sql')).sort())sqlite.exec(readFileSync(new URL(`../drizzle/${name}`,import.meta.url),'utf8'));let beforeBatch=()=>{};
  const db={prepare(sql:string){let values:unknown[]=[];return {bind(...items:unknown[]){values=items;return this;},async first(){return sqlite.prepare(sql).get(...values as never[])??null;},async all(){return {results:sqlite.prepare(sql).all(...values as never[])};},async run(){return {meta:{changes:Number(sqlite.prepare(sql).run(...values as never[]).changes)}};}};},async batch(items:{run:()=>Promise<unknown>}[]){beforeBatch();sqlite.exec('BEGIN');try{const out=[];for(const item of items)out.push(await item.run());sqlite.exec('COMMIT');return out;}catch(e){sqlite.exec('ROLLBACK');throw e;}}} as unknown as D1Database;
@@ -18,3 +21,34 @@ test('trusted sales scopes isolate empty portfolios, writes and model context',a
 test('account race rolls back workspace and backup, conflicts do not overwrite unrelated accounts',async t=>{const f=await fixture();t.after(()=>f.sqlite.close());const preview=await previewDepartmentSetup(f.db,'o',dataset);f.race(()=>f.sqlite.exec("UPDATE workbench_member_accounts SET display_name='changed' WHERE username='sales'"));await assert.rejects(applyDepartmentSetup(f.db,'o',dataset,preview),{status:409});assert.equal(f.sqlite.prepare('SELECT revision FROM workbench_workspaces').get()?.revision,1);assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM workbench_department_setups').get()?.n,0);});
 test('cross sales contract, training and generated portfolio scope; enabled empty member assignment',async()=>{const state=createSeed(),scope={salesId:'sales-yl',displayName:'YL'};await assert.rejects(executeAction(state,'sales','contract_save',{dealId:'deal-1'}, {salesScope:scope}),{status:403});state.trainingSessions=[{id:'other-training',scenario:'private',customer:'private',messages:[],status:'active',createdAt:'now'}];(state as typeof state & {_access:Record<string,string>})._access={'other-training':'sales-1'};await assert.rejects(executeAction(state,'sales','training_reply',{sessionId:'other-training',text:'cross'}, {salesScope:scope}),{status:403});let seen:string[]=[];await executeAction(state,'sales','chat',{query:'本周商机跟进建议'}, {salesScope:scope,generate:async input=>{seen=input.deals.map(d=>d.id);return {answer:'暂无客户资料',mode:'demo'};}});assert.deepEqual(seen,[]);const result=await executeAction(state,'manager','deal_create',{name:'Empty owner',projectName:'Assigned',ownerId:'sales-yl'}, {salesOwners:[scope]});assert.equal(result.state.deals[0].ownerId,'sales-yl');});
 test('invalid sources, allocation, duplicates and capacity reject without side effects',async t=>{const f=await fixture();t.after(()=>f.sqlite.close());for(const mutate of [(d:DepartmentDataset)=>{d.rows[0].sources=[];},(d:DepartmentDataset)=>{d.rows[0].ownerUsername='ch';},(d:DepartmentDataset)=>{d.rows[1].legalName=d.rows[0].legalName;}]){const bad=structuredClone(dataset);mutate(bad);await assert.rejects(previewDepartmentSetup(f.db,'o',bad));}f.state.deals[0].summary='x'.repeat(1800000);f.sqlite.prepare('UPDATE workbench_workspaces SET state_json=?').run(JSON.stringify(f.state));await assert.rejects(previewDepartmentSetup(f.db,'o',dataset),{status:413});assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM workbench_department_setups').get()?.n,0);assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM workbench_sales_events').get()?.n,0);});
+
+test('existing department workspaces receive isolated stage examples once without rewriting existing projects', async t => {
+  const f = await fixture();
+  t.after(() => f.sqlite.close());
+  const read = () => String(f.sqlite.prepare('SELECT state_json FROM workbench_workspaces').get()?.state_json);
+  const fresh = read();
+  assert.deepEqual(await append(f.db, 'o', JSON.parse(fresh), fresh), JSON.parse(fresh));
+  await applyDepartmentSetup(f.db, 'o', dataset, await previewDepartmentSetup(f.db, 'o', dataset));
+  const beforeJson = read();
+  const before = JSON.parse(beforeJson) as WorkbenchState;
+  const after = await append(f.db, 'o', before, beforeJson);
+  assert.ok(after);
+  assert.deepEqual(JSON.parse(read()), after);
+  assert.deepEqual(after.deals.slice(0, before.deals.length), before.deals);
+  assert.equal(after.revision, before.revision + 1);
+  const examples = after.deals.slice(before.deals.length);
+  assert.equal(examples.length, 20);
+  assert.equal(new Set(examples.map(deal => deal.name)).size, 20);
+  assert.ok(examples.every(deal => deal.dataOrigin === 'sample' && deal.name.includes('演示') && !salesReportEligible(deal)));
+  for (const department of DEPARTMENTS) {
+    const owned: Deal[] = projectState(after, 'sales', { salesId: department.salesId, displayName: department.username }).deals;
+    assert.deepEqual(owned.filter(deal => deal.dataOrigin === 'sample').map(deal => deal.stage), ['商机', '方案', '合同', '回款']);
+  }
+  assert.deepEqual(salesMutationEvents(before, after, 'deal_create', {}, dataset.researchedAt), []);
+  assert.equal(await append(f.db, 'o', before, beforeJson), null);
+  const edited = structuredClone(after);
+  edited.deals.at(-1)!.stage = '合同';
+  edited.deals.at(-1)!.summary = '演示用户已编辑';
+  f.sqlite.prepare('UPDATE workbench_workspaces SET state_json=?').run(JSON.stringify(edited));
+  assert.deepEqual(await append(f.db, 'o', JSON.parse(read()), read()), edited);
+});

@@ -2,7 +2,21 @@ import {DomainError} from './domain.ts';
 import {passwordHash} from './member-auth.ts';
 import {DEPARTMENTS,departmentState,digest} from './workspace-departments.ts';
 import type {DepartmentDataset} from './workspace-departments.ts';
+import {missingDepartmentStageExamples} from './workspace-stage-examples.ts';
 import type {WorkbenchState} from './types.ts';
+
+/** Returns null if a concurrent write won and the caller should reload the workspace. */
+export async function appendDepartmentStageExamples(db:D1Database, ownerId:string, state:WorkbenchState, sourceJson:string):Promise<WorkbenchState|null> {
+  const examples = missingDepartmentStageExamples(state);
+  if (!examples.length) return state;
+  const next = { ...state, revision: state.revision + 1, deals: [...state.deals, ...examples] };
+  const nextJson = JSON.stringify(next);
+  if (new TextEncoder().encode(nextJson).byteLength > 1800000) return state;
+  const result = await db.prepare('UPDATE workbench_workspaces SET state_json = ?, revision = ?, updated_at = ? WHERE user_id = ? AND revision = ? AND state_json = ?')
+    .bind(nextJson, next.revision, new Date().toISOString(), ownerId, state.revision, sourceJson).run();
+  return result.meta.changes === 1 ? next : null;
+}
+
 type Account={account_id:string;owner_id:string;username:string;display_name:string;role:string;sales_id:string|null;enabled:number;password_salt:string;password_hash:string;password_iterations:number;created_at:string;updated_at:string};
 export interface SetupManifest {expectedRevision:number;stateHash:string;manifestHash:string;accountConflicts:string[];beforeCount:number;afterCount:number;imported:number;sizeBytes:number;archiveIds:string[];accounts:{username:string;salesId:string;accountId?:string}[];}
 const conflict=()=>new DomainError('账号或工作空间已变化，请重新预览；本次未导入',409);

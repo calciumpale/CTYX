@@ -24,6 +24,7 @@ import { env, waitUntil } from 'cloudflare:workers';
 import { assertRevision, demoGenerate, DomainError, projectState } from './domain.ts';
 import type { GenerationInput, GenerationOutput } from './domain.ts';
 import { createSeed } from './seed.ts';
+import { appendDepartmentStageExamples } from './workspace-departments-store.ts';
 import { readEffectiveModel } from './connection-store.ts';
 import { requestModelText } from './model-client.ts';
 import { buildModelMessages } from './model-messages.ts';
@@ -65,8 +66,18 @@ export async function loadWorkspace(userId:string,siteOrigin='https://production
     row=await db.prepare('SELECT state_json, revision FROM workbench_workspaces WHERE user_id = ?').bind(userId).first<{state_json:string;revision:number}>();
   }
   if(!row)throw new DomainError('体验空间初始化失败，请稍后重试',503);
-  const state=JSON.parse(row.state_json) as WorkbenchState;
-  state.revision=row.revision;await applyModelStatus(state,userId,siteOrigin);return state;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const state = JSON.parse(row.state_json) as WorkbenchState;
+    state.revision = row.revision;
+    const current = await appendDepartmentStageExamples(db, userId, state, row.state_json);
+    if (current) {
+      await applyModelStatus(current, userId, siteOrigin);
+      return current;
+    }
+    row = await db.prepare('SELECT state_json, revision FROM workbench_workspaces WHERE user_id = ?').bind(userId).first<{state_json:string;revision:number}>();
+    if (!row) break;
+  }
+  throw new DomainError('工作空间已更新，请刷新后重试',409);
 }
 export async function saveWorkspace(userId:string,expectedRevision:number,state:WorkbenchState,events:SalesEvent[]=[],extra?:GuardedWorkspaceWrite):Promise<void> {
   await persistSalesWorkspace(database(),userId,expectedRevision,state,events,extra);

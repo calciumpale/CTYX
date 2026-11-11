@@ -104,6 +104,34 @@ for(const scenario of ['legacy after eight hours','structured','uncovered read',
  }
 });
 
+for(const variant of ['direct','indirect','changed-message','running','queued'] as const)test(`pagination recovery respects ${variant} greeting retry lineage`,async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await propertyPageFixture(f,true);
+ await f.chat.processOne('owner-a','member-a','https://example.test',async()=>({action:'handoff',reason:'现有资料无法确认客户问题，请核实后回复。'}));
+ const ancestor=addSendRetryLineage(f,x.x,variant);
+ if(variant==='queued')f.sqlite.prepare("UPDATE workbench_prospect_jobs SET status='queued' WHERE id=?").run(ancestor);
+ if(variant==='running')f.sqlite.prepare("UPDATE workbench_prospect_jobs SET lease_until=?,lease_hash='still-running' WHERE id=?").run(new Date(Date.parse(f.now())+3600000).toISOString(),ancestor);
+ f.advance(91000);await f.store.seen(x.x.device.deviceId,{authenticated:true,accountId:'MS4wSender001'});
+ await f.chat.schedule(x.x.device.deviceId,{quiet:true});
+ const read=f.sqlite.prepare("SELECT id FROM workbench_prospect_jobs WHERE kind='readConversation' AND status='queued'").get();
+ const resolved=variant==='direct'||variant==='indirect';
+ if(variant==='queued'){assert.equal(read,undefined);return;}
+ assert.ok(read);
+ if(variant==='running'){
+  assert.equal(await f.store.claim(x.x.device.deviceId,false,true),null);
+  assert.equal((await f.chat.snapshot('owner-a','member-a','sales',x.x.campaign.id)).conversations[0].mode,'human');
+  return;
+ }
+ // Read reconciliation may run for an unresolved send, but must not reopen it.
+ const job=(await f.store.claim(x.x.device.deviceId,false,true))!;assert.equal(job.kind,'readConversation');
+ await f.store.complete(x.x.device.deviceId,job.id,job.leaseToken,{senderAccountId:'MS4wSender001',recipientId:'MS4wRecipient001',observedAt:f.now(),snapshotId:'page-retry-lineage',reliable:true,covered:true,messages:x.messages});
+ const conversation=(await f.chat.snapshot('owner-a','member-a','sales',x.x.campaign.id)).conversations[0];
+ assert.equal(conversation.mode,resolved?'agent':'human');
+ let decisions=0;
+ assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',async(_o,_u,input)=>{decisions++;assert.equal(input.propertyPage?.question,x.question.text);return{action:'reply',reply:'后续房源已核实。',answeredMessageIds:[input.inbound.id]};}),resolved);
+ assert.equal(decisions,resolved?1:0);
+ assert.equal(f.sqlite.prepare('SELECT status FROM workbench_prospect_jobs WHERE id=?').get(ancestor)?.status,'unknown');
+});
+
 test('chat is opt-in and only a capable bridge can read a successfully contacted recipient',async t=>{
  const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);assert.ok(x.conversation);
  await f.chat.schedule(x.device.deviceId);assert.equal(await f.store.claim(x.device.deviceId,false,true),null);

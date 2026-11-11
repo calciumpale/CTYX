@@ -76,7 +76,7 @@ const propertyPageRecoveryAuditSql=(thread:string,question:string)=>`(${thread}.
  AND COALESCE(json_extract(${thread}.memory_json,'$.propertyPageRecoveredInboundId'),'')<>${question}.id
  AND NOT EXISTS (SELECT 1 FROM workbench_prospect_messages later WHERE later.conversation_id=${thread}.id AND later.rowid>${question}.rowid)
  AND NOT EXISTS (SELECT 1 FROM workbench_prospect_jobs pending WHERE pending.owner_id=${thread}.owner_id AND pending.sender_id=${thread}.sender_id
-  AND pending.kind IN ('send','reply') AND pending.status IN ('queued','running','unknown') AND json_extract(pending.input_json,'$.recipientId')=${thread}.recipient_id)
+  AND pending.kind IN ('send','reply') AND (pending.status='queued' OR ${unresolvedOutboundSql('pending')}) AND json_extract(pending.input_json,'$.recipientId')=${thread}.recipient_id)
  AND EXISTS (${confirmedPropertyPageSql(thread,question)}))`;
 const isLegacyShopInquiry=(value:string)=>/店铺/.test(value)&&!/(?:商铺|铺位|房源|门面|店面|空铺|空置)/.test(value)&&isPropertyInventoryInquiry(value);
 const legacyShopAuditSql=(thread:string,policy:string,question:string)=>`(

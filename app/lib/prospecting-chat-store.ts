@@ -18,6 +18,7 @@ interface CampaignRow {id:string;owner_id:string;member_id:string;status:string;
 const conflict=()=>new DomainError('会话已更新，请刷新后重试',409);
 const publicConversation=(r:ConversationRow):ProspectChatConversation=>({id:r.id,campaignId:r.campaign_id,leadId:r.lead_id,nickname:r.nickname,recipientId:r.recipient_id,profileUrl:r.profile_url,mode:r.mode,status:r.status,version:r.version,lastMessageAt:r.last_message_at,lastMessagePreview:r.last_message_preview,...(r.last_synced_at?{lastSyncedAt:r.last_synced_at}:{}),...(r.handoff_reason?{handoffReason:r.handoff_reason}:{}),memory:{...normalizeChatMemory(r.memory_json),contactCaptured:normalizeChatMemory(r.memory_json).contactCaptured||!!r.contact_captured},...(r.close_reason?{closeReason:r.close_reason}:{}),updatedAt:r.updated_at});
 const retryableResult=(value:unknown)=>{const v=object(value);return v.outcome==='failed'&&v.retryable===true&&v.errorCode==='ACCOUNT_VERIFICATION_PENDING';};
+const composerChangedBeforeDispatch='私信输入框的文案与批准的内容不一致，未发送。';
 const staleReplyCancellation='会话或任务已改变，原待发回复已取消';
 const cancelledReplyRecoveryMs=15*60_000;
 function publicMessage(r:MessageRow):ProspectChatMessage{
@@ -404,19 +405,58 @@ export function createProspectingChatStore(db:D1Database,now:()=>number=Date.now
    const previous=bySource.get(last.id),postedAt=last.postedAt??previous?.posted_at;
    const lastDecision=object(audit.lastDecision);
    const taskStartedAt=taskView.bindingVersion===1?c.opened_at:binding.updated_at;
+   const auditedSource=!postedAt&&!stopObserved&&c.has_baseline===1&&taskView.isActive&&previous?.eligible===1&&previous.processed===1&&
+    sessionIds.has(previous.id)&&!taskView.state.ignoredSourceIds.includes(previous.id)&&Date.parse(previous.created_at)>=Date.parse(taskStartedAt)&&lastDecision.inboundId===previous.id;
    // A reliable read can re-identify an untimed question already processed as a
    // handoff. Only the latest recorded turn may resume, and only without any reply.
-   const auditedUnanswered=!postedAt&&!stopObserved&&c.has_baseline===1&&taskView.isActive&&previous?.eligible===1&&previous.processed===1&&
-    platformExisting.at(-1)?.id===previous.id&&sessionIds.has(previous.id)&&!taskView.state.ignoredSourceIds.includes(previous.id)&&
-    Date.parse(previous.created_at)>=Date.parse(taskStartedAt)&&lastDecision.inboundId===previous.id&&lastDecision.action==='handoff'&&lastDecision.queued===false;
-   const fresh=resumeFreshness.get(last.id)===true||auditedUnanswered;
+   const latestRecorded=platformExisting.at(-1);
+   const auditedUnanswered=auditedSource&&latestRecorded?.id===previous.id&&lastDecision.action==='handoff'&&lastDecision.queued===false;
+   let failedComposerProof:{sql:string;values:unknown[]}|undefined;
+   if(auditedSource&&lastDecision.action==='reply'&&lastDecision.queued===true&&read.covered===true&&
+    latestRecorded?.direction==='outbound'&&latestRecorded.actor==='agent'&&latestRecorded.status==='failed'&&latestRecorded.error===composerChangedBeforeDispatch&&
+    latestRecorded.job_id&&latestRecorded.job_status==='failed'&&!read.messages.some(message=>!bySource.has(message.id))){
+    // This legacy error comes from the final draft check before the bridge's
+    // dispatch checkpoint. Re-evaluate the question only after explicit resume.
+    const proofSql=`SELECT 1 FROM workbench_prospect_jobs failed
+     JOIN workbench_prospect_messages draft ON draft.job_id=failed.id
+     JOIN workbench_prospect_conversations thread ON thread.id=draft.conversation_id
+     JOIN workbench_prospect_campaigns policy ON policy.id=thread.campaign_id
+     JOIN workbench_prospect_devices device ON device.id=failed.device_id
+     JOIN workbench_prospect_memory_bindings binding ON binding.thread_id=thread.id
+     JOIN workbench_prospect_memory_sources source ON source.session_id=binding.active_session_id
+     JOIN workbench_prospect_messages question ON question.id=source.message_id AND question.conversation_id=thread.id
+     WHERE failed.id=? AND failed.kind='reply' AND failed.status='failed' AND failed.started_at IS NOT NULL AND failed.error=?
+      AND json_extract(failed.result_json,'$.outcome')='failed' AND json_extract(failed.result_json,'$.summary')='会话回复未提交'
+      AND COALESCE(json_extract(failed.result_json,'$.evidence'),'')=''
+      AND draft.id=? AND draft.direction='outbound' AND draft.actor='agent' AND draft.status='failed' AND draft.posted_at IS NULL AND draft.error=failed.error
+      AND draft.owner_id=thread.owner_id AND draft.member_id=thread.member_id AND draft.source_key='reply:'||draft.id
+      AND draft.id=json_extract(failed.input_json,'$.replyId') AND draft.text=json_extract(failed.input_json,'$.message') AND json_extract(failed.input_json,'$.actor')='agent'
+      AND thread.id=? AND thread.owner_id=failed.owner_id AND thread.member_id=failed.member_id AND thread.campaign_id=failed.campaign_id AND thread.lead_id=failed.lead_id
+      AND thread.sender_id=failed.sender_id AND thread.sender_id=json_extract(failed.input_json,'$.senderAccountId') AND thread.recipient_id=json_extract(failed.input_json,'$.recipientId')
+      AND thread.id=json_extract(failed.input_json,'$.conversationId') AND thread.profile_url=json_extract(failed.input_json,'$.profileUrl')
+      AND device.id=? AND device.owner_id=thread.owner_id AND device.member_id=thread.member_id AND device.account_id=thread.sender_id AND device.enabled=1 AND device.authenticated=1 AND device.last_seen_at>?
+      AND policy.owner_id=thread.owner_id AND policy.member_id=thread.member_id AND policy.status='active' AND json_extract(policy.data_json,'$.chatEnabled')=1
+      AND policy.updated_at<=failed.updated_at AND COALESCE(json_extract(policy.data_json,'$.chatPolicyVersion'),0)=COALESCE(json_extract(failed.input_json,'$.policyVersion'),0)
+      AND binding.active_session_id=json_extract(failed.input_json,'$.sessionId') AND binding.version=json_extract(failed.input_json,'$.bindingVersion')
+      AND question.id=? AND question.direction='inbound' AND question.eligible=1 AND question.processed=1
+      AND json_array_length(json_extract(failed.input_json,'$.answeredMessageIds'))=1 AND question.id=json_extract(failed.input_json,'$.answeredMessageIds[0]')
+      AND json_extract(thread.memory_json,'$.lastDecision.action')='reply' AND json_extract(thread.memory_json,'$.lastDecision.queued')=1
+      AND question.id=json_extract(thread.memory_json,'$.lastDecision.inboundId') AND json_extract(thread.memory_json,'$.lastDecision.snapshotId')=json_extract(failed.input_json,'$.expectedSnapshotId')
+      AND NOT EXISTS (SELECT 1 FROM workbench_prospect_messages later WHERE later.conversation_id=thread.id AND later.rowid>question.rowid AND later.id<>draft.id)
+      AND NOT EXISTS (SELECT 1 FROM workbench_prospect_contact_optouts stopped WHERE stopped.owner_id=thread.owner_id AND stopped.sender_id=thread.sender_id AND stopped.recipient_id=thread.recipient_id)`;
+    const proofValues=[latestRecorded.job_id,composerChangedBeforeDispatch,latestRecorded.id,c.id,row.device_id,new Date(now()-90000).toISOString(),previous.id];
+    if(await db.prepare(proofSql).bind(...proofValues).first())failedComposerProof={sql:proofSql,values:proofValues};
+   }
+   const fresh=resumeFreshness.get(last.id)===true||auditedUnanswered||Boolean(failedComposerProof);
    const confirmedOut=existing.filter(m=>m.direction==='outbound'&&(m.status==='sent'||m.job_status==='done'||!m.job_id&&m.status==='received'&&c.last_read_at&&m.created_at<=c.last_read_at)).at(-1);
    const answered=!!confirmedOut&&(previous?(confirmedOut.row_order??0)>(previous.row_order??0):!!postedAt&&!!confirmedOut.posted_at&&Date.parse(confirmedOut.posted_at)>Date.parse(postedAt));
    if(answered)statements.push(db.prepare(`UPDATE workbench_prospect_messages SET processed=1 WHERE conversation_id=? AND direction='inbound' AND eligible=1 AND source_key IN (SELECT value FROM json_each(?)) AND ${resumeGuard}`).bind(c.id,JSON.stringify(read.messages.filter(m=>m.direction==='inbound').map(m=>m.id)),...values,c.id,c.version,RESUME_PENDING));
    if(fresh&&!answered){
     resumeVerified=true;
-    statements.push(db.prepare(`UPDATE workbench_prospect_messages SET processed=1 WHERE conversation_id=? AND direction='inbound' AND eligible=1 AND source_key!=? AND ${resumeGuard}`).bind(c.id,last.id,...values,c.id,c.version,RESUME_PENDING));
-    statements.push(db.prepare(`UPDATE workbench_prospect_messages SET eligible=1,processed=0 WHERE conversation_id=? AND source_key=? AND direction='inbound' AND ${resumeGuard}`).bind(c.id,last.id,...values,c.id,c.version,RESUME_PENDING));
+    const verifiedGuard=failedComposerProof?`${resumeGuard} AND EXISTS (${failedComposerProof.sql})`:resumeGuard;
+    const verifiedValues=[...values,c.id,c.version,RESUME_PENDING,...(failedComposerProof?.values??[])];
+    statements.push(db.prepare(`UPDATE workbench_prospect_messages SET processed=1 WHERE conversation_id=? AND direction='inbound' AND eligible=1 AND source_key!=? AND ${verifiedGuard}`).bind(c.id,last.id,...verifiedValues));
+    statements.push(db.prepare(`UPDATE workbench_prospect_messages SET eligible=1,processed=0 WHERE conversation_id=? AND source_key=? AND direction='inbound' AND ${verifiedGuard}`).bind(c.id,last.id,...verifiedValues));
    }
   }
   statements.push(db.prepare(`UPDATE workbench_prospect_conversations SET last_read_at=CASE WHEN ?=1 THEN ? ELSE last_read_at END,last_snapshot_id=?,has_baseline=CASE WHEN ?=1 THEN 1 ELSE has_baseline END,last_message_at=?,last_message_preview=?,mode=CASE WHEN ?=1 AND ${recoverableReadPauseSql} THEN 'agent' ELSE mode END,handoff_reason=CASE WHEN ?=1 AND ${replaceableReadHandoffSql} THEN '会话读取尚不可靠，已暂停自动回复；请稍后重新同步，核实消息后再继续。' WHEN ?=1 AND ${recoverableReadPauseSql} THEN NULL ELSE handoff_reason END,version=version+?,processing_token=CASE WHEN ?=1 THEN NULL ELSE processing_token END,processing_until=CASE WHEN ?=1 THEN NULL ELSE processing_until END,updated_at=? WHERE id=? AND EXISTS (${guard})`).bind(read.reliable?1:0,read.observedAt,read.reliable||read.covered===true?read.snapshotId:null,read.reliable?1:0,last?.postedAt??(last?read.observedAt:c.last_message_at),last?text(last.text,200):c.last_message_preview,recovering&&(!resuming||resumeVerified)?1:0,automatic&&!read.reliable?1:0,recovering&&(!resuming||resumeVerified)?1:0,changed||!read.reliable?1:0,changed||!read.reliable?1:0,changed||!read.reliable?1:0,time,c.id,...values));

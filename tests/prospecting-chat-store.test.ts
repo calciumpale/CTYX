@@ -781,6 +781,47 @@ test('explicit resume does not replay an already eligible question answered dire
  assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',async()=>{assert.fail('an eligible but answered question must not replay');}),false);
 });
 
+for(const scenario of ['exact latest','no resume','other failure','later inbound','later outbound','missing answer proof','changed policy','incomplete read'] as const)test(`an untimed composer failure can resume only its approved latest question: ${scenario}`,async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);
+ await f.chat.settings('owner-a','member-a',x.campaign.id,true);
+ await readConversation(f,x,[],'composer-baseline');f.advance(61000);
+ const inbound={id:'composer-inbound',direction:'inbound' as const,text:'现在80-100平的空置商铺还有吗'};
+ await readConversation(f,x,[inbound],'composer-first-read',true);
+ const decisions:string[]=[];
+ const decide=async(_owner:string,_origin:string,request:Parameters<typeof chooseProspectChatAction>[0])=>{
+  decisions.push(...request.pending!.map(message=>message.id));
+  return {action:'reply' as const,reply:decisions.length===1?'一间88㎡的空置商铺。\n请核实现况。':'一间88㎡的空置商铺，现况待核实。',...(scenario==='missing answer proof'?{}:{answeredMessageIds:[request.inbound.id]})};
+ };
+ assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',decide),true);
+ const first=(await f.store.claim(x.device.deviceId,false,true))!;assert.equal(first.kind,'reply');
+ await f.store.complete(x.device.deviceId,first.id,first.leaseToken,{outcome:'failed',error:scenario==='other failure'?'发送按钮不可操作，请检查对方的私信设置。':'私信输入框的文案与批准的内容不一致，未发送。'});
+ const conversation=async()=>(await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations[0];
+ let c=await conversation();assert.equal(c.mode,'human');
+ if(scenario==='later inbound'||scenario==='later outbound'){
+  f.advance(31000);
+  const later={id:'composer-later',direction:scenario==='later inbound'?'inbound' as const:'outbound' as const,text:'更新的会话消息'};
+  await readConversation(f,x,[inbound,later],'composer-newer-read',true);c=await conversation();
+ }
+ if(scenario==='changed policy'){
+  await f.chat.settings('owner-a','member-a',x.campaign.id,true,{libraryIds:[],replyDailyLimit:5,conversationReplyLimit:5,replyHoursEnabled:false,workStart:'08:30',workEnd:'21:30'});
+  c=await conversation();
+ }
+ if(scenario!=='no resume')await f.chat.resume('owner-a','member-a',c.id,c.version);
+ assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',decide),false);
+ f.advance(31000);await readConversation(f,x,[inbound],'composer-after-resume',scenario!=='incomplete read');
+ const mayReply=scenario==='exact latest';
+ assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',decide),mayReply);
+ assert.equal(decisions.length,mayReply?2:1);
+ assert.equal(f.sqlite.prepare('SELECT status FROM workbench_prospect_jobs WHERE id=?').get(first.id)?.status,'failed');
+ if(mayReply){
+  f.advance(31000);
+  const newReply=(await f.store.claim(x.device.deviceId,false,true))!;assert.equal(newReply.kind,'reply');
+  assert.notEqual(newReply.input.replyId,first.input.replyId);assert.equal(newReply.input.expectedSnapshotId,'composer-after-resume');
+  assert.deepEqual(newReply.input.answeredMessageIds,[decisions[0]]);assert.equal(decisions[0],decisions[1]);
+  assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',decide),false);
+ }else assert.equal(await f.store.claim(x.device.deviceId,false,true),null);
+});
+
 for(const scenario of ['exact latest','older visible','later inbound','later outbound'] as const)test(`explicit resume handles an audited untimed handoff with ${scenario}`,async t=>{
  const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);
  await f.chat.settings('owner-a','member-a',x.campaign.id,true);

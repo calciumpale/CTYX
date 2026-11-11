@@ -32,10 +32,10 @@ async function prepared(f:ReturnType<typeof fixture>){
  const snapshot=await f.chat.snapshot('owner-a','member-a','sales',campaign.id);
  return{device,campaign,lead,conversation:snapshot.conversations[0]};
 }
-async function readConversation(f:ReturnType<typeof fixture>,x:Awaited<ReturnType<typeof prepared>>,messages:{id:string;direction:'inbound'|'outbound';text:string;postedAt?:string}[],snapshotId='snapshot-1'){
+async function readConversation(f:ReturnType<typeof fixture>,x:Awaited<ReturnType<typeof prepared>>,messages:{id:string;direction:'inbound'|'outbound';text:string;postedAt?:string}[],snapshotId='snapshot-1',covered?:boolean){
  await f.store.seen(x.device.deviceId,{authenticated:true,accountId:'MS4wSender001'});
  await f.chat.schedule(x.device.deviceId);const job=(await f.store.claim(x.device.deviceId,false,true))!;assert.equal(job.kind,'readConversation');
- await f.store.complete(x.device.deviceId,job.id,job.leaseToken,{senderAccountId:'MS4wSender001',recipientId:'MS4wRecipient001',observedAt:f.now(),snapshotId,reliable:true,messages});
+ await f.store.complete(x.device.deviceId,job.id,job.leaseToken,{senderAccountId:'MS4wSender001',recipientId:'MS4wRecipient001',observedAt:f.now(),snapshotId,reliable:true,covered,messages});
  return job;
 }
 
@@ -893,10 +893,12 @@ test('a retry chain invalidated before queue insertion cannot authorize a reply'
 });
 
 
-async function waitingReply(f:ReturnType<typeof fixture>){
+async function waitingReply(f:ReturnType<typeof fixture>,audited=false){
  const x=await prepared(f);await f.chat.settings('owner-a','member-a',x.campaign.id,true,{libraryIds:[],replyDailyLimit:1,conversationReplyLimit:1,replyHoursEnabled:false,workStart:'08:30',workEnd:'21:30'});f.advance(61000);
- const inbound={id:'waiting-turn',direction:'inbound' as const,text:'想找80到100平空铺',postedAt:f.now()};await readConversation(f,x,[inbound],'waiting-original');let decisions=0;
- const decide=async()=>{decisions++;return{action:'reply' as const,reply:'您希望在哪个区域找铺？',memory:{needs:{},stage:'qualifying' as const,contactCaptured:false,contactDeclines:1,contactAsks:1,summary:'同一轮只更新一次'}};};
+ const inbound={id:'waiting-turn',direction:'inbound' as const,text:'想找80到100平空铺',postedAt:f.now()};
+ const earlier={id:'waiting-prefix',direction:'inbound' as const,text:'你好',postedAt:f.now()};
+ await readConversation(f,x,audited?[earlier,inbound]:[inbound],'waiting-original');let decisions=0;
+ const decide=async(_owner?:string,_origin?:string,input?:Parameters<typeof chooseProspectChatAction>[0])=>{decisions++;return{action:'reply' as const,reply:'您希望在哪个区域找铺？',...(audited&&input?{answeredMessageIds:[input.inbound.id]}:{}),memory:{needs:{},stage:'qualifying' as const,contactCaptured:false,contactDeclines:1,contactAsks:1,summary:'同一轮只更新一次'}};};
  await f.chat.processOne('owner-a','member-a','https://example.test',decide);const first=(await f.store.claim(x.device.deviceId,false,true))!;
  const failed=async(job:typeof first)=>f.store.complete(x.device.deviceId,job.id,job.leaseToken,{outcome:'failed',retryable:true,errorCode:'ACCOUNT_VERIFICATION_PENDING',error:'暂未核实当前账号，请等待页面恢复。'});await failed(first);
  return{x,inbound,first,decide,failed,decisions:()=>decisions};
@@ -910,6 +912,32 @@ test('a verified pre-dispatch wait retains one reply, memory and processed turn 
  f.advance(31000);await readConversation(f,w.x,[w.inbound],'waiting-original');const retry=(await f.store.claim(w.x.device.deviceId,false,true))!;assert.equal(retry.kind,'reply');assert.notEqual(retry.id,w.first.id);assert.equal(retry.input.replyId,w.first.input.replyId);assert.deepEqual(retry.input,w.first.input);
  await f.store.complete(w.x.device.deviceId,w.first.id,w.first.leaseToken,{outcome:'submitted'});assert.equal(f.sqlite.prepare('SELECT job_id FROM workbench_prospect_messages WHERE id=?').get(String(w.first.input.replyId))?.job_id,retry.id);
  await f.store.complete(w.x.device.deviceId,retry.id,retry.leaseToken,{outcome:'submitted'});assert.equal((await f.chat.snapshot('owner-a','member-a','sales',w.x.campaign.id,w.x.conversation.id)).messages.filter(m=>m.actor==='agent').length,1);assert.equal(w.decisions(),1);
+});
+
+for(const scenario of ['known-prefix omitted','cancelled by old reader','later inbound','later outbound','manual takeover','expired'] as const)test(`audited pre-dispatch retry handles ${scenario} without changing the reply`,async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const w=await waitingReply(f,true);f.advance(61000);
+ const draft=()=>f.sqlite.prepare('SELECT status FROM workbench_prospect_messages WHERE id=?').get(String(w.first.input.replyId))?.status;
+ if(scenario==='manual takeover'){
+  const conversation=async()=>(await f.chat.snapshot('owner-a','member-a','sales',w.x.campaign.id)).conversations[0];
+  const before=await conversation();await f.chat.takeover('owner-a','member-a',before.id,before.version);
+  const after=await conversation();await f.chat.resume('owner-a','member-a',after.id,after.version);
+ }else if(scenario!=='known-prefix omitted'){
+  const extra=scenario==='later inbound'?{id:'later-inbound',direction:'inbound' as const,text:'还有别的面积吗'}:
+    scenario==='later outbound'?{id:'later-outbound',direction:'outbound' as const,text:'销售已回复'}:undefined;
+  await readConversation(f,w.x,extra?[w.inbound,extra]:[w.inbound],'cancelled-snapshot',false);
+  assert.equal(draft(),'cancelled');
+  f.advance(scenario==='expired'?15*60000:31000);
+ }
+ await readConversation(f,w.x,[w.inbound],'refreshed-waiting-snapshot',true);
+ const mayRetry=scenario==='known-prefix omitted'||scenario==='cancelled by old reader';
+ if(mayRetry){
+  const retry=(await f.store.claim(w.x.device.deviceId,false,true))!;assert.equal(retry.kind,'reply');
+  assert.equal(retry.input.expectedSnapshotId,'refreshed-waiting-snapshot');
+  assert.deepEqual(retry.input,{...w.first.input,expectedSnapshotId:'refreshed-waiting-snapshot'});
+  assert.equal(w.decisions(),1);
+ }else{
+  assert.equal(draft(),'cancelled');assert.equal(await f.store.claim(w.x.device.deviceId,false,true),null);
+ }
 });
 
 test('a logical reply automatically retries twice then needs one manual sync authorization after cooldown',async t=>{

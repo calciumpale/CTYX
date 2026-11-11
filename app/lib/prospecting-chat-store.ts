@@ -14,10 +14,12 @@ interface ConversationRow {id:string;owner_id:string;member_id:string;campaign_i
 interface MessageRow {id:string;conversation_id:string;owner_id:string;member_id:string;source_key:string;direction:'inbound'|'outbound';actor:ProspectChatMessage['actor'];text:string;content_type?:'text'|'image';status:ProspectChatMessage['status'];posted_at:string|null;created_at:string;error:string|null;job_id:string|null;eligible:number;processed:number;row_order?:number;job_status?:string;job_error?:string|null;job_started_at?:string|null;job_result_json?:string|null;confirmed_job_kind?:'send'|'reply'|null}
 interface PoolRow {id:string;conversation_id:string;nickname:string;contact_type:ProspectCapturedLead['contactType'];contact_value:string;grade:ProspectCapturedLead['grade'];score:number;reason:string;assigned_member_id:string|null;assigned_name:string|null;status:ProspectCapturedLead['status'];updated_at:string}
 interface DeviceRow {id:string;owner_id:string;member_id:string;account_id:string|null;enabled:number;authenticated:number;last_seen_at:string|null}
-interface CampaignRow {id:string;owner_id:string;member_id:string;status:string;data_json:string}
+interface CampaignRow {id:string;owner_id:string;member_id:string;status:string;data_json:string;updated_at:string}
 const conflict=()=>new DomainError('会话已更新，请刷新后重试',409);
 const publicConversation=(r:ConversationRow):ProspectChatConversation=>({id:r.id,campaignId:r.campaign_id,leadId:r.lead_id,nickname:r.nickname,recipientId:r.recipient_id,profileUrl:r.profile_url,mode:r.mode,status:r.status,version:r.version,lastMessageAt:r.last_message_at,lastMessagePreview:r.last_message_preview,...(r.last_synced_at?{lastSyncedAt:r.last_synced_at}:{}),...(r.handoff_reason?{handoffReason:r.handoff_reason}:{}),memory:{...normalizeChatMemory(r.memory_json),contactCaptured:normalizeChatMemory(r.memory_json).contactCaptured||!!r.contact_captured},...(r.close_reason?{closeReason:r.close_reason}:{}),updatedAt:r.updated_at});
 const retryableResult=(value:unknown)=>{const v=object(value);return v.outcome==='failed'&&v.retryable===true&&v.errorCode==='ACCOUNT_VERIFICATION_PENDING';};
+const staleReplyCancellation='会话或任务已改变，原待发回复已取消';
+const cancelledReplyRecoveryMs=15*60_000;
 function publicMessage(r:MessageRow):ProspectChatMessage{
  const metadata=r.job_result_json?object(JSON.parse(r.job_result_json)):{};
  const retryable=r.job_status==='failed'&&retryableResult(metadata);
@@ -142,7 +144,7 @@ export function createProspectingChatStore(db:D1Database,now:()=>number=Date.now
   ];
  }
  function waitingCancellation(ownerId:string,memberId:string,campaignId?:string,guard?:string,values:unknown[]=[]){
-  return db.prepare(`UPDATE workbench_prospect_messages SET status='cancelled',error='会话或任务已改变，原待发回复已取消' WHERE owner_id=? AND member_id=? AND status='waiting'${campaignId?' AND conversation_id IN (SELECT id FROM workbench_prospect_conversations WHERE campaign_id=?)':''}${guard?` AND conversation_id=(SELECT id FROM workbench_prospect_conversations WHERE processing_token=?) AND EXISTS (${guard})`:''}`).bind(ownerId,memberId,...(campaignId?[campaignId]:[]),...(guard?[values.at(-1)]:[]),...values);
+  return db.prepare(`UPDATE workbench_prospect_messages SET status='cancelled',error='会话控制或任务设置已取消待发回复' WHERE owner_id=? AND member_id=? AND status='waiting'${campaignId?' AND conversation_id IN (SELECT id FROM workbench_prospect_conversations WHERE campaign_id=?)':''}${guard?` AND conversation_id=(SELECT id FROM workbench_prospect_conversations WHERE processing_token=?) AND EXISTS (${guard})`:''}`).bind(ownerId,memberId,...(campaignId?[campaignId]:[]),...(guard?[values.at(-1)]:[]),...values);
  }
  async function settings(ownerId:string,memberId:string,campaignId:string,enabled:boolean,policyValue?:unknown){
   const previous=await campaign(ownerId,memberId,campaignId);if(typeof enabled!=='boolean')throw new DomainError('会话开关参数无效');const time=stamp();
@@ -422,31 +424,55 @@ export function createProspectingChatStore(db:D1Database,now:()=>number=Date.now
    statements.push(...closeStatements(c,reason,memory,guard,values));
    statements.push(db.prepare(`UPDATE workbench_prospect_conversations SET status='closed',close_reason=?,memory_json=?,processing_token=NULL,processing_until=NULL,version=version+1,updated_at=? WHERE id=? AND EXISTS (${guard})`).bind(reason,JSON.stringify(memory),time,c.id,...values));
   }
-  if(read.reliable)for(const draft of waiting){
+  const recentCancelled=existing.filter(message=>message.status==='cancelled'&&message.error===staleReplyCancellation&&message.job_id&&message.job_status==='failed'&&Date.parse(message.created_at)>=now()-cancelledReplyRecoveryMs);
+  const observedQuestion=last?.direction==='inbound'?bySource.get(last.id):undefined;
+  const decisionAudit=object(audit.lastDecision);
+  if(read.reliable)for(const draft of [...waiting,...recentCancelled]){
    const previous=await db.prepare("SELECT * FROM workbench_prospect_jobs WHERE id=? AND kind='reply' AND status='failed'").bind(draft.job_id).first<ProspectJobRow>();if(!previous)continue;
    const planned=object(JSON.parse(previous.input_json)),metadata=previous.result_json?object(JSON.parse(previous.result_json)):{};
    const actor=planned.actor,policyVersion=Number(object(JSON.parse(task.data_json)).chatPolicyVersion)||0;
    const novelTurn=read.messages.some(m=>!bySource.has(m.id));
-   const invalid=stopObserved||!automatic||c.mode!==actor||read.snapshotId!==planned.expectedSnapshotId||novelTurn||actor==='agent'&&(Number(planned.policyVersion)||0)!==policyVersion;
-   if(invalid){statements.push(db.prepare(`UPDATE workbench_prospect_messages SET status='cancelled',error='会话或任务已改变，原待发回复已取消' WHERE id=? AND job_id=? AND status='waiting' AND EXISTS (${guard})`).bind(draft.id,previous.id,...values));continue;}
+   const cancelled=draft.status==='cancelled';
+   const snapshotChanged=read.snapshotId!==planned.expectedSnapshotId;
+   const scopeChanged=stopObserved||!automatic||c.mode!==actor||novelTurn||actor==='agent'&&(Number(planned.policyVersion)||0)!==policyVersion;
+   const needsProof=snapshotChanged||cancelled;
+   const sameAuditedTurn=read.covered===true&&!scopeChanged&&!resuming&&!unresolved&&actor==='agent'&&taskView.isActive&&
+    planned.sessionId===taskView.sessionId&&planned.bindingVersion===taskView.bindingVersion&&previous.device_id===row.device_id&&
+    !draft.posted_at&&retryableResult(metadata)&&metadata.replyWait===true&&task.updated_at<=previous.updated_at&&
+    observedQuestion?.eligible===1&&observedQuestion.processed===1&&sessionIds.has(observedQuestion.id)&&!taskView.state.ignoredSourceIds.includes(observedQuestion.id)&&
+    decisionAudit.action==='reply'&&decisionAudit.queued===true&&decisionAudit.inboundId===observedQuestion.id&&decisionAudit.snapshotId===planned.expectedSnapshotId&&
+    Array.isArray(planned.answeredMessageIds)&&planned.answeredMessageIds.length===1&&planned.answeredMessageIds[0]===observedQuestion.id&&
+    !platformExisting.some(message=>message.id!==draft.id&&(message.row_order??0)>(observedQuestion.row_order??0));
+   const canRecoverCancelled=snapshotChanged&&!c.handoff_reason&&c.last_read_at&&c.last_read_at>=previous.updated_at&&
+    c.last_snapshot_id&&c.last_snapshot_id!==planned.expectedSnapshotId&&Date.parse(previous.updated_at)>=now()-cancelledReplyRecoveryMs;
+   if(scopeChanged||needsProof&&!sameAuditedTurn||cancelled&&!canRecoverCancelled){
+    if(!cancelled)statements.push(db.prepare(`UPDATE workbench_prospect_messages SET status='cancelled',error=? WHERE id=? AND job_id=? AND status='waiting' AND EXISTS (${guard})`).bind(scopeChanged?'会话有新消息或任务设置已取消待发回复':staleReplyCancellation,draft.id,previous.id,...values));
+    continue;
+   }
    const retryAttempt=Number(metadata.retryAttempt)||0,manual=retryAttempt>=2&&input.manualSync===true,authorized=metadata.manualAuthorized===true||manual;
-   if(manual)statements.push(db.prepare(`UPDATE workbench_prospect_jobs SET result_json=json_set(result_json,'$.manualAuthorized',json('true')) WHERE id=? AND status='failed' AND EXISTS (${guard}) AND EXISTS (SELECT 1 FROM workbench_prospect_messages WHERE id=? AND job_id=? AND status='waiting')`).bind(previous.id,...values,draft.id,previous.id));
+   if(manual)statements.push(db.prepare(`UPDATE workbench_prospect_jobs SET result_json=json_set(result_json,'$.manualAuthorized',json('true')) WHERE id=? AND status='failed' AND EXISTS (${guard}) AND EXISTS (SELECT 1 FROM workbench_prospect_messages WHERE id=? AND job_id=? AND status=? AND error IS ?)`).bind(previous.id,...values,draft.id,previous.id,draft.status,draft.error));
    if(!Number.isFinite(Date.parse(String(metadata.retryAt)))||Date.parse(String(metadata.retryAt))>now()||retryAttempt>=2&&!authorized)continue;
    const nextId=`pj-${crypto.randomUUID()}`,nextMetadata={evidenceIds:metadata.evidenceIds,decisionReason:metadata.decisionReason,retryAttempt:retryAttempt+1,waitingFromJobId:previous.id,rootReplyJobId:metadata.rootReplyJobId??previous.id};
    statements.push(db.prepare(`INSERT OR IGNORE INTO workbench_prospect_jobs(id,owner_id,member_id,device_id,campaign_id,lead_id,kind,status,input_json,result_json,active_key,sender_id,created_at,updated_at)
-    SELECT ?,prior.owner_id,prior.member_id,prior.device_id,prior.campaign_id,prior.lead_id,'reply','queued',prior.input_json,?, ?,prior.sender_id,?,? FROM workbench_prospect_jobs prior
+    SELECT ?,prior.owner_id,prior.member_id,prior.device_id,prior.campaign_id,prior.lead_id,'reply','queued',json_set(prior.input_json,'$.expectedSnapshotId',?),?, ?,prior.sender_id,?,? FROM workbench_prospect_jobs prior
     JOIN workbench_prospect_messages draft ON draft.job_id=prior.id JOIN workbench_prospect_conversations thread ON thread.id=draft.conversation_id
     JOIN workbench_prospect_campaigns policy ON policy.id=prior.campaign_id JOIN workbench_prospect_devices device ON device.id=prior.device_id
     WHERE prior.id=? AND prior.status='failed' AND prior.input_json=? AND json_extract(prior.result_json,'$.replyWait')=1 AND json_extract(prior.result_json,'$.retryable')=1 AND json_extract(prior.result_json,'$.errorCode')='ACCOUNT_VERIFICATION_PENDING'
      AND json_extract(prior.result_json,'$.retryAt')<=? AND (COALESCE(json_extract(prior.result_json,'$.retryAttempt'),0)<2 OR json_extract(prior.result_json,'$.manualAuthorized')=1)
-     AND draft.id=? AND draft.status='waiting' AND draft.id=json_extract(prior.input_json,'$.replyId') AND draft.text=json_extract(prior.input_json,'$.message') AND draft.actor=json_extract(prior.input_json,'$.actor')
+     AND draft.id=? AND draft.status=? AND draft.error IS ? AND draft.posted_at IS NULL AND draft.id=json_extract(prior.input_json,'$.replyId') AND draft.text=json_extract(prior.input_json,'$.message') AND draft.actor=json_extract(prior.input_json,'$.actor')
      AND thread.owner_id=prior.owner_id AND thread.member_id=prior.member_id AND thread.campaign_id=prior.campaign_id AND thread.sender_id=prior.sender_id AND thread.recipient_id=json_extract(prior.input_json,'$.recipientId')
-     AND thread.profile_url=json_extract(prior.input_json,'$.profileUrl') AND thread.status='active' AND thread.version=? AND thread.mode=draft.actor AND thread.last_snapshot_id=json_extract(prior.input_json,'$.expectedSnapshotId')
+     AND thread.profile_url=json_extract(prior.input_json,'$.profileUrl') AND thread.status='active' AND thread.version=? AND thread.mode=draft.actor AND thread.last_snapshot_id=?
      AND policy.owner_id=prior.owner_id AND policy.member_id=prior.member_id AND policy.status='active' AND json_extract(policy.data_json,'$.chatEnabled')=1 AND (draft.actor='human' OR COALESCE(json_extract(prior.input_json,'$.policyVersion'),0)=COALESCE(json_extract(policy.data_json,'$.chatPolicyVersion'),0))
      AND device.owner_id=prior.owner_id AND device.member_id=prior.member_id AND device.enabled=1 AND device.authenticated=1 AND device.account_id=prior.sender_id AND device.last_seen_at>?
      AND NOT EXISTS (SELECT 1 FROM workbench_prospect_contact_optouts stopped WHERE stopped.owner_id=prior.owner_id AND stopped.sender_id=prior.sender_id AND stopped.recipient_id=thread.recipient_id)
-     AND NOT EXISTS (SELECT 1 FROM workbench_prospect_jobs uncertain WHERE uncertain.owner_id=prior.owner_id AND uncertain.sender_id=prior.sender_id AND json_extract(uncertain.input_json,'$.recipientId')=thread.recipient_id AND ${unresolvedOutboundSql('uncertain')}) AND EXISTS (${guard})`).bind(nextId,JSON.stringify(nextMetadata),`chat-reply:${c.id}`,time,time,previous.id,previous.input_json,time,draft.id,c.version+(changed?1:0),new Date(now()-90000).toISOString(),...values));
-   statements.push(db.prepare("UPDATE workbench_prospect_messages SET job_id=?,status='queued',error=NULL WHERE id=? AND job_id=? AND status='waiting' AND EXISTS (SELECT 1 FROM workbench_prospect_jobs WHERE id=? AND status='queued')").bind(nextId,draft.id,previous.id,nextId));
+     AND (?=0 OR (policy.updated_at<=prior.updated_at AND json_extract(thread.memory_json,'$.lastDecision.inboundId')=? AND json_extract(thread.memory_json,'$.lastDecision.snapshotId')=json_extract(prior.input_json,'$.expectedSnapshotId')
+      AND EXISTS (SELECT 1 FROM workbench_prospect_memory_bindings b JOIN workbench_prospect_memory_sources source ON source.session_id=b.active_session_id
+       JOIN workbench_prospect_messages question ON question.id=source.message_id AND question.conversation_id=thread.id AND question.direction='inbound' AND question.eligible=1 AND question.processed=1
+       WHERE b.thread_id=thread.id AND b.active_session_id=json_extract(prior.input_json,'$.sessionId') AND b.version=json_extract(prior.input_json,'$.bindingVersion') AND question.id=?
+        AND NOT EXISTS (SELECT 1 FROM workbench_prospect_messages later WHERE later.conversation_id=thread.id AND later.rowid>question.rowid AND later.id<>draft.id))))
+     AND NOT EXISTS (SELECT 1 FROM workbench_prospect_jobs uncertain WHERE uncertain.owner_id=prior.owner_id AND uncertain.sender_id=prior.sender_id AND json_extract(uncertain.input_json,'$.recipientId')=thread.recipient_id AND ${unresolvedOutboundSql('uncertain')}) AND EXISTS (${guard})`).bind(nextId,read.snapshotId,JSON.stringify(nextMetadata),`chat-reply:${c.id}`,time,time,previous.id,previous.input_json,time,draft.id,draft.status,draft.error,c.version+(changed?1:0),read.snapshotId,new Date(now()-90000).toISOString(),needsProof?1:0,observedQuestion?.id??null,observedQuestion?.id??null,...values));
+   statements.push(db.prepare("UPDATE workbench_prospect_messages SET job_id=?,status='queued',error=NULL WHERE id=? AND job_id=? AND status=? AND error IS ? AND EXISTS (SELECT 1 FROM workbench_prospect_jobs WHERE id=? AND status='queued')").bind(nextId,draft.id,previous.id,draft.status,draft.error,nextId));
+   if(snapshotChanged)statements.push(db.prepare("UPDATE workbench_prospect_conversations SET memory_json=json_set(memory_json,'$.lastDecision.snapshotId',?) WHERE id=? AND EXISTS (SELECT 1 FROM workbench_prospect_jobs WHERE id=? AND status='queued')").bind(read.snapshotId,c.id,nextId));
   }
   statements.push(db.prepare("UPDATE workbench_prospect_jobs SET status='done',result_json=?,error=?,active_key=NULL,updated_at=? WHERE id=? AND status='running' AND lease_hash=?").bind(JSON.stringify({summary:read.reliable?`已同步${read.messages.length}条可核实消息`:'读取结果未通过可靠性检查，未启动自动回复',reliable:read.reliable,observedAt:read.observedAt}),read.reliable?null:'读取结果尚不可靠；请稍后重新同步，核实消息后再继续。',time,...values));
   await db.batch(statements);

@@ -2,7 +2,7 @@ import {redactKnowledgeText} from './knowledge-agent.ts';
 import type {KnowledgeAgentRequest,KnowledgeAgentTools,KnowledgePreparedContext} from './knowledge-agent.ts';
 import {readPropertySources,type PropertySourceOptions} from './property-source-store.ts';
 import {parsePropertySources} from './property-records.ts';
-import {formatPropertyAnswer,isPropertyQuestion,matchPropertyRows,parsePropertyQuery,type PropertyQuery} from './property-query.ts';
+import {formatPropertyAnswer,isPropertyInventoryInquiry,isPropertyQuestion,matchPropertyRows,parsePropertyQuery,type PropertyQuery} from './property-query.ts';
 import {formatCustomerPropertyReply} from './property-customer-reply.ts';
 import {CUSTOMER_REPLY_MAX_CHARS} from './prospecting-reply-limit.ts';
 
@@ -78,7 +78,8 @@ export async function preparePropertyKnowledge(db:D1Database,ownerId:string,requ
   let query=base?applyDelta(base,first,question):first;
   for(const turn of turns.slice(1))query=applyDelta(query,await parsePropertyQuery(turn,rows,extract),turn);
   const customerReply = request.audience === 'customer';
-  if (customerReply && query.status === 'any' && /有(?:没有|无|吗)|还有|想租|找|推荐/.test(question) && !/在租|已租|履约/.test(question)) {
+  const asksForVacancy = /有(?:没有|无|吗)|还有|想租|找|推荐/.test(question) || /店铺/.test(question) && isPropertyInventoryInquiry(question);
+  if (customerReply && query.status === 'any' && asksForVacancy && !/在租|已租|已出租|出租中|租赁中|履约/.test(question)) {
    query.status = 'vacant';
   }
   const matches=matchPropertyRows(rows,query);

@@ -138,7 +138,7 @@ test('conversation settings preserve drafts, save the loaded enabled state, and 
     await page.getByRole('button', { name: '开启 AI 跟进', exact: true }).click();
     await page.getByRole('button', { name: '关闭 AI 跟进', exact: true }).waitFor();
     await page.getByText('AI 助手在线', { exact: true }).waitFor();
-    await syncDetails.getByText('同步已停滞', { exact: true }).waitFor();
+    assert.doesNotMatch(await syncDetails.textContent(), /同步已停滞/, 'A human-controlled conversation is outside routine automatic sync');
     assert.equal(await page.getByLabel('每日回复上限', { exact: true }).inputValue(), '17', 'Enabled-only responses preserve pending settings');
     assert.equal(posts.find(item => item.action === 'chatSettings').policy, undefined);
     rejectSave = true;

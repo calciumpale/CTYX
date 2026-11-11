@@ -283,7 +283,13 @@ export class Journal {
     if (job.kind === 'reply' && proof?.conversation !== undefined) {
       const baseline = proof.conversation;
       if (!object(baseline) || baseline.snapshotId !== job.input.expectedSnapshotId || baseline.observedSnapshotId !== undefined && (!id(baseline.observedSnapshotId) || !baseline.covered) || typeof baseline.covered !== 'boolean' || !Array.isArray(baseline.priorMessageKeys) || baseline.priorMessageKeys.length > 500 || baseline.priorMessageKeys.some(key => !id(key)) || new Set(baseline.priorMessageKeys).size !== baseline.priorMessageKeys.length || baseline.latestMessageKey !== baseline.priorMessageKeys.at(-1)) fail('回复提交前的会话证据不完整，未发送。', 'INVALID_CONVERSATION_PROOF');
-      entry.conversationBaseline = { snapshotId: baseline.snapshotId, ...(baseline.observedSnapshotId ? { observedSnapshotId: baseline.observedSnapshotId } : {}), covered: baseline.covered, priorMessageKeys: [...baseline.priorMessageKeys], ...(baseline.latestMessageKey ? { latestMessageKey: baseline.latestMessageKey } : {}) };
+      const snapshotComparison = baseline.observedSnapshotId && ['canonical_rows', 'one_oldest_missing'].includes(baseline.snapshotComparison)
+        ? baseline.snapshotComparison : undefined;
+      entry.conversationBaseline = {
+        snapshotId: baseline.snapshotId, ...(baseline.observedSnapshotId ? { observedSnapshotId: baseline.observedSnapshotId } : {}),
+        ...(snapshotComparison ? { snapshotComparison } : {}), covered: baseline.covered,
+        priorMessageKeys: [...baseline.priorMessageKeys], ...(baseline.latestMessageKey ? { latestMessageKey: baseline.latestMessageKey } : {}),
+      };
     }
     entry.dispatchedAt = new Date().toISOString(); entry.recipientKey = recipientKey; this.data.lastSendAt = Date.now(); await this.save();
   }
@@ -331,6 +337,24 @@ export async function deviceStatusHeartbeat(rawConfig, { fetchImpl = fetch, sign
 }
 
 const VERIFICATION_REASONS = new Set(['owner_proof_missing', 'identity_route_changed', 'task_header_missing', 'account_ambiguous', 'account_read_interrupted', 'navigation_failed', 'owner_route_changed', 'owner_controls_timeout', 'owner_controls_replaced', 'owner_handle_missing', 'owner_duplicate_same_handle', 'owner_handle_conflict', 'owner_read_interrupted']);
+
+function safeReplySnapshotDiagnostics(error) {
+  const value = error?.replySnapshotDiagnostics;
+  if (!(error instanceof BridgeError) || error.code !== 'CONVERSATION_CHANGED' || !object(value)) return;
+  if (!['before_fill', 'before_dispatch'].includes(value.stage) || !['cached', 'exact', 'missing'].includes(value.proofSource)) return;
+  const reasons = ['exact_snapshot_required', 'approved_proof_missing', 'observed_unreliable', 'observed_uncovered',
+    'latest_not_inbound', 'latest_ambiguous', 'latest_changed', 'insufficient_rows', 'oldest_row_count', 'row_suffix_mismatch'];
+  if (!reasons.includes(value.reason)) return;
+  const result = { stage: value.stage, proofSource: value.proofSource, reason: value.reason };
+  for (const key of ['cacheHit', 'cacheFresh', 'comparedProof', 'observedReliable', 'observedCovered', 'latestSame']) {
+    if (typeof value[key] === 'boolean') result[key] = value[key];
+  }
+  for (const key of ['approvedRows', 'observedRows', 'observedMessages', 'matchingTailRows']) {
+    if (Number.isSafeInteger(value[key]) && value[key] >= 0 && value[key] <= 10000) result[key] = value[key];
+  }
+  if (['inbound', 'outbound', 'missing'].includes(value.observedLatestDirection)) result.observedLatestDirection = value.observedLatestDirection;
+  return result;
+}
 
 export async function runOnce(rawConfig, {
   adapter, journal, fetchImpl = fetch, signal, heartbeatMs = 30000, jobTimeoutMs = 600000,
@@ -443,8 +467,12 @@ export async function runOnce(rawConfig, {
     else if (error?.code === 'UNAUTHENTICATED') accountFailure = { authenticated: false };
     else if (error?.code === 'ACCOUNT_CHANGED') changedAccountError = error;
     const retryableReply = job.kind === 'reply' && !entry.dispatchedAt && error?.code === 'ACCOUNT_VERIFICATION_PENDING';
-    await journal.finish(job.id, outbound(job.kind) ? { result: { outcome: entry.dispatchedAt ? 'unknown' : 'failed', error: entry.dispatchedAt ? '发送动作已开始，但结果无法确认。请核对原会话；不会重发。' : safeError(error),
-      ...(retryableReply ? { retryable: true, errorCode: 'ACCOUNT_VERIFICATION_PENDING' } : {}) } } : { error: safeError(error) });
+    const replySnapshotDiagnostics = job.kind === 'reply' && !entry.dispatchedAt ? safeReplySnapshotDiagnostics(error) : undefined;
+    await journal.finish(job.id, outbound(job.kind) ? {
+      result: { outcome: entry.dispatchedAt ? 'unknown' : 'failed', error: entry.dispatchedAt ? '发送动作已开始，但结果无法确认。请核对原会话；不会重发。' : safeError(error),
+        ...(retryableReply ? { retryable: true, errorCode: 'ACCOUNT_VERIFICATION_PENDING' } : {}) },
+      ...(replySnapshotDiagnostics ? { replySnapshotDiagnostics } : {}),
+    } : { error: safeError(error) });
   } finally {
     clearInterval(heartbeat); clearTimeout(timer); signal?.removeEventListener('abort', abort); if (heartbeatInFlight) await heartbeatInFlight;
   }

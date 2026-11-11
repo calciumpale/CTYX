@@ -867,6 +867,50 @@ for(const scenario of ['same question','after composer failure','newer inbound',
   f.advance(91000);await f.store.seen(x.device.deviceId,{authenticated:true,accountId:'MS4wSender001'});
   await f.chat.schedule(x.device.deviceId,{quiet:true});assert.equal(await f.store.claim(x.device.deviceId,false,true),null);
   assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',decide),false);
+  const paused=await conversation();await f.chat.resume('owner-a','member-a',paused.id,paused.version);
+  await readConversation(f,x,[inbound],'snapshot-explicit-resume',true);
+  assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',decide),true);
+  assert.equal(decisions.at(-1),decisions[0]);
+  const current=f.sqlite.prepare("SELECT json_extract(memory_json,'$.snapshotRecoveredInboundId') AS marker FROM workbench_prospect_conversations WHERE id=?").get(paused.id);
+  assert.equal(current?.marker,decisions[0]);
+  const explicit=(await f.store.claim(x.device.deviceId,false,true))!;
+  assert.equal(explicit.input.expectedSnapshotId,'snapshot-explicit-resume');
+  await f.store.complete(x.device.deviceId,explicit.id,explicit.leaseToken,{outcome:'failed',error:snapshotError});
+  f.advance(91000);await f.store.seen(x.device.deviceId,{authenticated:true,accountId:'MS4wSender001'});
+  await f.chat.schedule(x.device.deviceId,{quiet:true});assert.equal(await f.store.claim(x.device.deviceId,false,true),null);
+ }
+});
+
+for(const scenario of ['legacy shop search','ordinary conflict','nonlegacy evidence','manual takeover','newer message','expired','uncovered read'] as const)test(`verified quiet read re-evaluates only the old shop-search routing miss: ${scenario}`,async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);
+ await f.chat.settings('owner-a','member-a',x.campaign.id,true);
+ await readConversation(f,x,[],'legacy-shop-baseline');f.advance(61000);
+ const inbound={id:'legacy-shop-inbound',direction:'inbound' as const,text:scenario==='ordinary conflict'?'在嘉兴找商铺有合适的吗？':'你好，在嘉兴找店铺有吗？'};
+ await readConversation(f,x,[inbound],'legacy-shop-original',true);
+ const decisions:string[]=[];
+ const decide=async(_owner:string,_origin:string,request:Parameters<typeof chooseProspectChatAction>[0])=>{
+  decisions.push(request.inbound.id);
+  return {action:'handoff' as const,reason:'资料内容存在冲突，请核实后回复。',knowledgeLookup:{status:'ok' as const,department:'zs' as const,libraryIds:['synthetic-library'],sourceIds:[scenario==='nonlegacy evidence'?'property-record:row':'knowledge-document:chunk']}};
+ };
+ assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',decide),true);
+ const conversation=async()=>(await f.chat.snapshot('owner-a','member-a','sales',x.campaign.id)).conversations[0];
+ const c=await conversation();assert.equal(c.mode,'human');
+ if(scenario==='manual takeover')await f.chat.takeover('owner-a','member-a',c.id,c.version);
+ f.advance(scenario==='expired'?61*60000:91000);await f.store.seen(x.device.deviceId,{authenticated:true,accountId:'MS4wSender001'});
+ await f.chat.schedule(x.device.deviceId,{quiet:true});const read=await f.store.claim(x.device.deviceId,false,true);
+ if(['ordinary conflict','nonlegacy evidence','manual takeover','expired'].includes(scenario)){assert.equal(read,null);return;}
+ assert.equal(read?.kind,'readConversation');
+ const messages=scenario==='newer message'?[inbound,{id:'legacy-shop-new',direction:'inbound',text:'还有其他条件'}]:[inbound];
+ await f.store.complete(x.device.deviceId,read!.id,read!.leaseToken,{senderAccountId:'MS4wSender001',recipientId:'MS4wRecipient001',observedAt:f.now(),snapshotId:'legacy-shop-verified',reliable:true,covered:scenario!=='uncovered read',messages});
+ const recheck=scenario==='legacy shop search';
+ assert.equal((await conversation()).mode,recheck?'agent':'human');
+ assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',decide),recheck);
+ assert.equal(decisions.length,recheck?2:1);
+ if(recheck){
+  assert.equal(decisions[0],decisions[1]);
+  assert.equal((await conversation()).mode,'human');
+  f.advance(91000);await f.store.seen(x.device.deviceId,{authenticated:true,accountId:'MS4wSender001'});
+  await f.chat.schedule(x.device.deviceId,{quiet:true});assert.equal(await f.store.claim(x.device.deviceId,false,true),null);
  }
 });
 

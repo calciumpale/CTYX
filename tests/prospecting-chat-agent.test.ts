@@ -562,6 +562,7 @@ test('customer inventory lookups with missing, unverified, or unsafe record answ
   const failedAnswers:KnowledgeAgentResult[]=[
     {...inventoryAnswer,action:'handoff',route:'no_evidence',answer:undefined,knowledge:[],evidenceIds:[],recordLookup:{kind:'property',total:0,complete:true}},
     {...inventoryAnswer,action:'handoff',route:'failed',answer:undefined,knowledge:[],evidenceIds:[]},
+    {...inventoryAnswer,recordLookup:{kind:'property',total:1,complete:false}},
     {...inventoryAnswer,evidenceIds:[]},
     {...inventoryAnswer,evidenceIds:['property-record:unretrieved']},
     {...inventoryAnswer,route:'direct'},

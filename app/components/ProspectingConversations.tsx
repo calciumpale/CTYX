@@ -221,7 +221,8 @@ export function ProspectingConversations({ campaignId, active, view, blocked, pa
   const syncIssue = Boolean(syncStatus?.error || syncStatus && ['failed', 'unknown', 'cancelled'].includes(syncStatus.status));
   const lastSyncedMs = Date.parse(conversation?.lastSyncedAt || '');
   const hasSynced = Number.isFinite(lastSyncedMs);
-  const syncStalled = Boolean(hasSynced && snapshot?.enabled && !paused && observedAt - lastSyncedMs >= 3 * 60_000);
+  const syncStalled = Boolean(hasSynced && conversation?.mode === 'agent' && conversation.status === 'active' &&
+    snapshot?.enabled && !paused && observedAt - lastSyncedMs >= 3 * 60_000);
   const syncLabel = syncPending && snapshot?.online === false ? '启动本机助手后将继续同步'
     : syncStatus?.status === 'running' ? '正在读取抖音私信' : syncPending ? '等待本机助手同步'
     : syncIssue ? `同步失败：${syncProblem(syncStatus?.error)}`

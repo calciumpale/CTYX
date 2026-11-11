@@ -40,11 +40,40 @@ const replyView = observed => {
   return { latestId: latest.id, rows: observed.proof.rowDigests };
 };
 const sameReplyView = (approved, current) => {
-  if (!approved || !current || approved.latestId !== current.latestId || current.rows.length < 3) return false;
+  if (!approved || !current || approved.latestId !== current.latestId) return false;
   const missingOldest = approved.rows.length - current.rows.length;
-  return (missingOldest === 0 || missingOldest === 1) &&
+  return (missingOldest === 0 || missingOldest === 1 && current.rows.length >= 3) &&
     current.rows.every((row, index) => row === approved.rows[index + missingOldest]);
 };
+
+function snapshotMismatchDiagnostics({ stage, actor, proofSource, cacheHit, cacheFresh, approved, current, observed }) {
+  const latest = observed.messages.at(-1);
+  const rows = observed.proof?.rowDigests ?? [];
+  const approvedRows = approved?.rows.length;
+  const latestSame = approved ? approved.latestId === latest?.id : undefined;
+  let matchingTailRows = 0;
+  while (matchingTailRows < Math.min(approvedRows ?? 0, rows.length) &&
+      approved.rows.at(-1 - matchingTailRows) === rows.at(-1 - matchingTailRows)) {
+    matchingTailRows++;
+  }
+  let reason = 'row_suffix_mismatch';
+  if (actor !== 'agent') reason = 'exact_snapshot_required';
+  else if (!approved) reason = 'approved_proof_missing';
+  else if (!observed.reliable) reason = 'observed_unreliable';
+  else if (!observed.proof?.covered) reason = 'observed_uncovered';
+  else if (latest?.direction !== 'inbound') reason = 'latest_not_inbound';
+  else if (!current) reason = 'latest_ambiguous';
+  else if (!latestSame) reason = 'latest_changed';
+  else if (approvedRows - rows.length === 1 && rows.length < 3) reason = 'insufficient_rows';
+  else if (approvedRows - rows.length < 0 || approvedRows - rows.length > 1) reason = 'oldest_row_count';
+  return {
+    stage, proofSource, reason, cacheHit, cacheFresh, comparedProof: Boolean(approved && current),
+    observedReliable: observed.reliable, observedCovered: observed.proof?.covered === true,
+    observedLatestDirection: latest?.direction ?? 'missing',
+    ...(approved ? { latestSame, approvedRows } : {}),
+    observedRows: rows.length, observedMessages: observed.messages.length, matchingTailRows,
+  };
+}
 
 export function deriveKeywords(input) {
   const raw = input.keywords?.filter(value => typeof value === 'string' && value.trim());
@@ -837,19 +866,32 @@ export class DouyinBrowserAdapter {
     const { page, root, target, stackChat } = await this.openConversation(input, { signal });
     const remembered = this.verifiedReplyViews.get(replyViewKey(input, input.expectedSnapshotId));
     const age = remembered ? Date.now() - remembered.checkedAt : Infinity;
-    let approvedView = age >= 0 && age < TARGET_READ_PROOF_INTERVAL_MS ? remembered.view : null;
-    const verifyConversation = async () => {
+    const cacheFresh = age >= 0 && age < TARGET_READ_PROOF_INTERVAL_MS;
+    let approvedView = cacheFresh ? remembered.view : null;
+    let proofSource = approvedView ? 'cached' : 'missing';
+    let snapshotComparison;
+    const verifyConversation = async stage => {
       if (!conversationReply) return;
       const observed = await readConversationTranscript(root, { ...input, limit: 100, signal, timeoutMs: this.timeoutMs, includeProof: true });
-      if (observed.snapshotId === input.expectedSnapshotId) approvedView = replyView(observed);
-      else if (input.actor !== 'agent' || !sameReplyView(approvedView, replyView(observed))) {
-        fail('会话内容已有变化，请同步最新消息并重新确认回复。', 'CONVERSATION_CHANGED');
+      if (observed.snapshotId === input.expectedSnapshotId) {
+        approvedView = replyView(observed);
+        proofSource = 'exact';
+        snapshotComparison = undefined;
+      } else {
+        const current = input.actor === 'agent' ? replyView(observed) : null;
+        if (input.actor !== 'agent' || !sameReplyView(approvedView, current)) {
+          const error = new BridgeError('会话内容已有变化，请同步最新消息并重新确认回复。', 'CONVERSATION_CHANGED');
+          error.replySnapshotDiagnostics = snapshotMismatchDiagnostics({ stage, actor: input.actor, proofSource,
+            cacheHit: Boolean(remembered), cacheFresh, approved: approvedView, current, observed });
+          throw error;
+        }
+        snapshotComparison = approvedView.rows.length === current.rows.length ? 'canonical_rows' : 'one_oldest_missing';
       }
       if (input.actor === 'agent' && !observed.reliable) fail('当前会话的消息方向或正文未能完整核实，请由人工接管。', 'CONVERSATION_UNREADABLE');
       if (input.actor === 'agent' && observed.messages.at(-1)?.direction !== 'inbound') fail('当前没有可核实的新来信，智能体未继续发送。', 'NO_INBOUND_MESSAGE');
       return observed;
     };
-    await verifyConversation();
+    await verifyConversation('before_fill');
     const priorSubmission = async () => {
       if (!input.retry) return null;
       const history = await inspectRetryTranscript(root, { message: input.message, checkSince: input.retry.checkSince, timeoutMs: this.timeoutMs, signal });
@@ -878,7 +920,7 @@ export class DouyinBrowserAdapter {
     const afterRenewal = await this.verifiedSender(page, input.senderAccountId, signal);
     requireAccount(afterRenewal, input.senderAccountId, '发送前暂未核实任务账号，请等待页面恢复。');
     await this.verifyTarget(page, root, target, stackChat);
-    const dispatchSnapshot = await verifyConversation();
+    const dispatchSnapshot = await verifyConversation('before_dispatch');
     const latest = await priorSubmission(); if (latest) return latest;
     const priorCount = conversationReply ? 0 : await matchedMessages();
     const priorProof = dispatchSnapshot?.proof;
@@ -897,7 +939,7 @@ export class DouyinBrowserAdapter {
     await this.guard(page, signal);
     await beforeDispatch(conversationReply ? { conversation: {
       snapshotId: input.expectedSnapshotId,
-      ...(dispatchSnapshot.snapshotId !== input.expectedSnapshotId ? { observedSnapshotId: dispatchSnapshot.snapshotId } : {}),
+      ...(dispatchSnapshot.snapshotId !== input.expectedSnapshotId ? { observedSnapshotId: dispatchSnapshot.snapshotId, snapshotComparison } : {}),
       covered: priorProof.covered, priorMessageKeys, latestMessageKey,
     } } : undefined);
     // A failed or interrupted click stays ambiguous after the durable checkpoint.

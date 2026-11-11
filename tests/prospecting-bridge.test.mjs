@@ -113,6 +113,36 @@ test('default bridge polling omits the quiet conversation capability', async t =
   assert.equal(polled, true);
 });
 
+test('a reply snapshot mismatch stores only sanitized diagnostics in the local journal', async t => {
+  const journal = await journalFor(t);
+  const job = { ...sendJob(), kind: 'reply', input: { ...sendJob().input, conversationId: 'conversation-1',
+    replyId: 'reply-1', expectedSnapshotId: 'snapshot-approved', actor: 'agent' } };
+  const approved = { stage: 'before_dispatch', proofSource: 'exact', reason: 'row_suffix_mismatch',
+    cacheHit: true, cacheFresh: true, comparedProof: true, observedReliable: true, observedCovered: true,
+    latestSame: true, approvedRows: 20, observedRows: 19, observedMessages: 19, matchingTailRows: 16 };
+  let completion;
+  await runOnce(config, {
+    journal, adapter: { accountStatus: account, async reply() {
+      const error = new BridgeError('会话内容已有变化，请同步最新消息并重新确认回复。', 'CONVERSATION_CHANGED');
+      error.replySnapshotDiagnostics = { ...approved, latestId: 'private-id', rawText: 'private-content',
+        unsafeHash: 'private-hash', observedLatestDirection: 'private-url' };
+      throw error;
+    } },
+    fetchImpl: async (url, request) => {
+      if (url.endsWith('/poll')) return response({ job });
+      assert.ok(url.endsWith('/complete'));
+      completion = JSON.parse(request.body);
+      return response({ ok: true });
+    },
+  });
+  const entry = JSON.parse(await readFile(journal.path, 'utf8')).entries[0];
+  assert.equal(entry.dispatchedAt, undefined);
+  assert.deepEqual(entry.replySnapshotDiagnostics, approved);
+  assert.equal(completion.result.outcome, 'failed');
+  assert.equal(Object.hasOwn(completion, 'replySnapshotDiagnostics'), false);
+  assert.equal(Object.hasOwn(completion.result, 'replySnapshotDiagnostics'), false);
+});
+
 test('reporting failures retry completion only, never repeat a browser send', async t => {
   const journal = await journalFor(t); let sends = 0, completes = 0, polls = 0;
   const adapter = { accountStatus: account, async send(input, { beforeDispatch }) { await beforeDispatch(); sends++; return { outcome: 'submitted', evidence: '观察到新消息' }; } };
@@ -678,8 +708,37 @@ browserTest('a changed conversation after lease renewal rejects an approved repl
   await assert.rejects(adapter.reply({ ...conversationInput(), message: '可以进一步了解', replyId: 'reply-stale', expectedSnapshotId: observed.snapshotId, actor: 'agent' }, {
     renewBeforeDispatch: async () => { await (await adapter.page()).locator('[data-e2e="message-text"]').evaluate(node => { node.textContent = '不用了，请不要再联系'; }); },
     beforeDispatch: async () => { dispatches++; },
-  }), { code: 'CONVERSATION_CHANGED' });
+  }), error => {
+    assert.equal(error.code, 'CONVERSATION_CHANGED');
+    assert.deepEqual(error.replySnapshotDiagnostics, {
+      stage: 'before_dispatch', proofSource: 'exact', reason: 'row_suffix_mismatch', cacheHit: true, cacheFresh: true,
+      comparedProof: true, observedReliable: true, observedCovered: true, observedLatestDirection: 'inbound',
+      latestSame: true, approvedRows: 1, observedRows: 1, observedMessages: 1, matchingTailRows: 0,
+    });
+    return true;
+  });
   assert.equal(dispatches, 0); assert.equal(clicks(), 0);
+});
+
+browserTest('short replies tolerate UI row ordering changes only when all canonical rows match', async t => {
+  const history = incomingHistory + '<div data-index="1"><div class="messageMessageBoxmessageBox" data-message-direction="outgoing" data-message-id="old-reply"><span data-e2e="message-text">上次的回复</span></div></div>';
+  const { adapter, clicks } = await fixture(t, { stackChat: true, history, chatReplyEcho: 'outgoing' });
+  const input = conversationInput();
+  const observed = await adapter.readConversation(input);
+  let baseline;
+  const result = await adapter.reply({ ...input, message: '好的，我来核对。', replyId: 'reply-short-view',
+    expectedSnapshotId: observed.snapshotId, actor: 'agent' }, {
+    renewBeforeDispatch: async () => {
+      await (await adapter.page()).locator('.messageMessageListlist').evaluate(list => list.prepend(list.querySelector('[data-index="1"]')));
+    },
+    beforeDispatch: async proof => { baseline = proof.conversation; },
+  });
+  assert.equal(result.outcome, 'submitted');
+  assert.equal(clicks(), 1);
+  assert.equal(baseline.snapshotId, observed.snapshotId);
+  assert.notEqual(baseline.observedSnapshotId, observed.snapshotId);
+  assert.equal(baseline.snapshotComparison, 'canonical_rows');
+  assert.equal(baseline.priorMessageKeys.length, 2);
 });
 
 for (const change of ['oldest hidden before writing', 'oldest hidden after writing', 'middle removed', 'latest edited', 'new inbound']) {

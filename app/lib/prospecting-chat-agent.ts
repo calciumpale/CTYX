@@ -4,7 +4,7 @@ import type {ModelMessage} from './model-client.ts';
 import {object} from './prospecting-domain.ts';
 import {isChatOptOut, normalizeChatMemory, redactChatText} from './prospecting-chat-policy.ts';
 import {CUSTOMER_REPLY_MAX_CHARS} from './prospecting-reply-limit.ts';
-import {isPropertyQuestion} from './property-query.ts';
+import {isPropertyInventoryInquiry,isPropertyQuestion} from './property-query.ts';
 import type {ProspectChatAgentInput, ProspectChatDecision, ProspectChatMemory, ProspectContactType} from './prospecting-chat-types.ts';
 import {AI_REPLY_STYLE} from './ai-reply-style.ts';
 
@@ -220,7 +220,7 @@ export async function chooseProspectChatAction(input:ProspectChatAgentInput,tool
   if(declinesContact&&!taskState)memory.contactDeclines++;
   const factualQuestionAsked=needsFactualAnswer(inbound);
   const propertyPage=isPageRequest(inbound)&&isPropertyQuestion(previousInbound.slice(-6).findLast(message=>!isPageRequest(message.text))?.text??'');
-  const businessQuestion=factualQuestionAsked||propertyPage||/有合适|推荐|(?:查询|筛选|列出|有哪些|还有哪些).{0,20}(?:房源|商铺|铺位|空铺)/.test(inbound);
+  const businessQuestion=factualQuestionAsked||propertyPage||isPropertyInventoryInquiry(inbound)||/有合适|推荐|(?:查询|筛选|列出|有哪些|还有哪些).{0,20}(?:房源|商铺|铺位|空铺)/.test(inbound);
   const questionNeed:NeedKey|undefined=factualQuestionAsked?
     /面积|多大|几平|多少平|\d+(?:\.\d+)?\s*(?:[-~～至到]\s*\d+(?:\.\d+)?)?\s*(?:平|㎡)/.test(inbound)?'area':
     /地址|定位|位置|区域|城市|哪里|哪儿|在哪/.test(inbound)?'location':
@@ -311,7 +311,7 @@ export async function chooseProspectChatAction(input:ProspectChatAgentInput,tool
         const evidenceIds=[...new Set(shared.evidenceIds)];
         const recordIds=new Set(shared.knowledge.filter(item=>item.content.trim()).map(item=>item.id));
         // The runtime builds this reply from selected fields of authorized rows.
-        if(shared.action!=='answer'||shared.route!=='retrieved'||shared.recordLookup.total<=0||
+        if(shared.action!=='answer'||shared.route!=='retrieved'||!shared.recordLookup.complete||shared.recordLookup.total<=0||
           !evidenceIds.length||evidenceIds.some(id=>!recordIds.has(id))||!validReplyText(reply,mayAskContact)){
           return unavailableKnowledge();
         }

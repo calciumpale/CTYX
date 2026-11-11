@@ -16,6 +16,7 @@ function fixture(){
 }
 
 import {createWorkbenchKnowledgeAgent} from '../app/lib/knowledge-agent-runtime.ts';
+import {chooseProspectChatAction} from '../app/lib/prospecting-chat-agent.ts';
 import {createSeed} from '../app/lib/seed.ts';
 test('production retrieval ignores empty or tampered selection and isolates documents, legacy and lexical tracks',async t=>{
  const f=fixture();t.after(()=>f.sqlite.close());
@@ -189,6 +190,36 @@ test('customer inventory lookup answers the reported private message with matchi
  assert.equal(unmatched.action, 'handoff');
  assert.equal(unmatched.route, 'no_evidence');
  assert.equal(unmatched.answer, undefined);
+});
+
+test('an informal shop inquiry searches authorized vacancies by the requested city', async t => {
+ const f = fixture();
+ t.after(() => f.sqlite.close());
+ for(const [department,title,table] of [
+  ['zs','空置房源','嘉兴中山路1号,90,普通\n嘉兴中山路2号,100,普通\n海盐城东路3号,95,嘉兴总部'],
+  ['zs','在租房源','嘉兴在租路4号,92,普通'],
+  ['yy','空置房源','嘉兴其他部门5号,88,普通'],
+ ] as const){
+  const library=await f.store.createLibrary(title,department);
+  await f.store.upload({libraryId:library.id,title,fileName:title+'.csv',strategy:'flat',text:'地址,面积（㎡）,备注\n'+table});
+ }
+ const agent=createWorkbenchKnowledgeAgent(f.db,'alice','https://example.test',{departmentId:'zs'});
+ const ask=(text:string)=>chooseProspectChatAction({campaign:{name:'嘉兴',requirements:'嘉兴商铺租赁',minIntentScore:70},conversation:{nickname:'测试客户'},messages:[],inbound:{id:'test-inbound',text}}, {preflightKnowledge:agent.preflight,answerKnowledge:agent.answer});
+ const result=await ask('是的，我在嘉兴找店铺，你有？');
+ assert.equal(result.action,'reply');
+ assert.match(result.reply!,/嘉兴中山路1号/);
+ assert.match(result.reply!,/嘉兴中山路2号/);
+ assert.doesNotMatch(result.reply!,/海盐|在租路|其他部门/);
+ assert.equal(result.evidenceIds?.length,2);
+ assert.ok(result.evidenceIds?.every(id=>id.startsWith('property-record:')));
+ assert.deepEqual(result.answeredMessageIds,['test-inbound']);
+ const availability=await ask('嘉兴有店铺出租吗？');
+ assert.deepEqual(availability.evidenceIds,result.evidenceIds);
+ const missing=await ask('我在杭州找店铺，你有？');
+ assert.equal(missing.action,'handoff');
+ assert.equal(missing.reply,undefined);
+ const remarkOnly=await ask('嘉兴总部有店铺吗？');
+ assert.equal(remarkOnly.action,'handoff');
 });
 
 test('customer inventory pages keep complete distinct rows within the reply limit', async t => {

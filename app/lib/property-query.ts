@@ -2,9 +2,25 @@ import type {PropertyRow} from './property-records.ts';
 
 export interface PropertyFilterGroup {field:'location'|'usage'|'keyword';values:string[];exclude?:boolean;}
 export interface PropertyQuery {status:'vacant'|'rented'|'any';minArea?:number;maxArea?:number;minExclusive?:boolean;maxExclusive?:boolean;groups:PropertyFilterGroup[];page:number;pageSize:number;clarification?:string;}
+const propertySubjects='(?:商铺|房源|铺位|门面|店面|店铺)';
+const propertySubjectOnly=new RegExp(`^${propertySubjects}$`);
+const propertyClauses=/[\n，。！？；,!?;]/;
+const propertySearch=new RegExp(`(?:查找|查询|筛选|推荐|找).{0,24}${propertySubjects}(?=$|\\s|出租|可租|招租|还有|有吗|有没有)`);
+const propertyAvailability=new RegExp(`(?:有没有|是否有|有无|还有)(?:合适的?|可租的?|空置的?)?${propertySubjects}(?=$|\\s|出租|可租|招租|[吗么])|有(?:合适的?|可租的?|空置的?)?${propertySubjects}(?:出租|可租|招租)?[吗么]|${propertySubjects}(?:还有吗|有没有|能租吗|可租吗|出租吗)`);
+const declinedPropertySearch=/(?:不(?:再|用|想|打算|准备|需要|要)?|没(?:想|打算)?|别|停止)(?:再|继续|帮我|去)*(?:在.{2,16})?\s*(?:查找|查询|筛选|推荐|找)/;
+const locationBeforeSearch=new RegExp(`^\\s*(?:我们?\\s*)?(?:(?:想要|想|要|打算|希望|计划)\\s*)?在\\s*([\\p{Script=Han}A-Za-z\\d·-]{2,24}?)\\s*(?:查找|查询|筛选|找)\\s*(?:一个|一间|个)?\\s*${propertySubjects}(?=$|\\s|出租|可租|招租)`,'u');
+const locationBeforeAvailability=/^(?:请问\s*)?(?:在\s*)?([\p{Script=Han}A-Za-z\d·-]{2,24}?)\s*(?:还有|有没有|是否有|有无|有)\s*(?:合适的?|可租的?|空置的?)?店铺(?:出租|可租|招租)?[吗么]?$/u;
+const nonLocationSubject=/^(?:你们?|您|我们?|咱们?|这边|那边|这里|那里|附近|周边|目前|现在)$/;
+
+export function isPropertyInventoryInquiry(text:string):boolean {
+ return text.split(propertyClauses).some(part=>{
+  const clause=part.trim();
+  return !declinedPropertySearch.test(clause)&&(propertySearch.test(clause)||propertyAvailability.test(clause));
+ });
+}
 export const isPropertyQuestion=(text:string)=>{
  if(/合同|违约|税费|税率|政策|制度|纠纷|风险/.test(text)&&!/筛选|推荐|找.{0,30}(?:空置|在租|房源|铺位)/.test(text))return false;
- return /空置(?:房源|商铺|铺位)?|空铺|在租房源|履约商铺/.test(text)||/(?:商铺|房源|铺位|门面|店面)/.test(text);
+ return /空置(?:房源|商铺|铺位)?|空铺|在租房源|履约商铺/.test(text)||/(?:商铺|房源|铺位|门面|店面)/.test(text)||isPropertyInventoryInquiry(text);
 };
 const normalize=(s:string)=>s.normalize('NFKC').toLowerCase().replace(/\s/g,'');
 const unit='(?:平方米|平米|㎡|m²|m2|平)';
@@ -72,15 +88,20 @@ export async function parsePropertyQuery(question:string,rows:PropertyRow[],extr
  for(const word of usageWords)for(const m of q.matchAll(new RegExp(word,'g'))){if(usages.some(old=>old.includes(word)))continue;usages.push(word);addGroup(result.groups,'usage',word,negated(q,m.index!));}
  for(const m of q.matchAll(/(?:做|经营|业态(?:为|是|[:：])|开一家|开个)([\p{Script=Han}]{2,12})/gu)){const value=m[1].replace(/(?:的|空置|房源|商铺|铺位|可以|可做|能做).*$/,'');if(value&&!usages.some(u=>u.includes(value)||value.includes(u)))addGroup(result.groups,'usage',value,negated(q,m.index!));}
  for(const term of locationTerms(q,rows))addGroup(result.groups,'location',term,negated(q,q.indexOf(term)));
+ for(const clause of q.split(propertyClauses)){
+  const location=locationBeforeSearch.exec(clause)?.[1]??locationBeforeAvailability.exec(clause.trim())?.[1];
+  if(location&&!nonLocationSubject.test(location))addGroup(result.groups,'location',location);
+ }
  for(const m of q.matchAll(/\d+(?:楼|层)|\d+(?:-\d+)+号(?:商铺)?/g))if(!result.groups.some(g=>g.field==='location'&&g.values.some(v=>v.includes(m[0]))))addGroup(result.groups,'location',m[0],negated(q,m.index!));
  if(extract)try{
   const raw=JSON.parse((await extract(q)).trim().replace(/^```(?:json)?\s*/,'').replace(/\s*```$/,'')) as {filters?:{field?:unknown;value?:unknown}[]};
   for(const f of (raw.filters??[]).slice(0,20)){if((f.field!=='location'&&f.field!=='usage'&&f.field!=='keyword')||typeof f.value!=='string'||!q.includes(f.value)||f.value.length<2)continue;
-   const value=f.value;if(result.groups.some(g=>g.values.some(v=>v.includes(value))))continue;addGroup(result.groups,f.field,value,negated(q,q.indexOf(value)));
+   const value=f.value;if(propertySubjectOnly.test(value)||result.groups.some(g=>g.values.some(v=>v.includes(value))))continue;addGroup(result.groups,f.field,value,negated(q,q.indexOf(value)));
   }
  }catch{/* Original user constraints below still remain filters if the model is unavailable. */}
  for(const group of result.groups)for(const value of group.values)consume(value);
  // A fresh query condition we cannot classify is still mandatory, rather than being ignored.
+ remainder=remainder.replace(/店铺(?:(?:能租|出租)(?=[吗么]))?/g,' ');
  remainder=remainder.replace(/现在|目前|现有|有什么|什么|麻烦|请问|给我|给|我|您|你|一间|一套|一处|合适|适宜|符合|能不能|能否|可不可以|用来|用作|之间|大致/g,' ').replace(/第\s*\d+\s*页/g,'').replace(/未出租|待出租|已出租|空置|空铺|待租|可租|招租|在租|已租|履约|房源|商铺|铺位|门面|店面/g,'').replace(/请帮我|帮我|帮忙|我想要|我想找|我需要|我想|我要|需要|想要|一个|一些|几条|几家|一下|查找|查一下|查询|搜索|筛选|推荐|看看|看下|还有没有|有没有|哪些|哪里|还有哪些|还有|再加个条件|再加个|再加|加上|只看|再找|下一页|上一页|改成|换成|只要|至少|不少于|不低于|不超过|以内|以上|以下|最多|不要|不考虑|排除|不限|都要|都可以|可以|能够|适合|用于|经营|业态|位置|地址|区域|面积|全部|所有|同时|满足|条件|的|在|找|做|且|和|或|能|可|有|吗|呢|么|那|是|为/g,' ');
  if(/\d+\s*(?:-|到|至|~|～)\s*\d+/.test(remainder))result.clarification='请说明这组数字是面积范围还是商铺地址，并注明面积单位。';
  for(const term of remainder.split(/[\s，,。；;、？！?!:：]+/).filter(s=>s.length>=2))if(!/^[-—~\d.]+$/.test(term))addGroup(result.groups,'keyword',term);

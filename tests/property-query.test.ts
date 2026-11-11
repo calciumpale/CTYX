@@ -9,6 +9,19 @@ const rows=()=>parsePropertySources([
 test('property routing recognizes lookup and leaves customer/company questions alone',()=>{
  assert.equal(isPropertyQuestion('帮我找空置房源'),true);assert.equal(isPropertyQuestion('找绮园100到200平轻餐饮商铺'),true);
  assert.equal(isPropertyQuestion('分析这家公司的扩张需求'),false);assert.equal(isPropertyQuestion('商铺合同的违约条款怎么改'),false);
+ assert.equal(isPropertyQuestion('是的，我在嘉兴找店铺，你有？'),true);
+ for(const question of ['我不找店铺了','不用帮我找店铺','怎么运营店铺','店铺合同的违约条款怎么改','在嘉兴找店铺老板'])assert.equal(isPropertyQuestion(question),false,question);
+});
+test('an explicitly requested shop location cannot match a remark or be replaced by the shop noun',async()=>{
+ const data=parsePropertySources([source('空置房源','地址,面积,备注\n嘉兴中山路1号,90,普通\n海盐城东路2号,100,嘉兴总部')]);
+ const question='是的，我在嘉兴找店铺，你有？';
+ const query=await parsePropertyQuery(question,data,async()=>JSON.stringify({filters:[{field:'keyword',value:'店铺'}]}));
+ assert.deepEqual(query.groups,[{field:'location',values:['嘉兴']}]);
+ assert.deepEqual(matchPropertyRows(data,query).map(row=>row.location),['嘉兴中山路1号']);
+ const otherCity=data.slice(1);
+ const missing=await parsePropertyQuery(question,otherCity);
+ assert.deepEqual(missing.groups,[{field:'location',values:['嘉兴']}]);
+ assert.deepEqual(matchPropertyRows(otherCity,missing),[]);
 });
 test('filters full records by vacancy, area, usage and location together with original row provenance',async()=>{
  const data=rows();const query=await parsePropertyQuery('找绮园商业街100到200平可以做轻餐饮的空置房源',data);

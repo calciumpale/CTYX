@@ -51,7 +51,7 @@ export interface ProspectBridgeJob {
     retry?: { previousJobId: string; checkSince?: string };
     conversationId?: string; limit?: number; replyId?: string;
     expectedSnapshotId?: string; actor?: 'agent' | 'human';
-    manualSync?: boolean; observeOnly?: boolean;
+    manualSync?: boolean; observeOnly?: boolean; replySamePassProofVersion?: 1;
     sessionId?: string; bindingVersion?: number; answeredMessageIds?: string[];
   };
 }

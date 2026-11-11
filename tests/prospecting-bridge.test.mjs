@@ -105,7 +105,26 @@ test('default bridge polling omits the quiet conversation capability', async t =
     adapter: { accountStatus: account }, journal,
     fetchImpl: async (url, request) => {
       assert.ok(url.endsWith('/poll'));
-      assert.equal(Object.hasOwn(JSON.parse(request.body), 'quietConversationSync'), false);
+      const poll = JSON.parse(request.body);
+      assert.equal(Object.hasOwn(poll, 'quietConversationSync'), false);
+      assert.equal(Object.hasOwn(poll, 'replySamePassProofVersion'), false);
+      polled = true;
+      return response({ job: null });
+    },
+  });
+  assert.equal(polled, true);
+});
+
+test('quiet desktop polling advertises same-pass reply proof support', async t => {
+  const journal = await journalFor(t);
+  let polled = false;
+  await runOnce(config, {
+    adapter: { accountStatus: account }, journal, quietConversationSync: true,
+    fetchImpl: async (url, request) => {
+      assert.ok(url.endsWith('/poll'));
+      const poll = JSON.parse(request.body);
+      assert.equal(poll.quietConversationSync, true);
+      assert.equal(poll.replySamePassProofVersion, 1);
       polled = true;
       return response({ job: null });
     },
@@ -740,6 +759,66 @@ browserTest('short replies tolerate UI row ordering changes only when all canoni
   assert.equal(baseline.snapshotComparison, 'canonical_rows');
   assert.equal(baseline.priorMessageKeys.length, 2);
 });
+
+for (const change of ['oldest hidden after writing', 'oldest hidden before writing', 'latest edited', 'new identical inbound', 'earlier identical inbound hidden']) {
+  browserTest(`repeated inbound DOM text requires an unchanged same-pass proof: ${change}`, async t => {
+    const latest = incomingHistory.replace(' data-message-id="inbound-current"', '');
+    const repeatedIndex = change === 'earlier identical inbound hidden' ? 19 : 3;
+    const olderRows = Array.from({ length: 19 }, (_, i) => i + 1 === repeatedIndex
+      ? latest.replace('data-index="0"', `data-index="${i + 1}"`)
+      : `<div data-index="${i + 1}"><div class="messageMessageBoxmessageBox" data-message-direction="outgoing" data-message-id="old-${i}"><span data-e2e="message-text">较早的消息 ${i}</span></div></div>`).join('');
+    const { adapter, clicks } = await fixture(t, { stackChat: true, history: latest + olderRows, chatReplyEcho: 'outgoing' });
+    const input = conversationInput();
+    const observed = await adapter.readConversation(input);
+    assert.equal(observed.reliable, true);
+    assert.equal(observed.covered, true);
+    assert.equal(observed.messages.length, 20);
+    const repeated = observed.messages.filter(message => message.text === observed.messages.at(-1).text);
+    assert.equal(repeated.length, 2);
+    assert.ok(repeated.every(message => message.id.startsWith('dom:')));
+    const alterView = async () => {
+      const page = await adapter.page();
+      await page.locator('.messageMessageListlist').evaluate((list, change) => {
+        const latestSlot = list.querySelector('[data-index="0"]');
+        if (change === 'latest edited') {
+          latestSlot.querySelector('[data-e2e="message-text"]').textContent = '请不要再联系';
+        } else if (change === 'new identical inbound') {
+          const newSlot = latestSlot.cloneNode(true);
+          for (const previous of list.querySelectorAll('[data-index]')) previous.dataset.index = Number(previous.dataset.index) + 1;
+          list.prepend(newSlot);
+        } else {
+          list.querySelector('[data-index="19"]').remove();
+        }
+      }, change);
+    };
+    const beforeWriting = change === 'oldest hidden before writing';
+    if (beforeWriting) await alterView();
+    const proofs = [];
+    const action = () => adapter.reply({ ...input, message: '这间商铺约 88 平方米。', replyId: 'reply-same-pass',
+      expectedSnapshotId: observed.snapshotId, actor: 'agent' }, {
+      renewBeforeDispatch: beforeWriting ? undefined : alterView,
+      beforeDispatch: async proof => { assert.equal(clicks(), 0); proofs.push(proof.conversation); },
+    });
+    if (change === 'oldest hidden after writing') {
+      assert.equal((await action()).outcome, 'submitted');
+      assert.equal(clicks(), 1);
+      assert.equal(proofs.length, 1);
+      assert.equal(proofs[0].snapshotId, observed.snapshotId);
+      assert.notEqual(proofs[0].observedSnapshotId, observed.snapshotId);
+      assert.equal(proofs[0].snapshotComparison, 'one_oldest_missing');
+      assert.equal(proofs[0].priorMessageKeys.length, 19);
+    } else {
+      await assert.rejects(action(), error => {
+        assert.equal(error.code, 'CONVERSATION_CHANGED');
+        assert.equal(error.replySnapshotDiagnostics.stage, beforeWriting ? 'before_fill' : 'before_dispatch');
+        assert.equal(error.replySnapshotDiagnostics.cacheHit, false);
+        return true;
+      });
+      assert.equal(clicks(), 0);
+      assert.equal(proofs.length, 0);
+    }
+  });
+}
 
 for (const change of ['oldest hidden before writing', 'oldest hidden after writing', 'middle removed', 'latest edited', 'new inbound']) {
   browserTest(`reply only tolerates an unchanged visible tail when the transcript changes: ${change}`, async t => {

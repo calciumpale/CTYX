@@ -115,9 +115,11 @@ export function createProspectingService(deps:Dependencies){
     const supportsConversations=input.conversationVersion===1;
     const verifiedAccountId=typeof input.verifiedReadOnlyAccountId==='string'&&/^dy-readonly-[a-f0-9]{24}$/.test(input.verifiedReadOnlyAccountId)&&current.accountId===input.accountId&&!current.accountId?.startsWith('dy-readonly-')?current.accountId:undefined;
     const acknowledgement=verifiedAccountId?{verifiedAccountId}:{};
-    const claim=()=>store.claim(deviceId,input.sendRetryVersion===1,supportsConversations);
+    const quiet=input.quietConversationSync===true;
+    const samePassProof=supportsConversations&&quiet&&input.replySamePassProofVersion===1;
+    const claim=()=>store.claim(deviceId,input.sendRetryVersion===1,supportsConversations,samePassProof);
     // Persist due inbox observations before prospect analysis or early returns.
-    if(supportsConversations)await store.chat.schedule(deviceId,{quiet:input.quietConversationSync===true});
+    if(supportsConversations)await store.chat.schedule(deviceId,{quiet,...(samePassProof?{replySamePassProofVersion:1}:{})});
     if(supportsConversations)await store.chat.rememberOne(device.owner_id,device.member_id,new URL(request.url).origin,deps.rememberChat);
     if(supportsConversations&&await store.chat.hasQueuedManualSync(deviceId)){
      if(request.signal.aborted)throw new DomainError('请求已取消，未领取新任务',409);

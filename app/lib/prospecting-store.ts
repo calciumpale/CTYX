@@ -273,11 +273,12 @@ export function createProspectingStore(db:D1Database,now:()=>number=Date.now){
   if(results.some(result=>!result.meta.changes))throw conflict();
  }
  async function expire(deviceId:string){await db.prepare("UPDATE workbench_prospect_jobs SET status=CASE WHEN kind IN ('send','reply') THEN 'unknown' ELSE 'failed' END,error=CASE WHEN kind IN ('send','reply') THEN '发送租约已过期，结果待核对；不会自动重发' ELSE '采集超时，请重新发起' END,active_key=NULL,updated_at=? WHERE owner_id=(SELECT owner_id FROM workbench_prospect_devices WHERE id=?) AND status='running' AND lease_until<=?").bind(stamp(),deviceId,stamp()).run();}
- async function claim(deviceId:string,allowSendRetry=false,allowConversation=false):Promise<ProspectBridgeJob|null>{
+ async function claim(deviceId:string,allowSendRetry=false,allowConversation=false,allowSamePassProof=false):Promise<ProspectBridgeJob|null>{
   const d=await findDevice(deviceId);if(!d)throw new DomainError('设备已停用',401);await expire(deviceId);if(!d.authenticated||!d.account_id)return null;
   const leaseToken=prospectToken(),time=stamp();const dayStart=new Date(Math.floor((now()+8*3600000)/86400000)*86400000-8*3600000).toISOString();
   const policyGate=prospectReplyPolicyGate('j','c',now());
-  const row=await db.prepare(`UPDATE workbench_prospect_jobs SET status='running',lease_hash=?,lease_until=?,started_at=?,updated_at=? WHERE id=(
+  const row=await db.prepare(`UPDATE workbench_prospect_jobs SET status='running',lease_hash=?,lease_until=?,started_at=?,updated_at=?,
+   input_json=CASE WHEN kind='readConversation' AND json_extract(input_json,'$.replySamePassProofVersion')=1 AND ?=0 THEN json_remove(input_json,'$.replySamePassProofVersion') ELSE input_json END WHERE id=(
     SELECT j.id FROM workbench_prospect_jobs j JOIN workbench_prospect_campaigns c ON c.id=j.campaign_id
     WHERE j.device_id=? AND j.owner_id=? AND j.member_id=? AND j.status='queued' AND c.status='active'
     AND NOT EXISTS (SELECT 1 FROM workbench_prospect_discovery_runs run WHERE run.id=json_extract(j.input_json,'$.discoveryRunId') AND (run.status='cancelled' OR COALESCE(json_extract(run.data_json,'$.scheduleGeneration'),'')<>COALESCE(json_extract(c.data_json,'$.dailyDiscovery.generation'),'')))
@@ -293,7 +294,7 @@ export function createProspectingStore(db:D1Database,now:()=>number=Date.now){
       AND NOT EXISTS (SELECT 1 FROM workbench_prospect_jobs recent WHERE recent.owner_id=j.owner_id AND recent.sender_id=j.sender_id AND recent.kind IN ('send','reply') AND recent.started_at>?)
       AND (j.kind='reply' OR (SELECT COUNT(*) FROM workbench_prospect_jobs day WHERE day.owner_id=j.owner_id AND day.sender_id=j.sender_id AND day.kind='send' AND day.started_at>=?)<CAST(json_extract(c.data_json,'$.dailyLimit') AS INTEGER))))
     ORDER BY CASE WHEN (j.kind='readConversation' AND json_extract(j.input_json,'$.manualSync')=1) OR (j.kind='reply' AND json_extract(j.input_json,'$.actor')='human') THEN 0 WHEN j.kind IN ('discover','collect') AND (SELECT COUNT(*) FROM workbench_prospect_jobs recent WHERE recent.device_id=j.device_id AND recent.kind IN ('readConversation','reply') AND recent.started_at IS NOT NULL AND recent.started_at>COALESCE((SELECT MAX(bg.started_at) FROM workbench_prospect_jobs bg WHERE bg.device_id=j.device_id AND bg.kind IN ('discover','collect')),'') )>=4 THEN 1 WHEN j.kind='reply' THEN 2 WHEN j.kind='readConversation' THEN 3 ELSE 4 END,
-      j.created_at,j.id LIMIT 1) RETURNING *`).bind(await prospectHash(leaseToken),new Date(now()+PROSPECT_LEASE_MS).toISOString(),time,time,deviceId,d.owner_id,d.member_id,allowSendRetry?1:0,...policyGate.values,allowConversation?1:0,d.account_id,new Date(now()-PROSPECT_SEND_INTERVAL_MS).toISOString(),dayStart).first<ProspectJobRow>();
+      j.created_at,j.id LIMIT 1) RETURNING *`).bind(await prospectHash(leaseToken),new Date(now()+PROSPECT_LEASE_MS).toISOString(),time,time,allowSamePassProof?1:0,deviceId,d.owner_id,d.member_id,allowSendRetry?1:0,...policyGate.values,allowConversation?1:0,d.account_id,new Date(now()-PROSPECT_SEND_INTERVAL_MS).toISOString(),dayStart).first<ProspectJobRow>();
   return row?{id:row.id,campaignId:row.campaign_id,kind:row.kind,leaseToken,input:JSON.parse(row.input_json)}:null;
  }
  async function leased(deviceId:string,id:string,token:string,allowTerminal=false):Promise<ProspectJobRow>{

@@ -281,8 +281,8 @@ export function createProspectingChatStore(db:D1Database,now:()=>number=Date.now
    db.prepare('UPDATE workbench_prospect_conversations SET processing_token=NULL WHERE id=? AND processing_token=?').bind(id,token),
   ]);if(!results[0].meta.changes)throw conflict();
  }
- async function queueRead(c:ConversationRow,d:DeviceRow,manual?:{observeOnly:boolean},quiet=false){
-  const view=await memoryStore.getView(c.owner_id,c.member_id,c.id);const time=stamp(),input={sessionId:view.sessionId,bindingVersion:view.bindingVersion,senderAccountId:c.sender_id,recipientId:c.recipient_id,profileUrl:c.profile_url,conversationId:c.id,limit:80,...(manual?{manualSync:true,observeOnly:manual.observeOnly}:{})};
+ async function queueRead(c:ConversationRow,d:DeviceRow,manual?:{observeOnly:boolean},quiet=false,samePassProof=false){
+  const view=await memoryStore.getView(c.owner_id,c.member_id,c.id);const time=stamp(),input={sessionId:view.sessionId,bindingVersion:view.bindingVersion,senderAccountId:c.sender_id,recipientId:c.recipient_id,profileUrl:c.profile_url,conversationId:c.id,limit:80,...(manual?{manualSync:true,observeOnly:manual.observeOnly}:quiet&&samePassProof?{replySamePassProofVersion:1}:{})};
   const cooldown=manual?`AND NOT EXISTS (SELECT 1 FROM workbench_prospect_jobs WHERE ${conversationReads} AND updated_at>?)`:'';
   const recent=manual?[...conversationReadKeys(c),new Date(now()-MANUAL_SYNC_INTERVAL_MS).toISOString()]:[];
   const deviceCooldown=quiet?`AND NOT EXISTS (${quietReadBlockSql})`:'';
@@ -311,7 +311,8 @@ export function createProspectingChatStore(db:D1Database,now:()=>number=Date.now
   return Boolean(await db.prepare("SELECT 1 FROM workbench_prospect_jobs WHERE device_id=? AND status='queued' AND kind='readConversation' AND json_extract(input_json,'$.manualSync')=1 LIMIT 1").bind(deviceId).first());
  }
  async function hasQueuedConversationWork(deviceId:string){return Boolean(await db.prepare("SELECT 1 FROM workbench_prospect_jobs WHERE device_id=? AND status='queued' AND kind IN ('readConversation','reply') LIMIT 1").bind(deviceId).first());}
- async function schedule(deviceId:string,{quiet=false}:{quiet?:boolean}={}){
+ async function schedule(deviceId:string,{quiet=false,replySamePassProofVersion}:{quiet?:boolean;replySamePassProofVersion?:1}={}){
+  const samePassProof=quiet&&replySamePassProofVersion===1;
   const d=await db.prepare("SELECT d.* FROM workbench_prospect_devices d JOIN workbench_member_accounts m ON m.account_id=d.member_id AND m.owner_id=d.owner_id WHERE d.id=? AND d.enabled=1 AND d.authenticated=1 AND m.enabled=1 AND m.role IN ('sales','manager')").bind(deviceId).first<DeviceRow>();if(!d?.account_id||d.account_id.startsWith('dy-readonly-'))return;
   if(quiet&&await db.prepare(quietReadBlockSql+' LIMIT 1').bind(deviceId,new Date(now()-QUIET_READ_INTERVAL_MS).toISOString()).first())return;
   await materialize(d.owner_id,d.member_id);
@@ -319,7 +320,8 @@ export function createProspectingChatStore(db:D1Database,now:()=>number=Date.now
   // recent, audited reply that was stopped by the pre-dispatch snapshot check.
   const snapshotResync=`(c.mode='human' AND c.handoff_reason='${snapshotChangedBeforeDispatch}'
     AND json_extract(c.memory_json,'$.lastDecision.action')='reply' AND json_extract(c.memory_json,'$.lastDecision.queued')=1
-    AND COALESCE(json_extract(c.memory_json,'$.snapshotRecoveredInboundId'),'')<>json_extract(c.memory_json,'$.lastDecision.inboundId')
+    AND (COALESCE(json_extract(c.memory_json,'$.snapshotRecoveredInboundId'),'')<>json_extract(c.memory_json,'$.lastDecision.inboundId')
+      OR (?=1 AND COALESCE(json_extract(c.memory_json,'$.samePassRecoveredInboundId'),'')<>json_extract(c.memory_json,'$.lastDecision.inboundId')))
     AND EXISTS (SELECT 1 FROM workbench_prospect_messages draft JOIN workbench_prospect_jobs failed ON failed.id=draft.job_id
      WHERE (draft.conversation_id=c.id AND draft.direction='outbound' AND draft.actor='agent' AND draft.status='failed' AND draft.posted_at IS NULL AND draft.error=c.handoff_reason)
       AND (failed.kind='reply' AND failed.status='failed' AND failed.error=draft.error AND failed.device_id=? AND failed.updated_at>=? AND p.updated_at<=failed.updated_at)
@@ -340,8 +342,11 @@ export function createProspectingChatStore(db:D1Database,now:()=>number=Date.now
     ${quietThreads}
     AND (attempted.id IS NULL OR attempted.updated_at<=CASE WHEN attempted.status='done' AND COALESCE(json_extract(attempted.result_json,'$.reliable'),json_extract(attempted.result_json,'$.summary') LIKE '已同步%')=1 THEN ? ELSE ? END)
     AND NOT EXISTS (SELECT 1 FROM workbench_prospect_jobs j WHERE j.active_key=('chat-read:'||c.id))
-   ORDER BY ${resumeFirst} COALESCE(attempted.updated_at,''),c.id LIMIT 1`).bind(d.owner_id,d.member_id,d.account_id,...(quiet?[d.id,new Date(now()-snapshotRecoveryMs).toISOString(),new Date(now()-legacyShopRecoveryMs).toISOString()]:[]),new Date(now()-30000).toISOString(),new Date(now()-15000).toISOString()).first<ConversationRow>();if(!c)return;
-  await queueRead(c,d,undefined,quiet);
+   ORDER BY ${resumeFirst} COALESCE(attempted.updated_at,''),c.id LIMIT 1`).bind(d.owner_id,d.member_id,d.account_id,...(quiet?[samePassProof?1:0,d.id,new Date(now()-snapshotRecoveryMs).toISOString(),new Date(now()-legacyShopRecoveryMs).toISOString()]:[]),new Date(now()-30000).toISOString(),new Date(now()-15000).toISOString()).first<ConversationRow>();if(!c)return;
+  const audit=object(JSON.parse(c.memory_json||'{}'));
+  const inboundId=object(audit.lastDecision).inboundId;
+  const upgradeRecovery=samePassProof&&c.mode==='human'&&c.handoff_reason===snapshotChangedBeforeDispatch&&typeof inboundId==='string'&&audit.snapshotRecoveredInboundId===inboundId;
+  await queueRead(c,d,undefined,quiet,upgradeRecovery);
  }
  function closeStatements(c:ConversationRow,reason:string,memory:ReturnType<typeof normalizeChatMemory>,guard:string,values:unknown[]){
   const time=stamp();memory.stage='closed';
@@ -517,7 +522,7 @@ export function createProspectingChatStore(db:D1Database,now:()=>number=Date.now
     statements.push(db.prepare(`UPDATE workbench_prospect_messages SET eligible=1,processed=0 WHERE conversation_id=? AND source_key=? AND direction='inbound' AND ${verifiedGuard}`).bind(c.id,last.id,...verifiedValues));
    }
   }
-  const reopenAuditedTurn=(questionId:string,reason:string,marker:'snapshotRecoveredInboundId'|'legacyShopRecoveredInboundId',proof:string,proofValues:unknown[])=>{
+  const reopenAuditedTurn=(questionId:string,reason:string,marker:'snapshotRecoveredInboundId'|'samePassRecoveredInboundId'|'legacyShopRecoveredInboundId',proof:string,proofValues:unknown[])=>{
    const markerPath=`$.${marker}`;
    statements.push(db.prepare(`UPDATE workbench_prospect_conversations SET mode='agent',handoff_reason=NULL,
     memory_json=json_set(memory_json,?,?),version=version+1,processing_token=NULL,processing_until=NULL
@@ -530,9 +535,11 @@ export function createProspectingChatStore(db:D1Database,now:()=>number=Date.now
   const failedSnapshotDraft=platformExisting.at(-1);
   const auditedQuestion=last?.direction==='inbound'?bySource.get(last.id):undefined;
   const snapshotAudit=object(audit.lastDecision);
+  const alreadyRecovered=!!auditedQuestion&&audit.snapshotRecoveredInboundId===auditedQuestion.id;
+  const upgradeRecovery=alreadyRecovered&&input.replySamePassProofVersion===1&&input.manualSync!==true&&audit.samePassRecoveredInboundId!==auditedQuestion?.id;
   if(automatic&&read.reliable&&read.covered===true&&c.status==='active'&&c.mode==='human'&&c.handoff_reason===snapshotChangedBeforeDispatch&&
    !unresolved&&!stopObserved&&c.has_baseline===1&&taskView.isActive&&auditedQuestion?.eligible===1&&auditedQuestion.processed===1&&
-   sessionIds.has(auditedQuestion.id)&&!taskView.state.ignoredSourceIds.includes(auditedQuestion.id)&&audit.snapshotRecoveredInboundId!==auditedQuestion.id&&
+   sessionIds.has(auditedQuestion.id)&&!taskView.state.ignoredSourceIds.includes(auditedQuestion.id)&&(!alreadyRecovered||upgradeRecovery)&&
    snapshotAudit.action==='reply'&&snapshotAudit.queued===true&&snapshotAudit.inboundId===auditedQuestion.id&&
    failedSnapshotDraft?.direction==='outbound'&&failedSnapshotDraft.status==='failed'&&failedSnapshotDraft.actor==='agent'&&
    failedSnapshotDraft.error===snapshotChangedBeforeDispatch&&failedSnapshotDraft.job_id&&failedSnapshotDraft.job_status==='failed'&&
@@ -540,9 +547,11 @@ export function createProspectingChatStore(db:D1Database,now:()=>number=Date.now
    // The covered read and stored attempt identify the same unanswered turn.
    // A successful compare-and-set spends the one automatic recovery for it.
    const cutoff=new Date(now()-snapshotRecoveryMs).toISOString();
-   const proof=`${failedUnsentReplyProofSql('composer')} AND EXISTS (SELECT 1 FROM workbench_prospect_jobs recent WHERE recent.id=? AND recent.updated_at>=?)`;
-   const proofValues=[failedSnapshotDraft.job_id,snapshotChangedBeforeDispatch,failedSnapshotDraft.id,c.id,row.device_id,new Date(now()-90000).toISOString(),auditedQuestion.id,failedSnapshotDraft.job_id,cutoff];
-   reopenAuditedTurn(auditedQuestion.id,snapshotChangedBeforeDispatch,'snapshotRecoveredInboundId',proof,proofValues);
+   const upgradedProof=upgradeRecovery?`AND json_extract(thread.memory_json,'$.snapshotRecoveredInboundId')=question.id
+    AND EXISTS (SELECT 1 FROM workbench_prospect_jobs readJob WHERE readJob.id=? AND json_extract(readJob.input_json,'$.replySamePassProofVersion')=1 AND COALESCE(json_extract(readJob.input_json,'$.manualSync'),0)=0)`:'';
+   const proof=`${failedUnsentReplyProofSql(upgradeRecovery?'pre-dispatch':'composer')} AND EXISTS (SELECT 1 FROM workbench_prospect_jobs recent WHERE recent.id=? AND recent.updated_at>=?) ${upgradedProof}`;
+   const proofValues=[failedSnapshotDraft.job_id,snapshotChangedBeforeDispatch,failedSnapshotDraft.id,c.id,row.device_id,new Date(now()-90000).toISOString(),auditedQuestion.id,failedSnapshotDraft.job_id,cutoff,...(upgradeRecovery?[row.id]:[])];
+   reopenAuditedTurn(auditedQuestion.id,snapshotChangedBeforeDispatch,upgradeRecovery?'samePassRecoveredInboundId':'snapshotRecoveredInboundId',proof,proofValues);
   }
   if(automatic&&read.reliable&&read.covered===true&&c.status==='active'&&c.mode==='human'&&c.handoff_reason===legacyShopConflict&&
    !unresolved&&!stopObserved&&c.has_baseline===1&&taskView.isActive&&auditedQuestion?.eligible===1&&auditedQuestion.processed===1&&
@@ -704,7 +713,7 @@ export function createProspectingChatStore(db:D1Database,now:()=>number=Date.now
   if(decision.close)statements.push(...closeStatements(c,text(safeProspectError(decision.reason),500)||'客户要求停止联系',memory,guard,values));
   const handoff=decision.action==='handoff'||unresolved;if(handoff&&!decision.close)memory.stage='handoff';if(captured||c.contact_captured)memory.contactCaptured=true;if(unresolved)decision.reason='上一条回复结果待确认，已保留人工接管';
   const previousAudit=object(JSON.parse(c.memory_json||'{}'));
-  statements.push(db.prepare(`UPDATE workbench_prospect_conversations SET memory_json=?,status=CASE WHEN ?=1 THEN 'closed' ELSE status END,close_reason=CASE WHEN ?=1 THEN ? ELSE close_reason END,mode=CASE WHEN ?=1 THEN 'human' ELSE mode END,handoff_reason=CASE WHEN ?=1 THEN ? ELSE handoff_reason END,version=version+1,processing_token=NULL,processing_until=NULL,updated_at=? WHERE id=? AND EXISTS (${guard})`).bind(JSON.stringify({...memory,legacyRecoveredInboundId:previousAudit.legacyRecoveredInboundId,snapshotRecoveredInboundId:previousAudit.snapshotRecoveredInboundId,legacyShopRecoveredInboundId:previousAudit.legacyShopRecoveredInboundId,lastDecision:{knowledgeLookup:decision.knowledgeLookup,action:decision.action,inboundId:inbound.id,queued:!!replyJobId,snapshotId:c.last_snapshot_id,at:stamp()}}),decision.close?1:0,decision.close?1:0,text(safeProspectError(decision.reason),500)||'客户要求停止联系',handoff?1:0,handoff?1:0,text(safeProspectError(decision.reason),500)||'已转交销售',stamp(),c.id,...values));
+  statements.push(db.prepare(`UPDATE workbench_prospect_conversations SET memory_json=?,status=CASE WHEN ?=1 THEN 'closed' ELSE status END,close_reason=CASE WHEN ?=1 THEN ? ELSE close_reason END,mode=CASE WHEN ?=1 THEN 'human' ELSE mode END,handoff_reason=CASE WHEN ?=1 THEN ? ELSE handoff_reason END,version=version+1,processing_token=NULL,processing_until=NULL,updated_at=? WHERE id=? AND EXISTS (${guard})`).bind(JSON.stringify({...memory,legacyRecoveredInboundId:previousAudit.legacyRecoveredInboundId,snapshotRecoveredInboundId:previousAudit.snapshotRecoveredInboundId,samePassRecoveredInboundId:previousAudit.samePassRecoveredInboundId,legacyShopRecoveredInboundId:previousAudit.legacyShopRecoveredInboundId,lastDecision:{knowledgeLookup:decision.knowledgeLookup,action:decision.action,inboundId:inbound.id,queued:!!replyJobId,snapshotId:c.last_snapshot_id,at:stamp()}}),decision.close?1:0,decision.close?1:0,text(safeProspectError(decision.reason),500)||'客户要求停止联系',handoff?1:0,handoff?1:0,text(safeProspectError(decision.reason),500)||'已转交销售',stamp(),c.id,...values));
   try{const results=await db.batch(statements);if(!results.at(-1)?.meta.changes){await db.prepare('UPDATE workbench_prospect_conversations SET processing_token=NULL,processing_until=NULL WHERE id=? AND processing_token=?').bind(c.id,token).run();return true;}
    if(replyJobId){const queued=await db.prepare('SELECT id FROM workbench_prospect_jobs WHERE id=?').bind(replyJobId).first();if(!queued)await db.prepare("UPDATE workbench_prospect_conversations SET mode='human',memory_json=json_set(memory_json,'$.stage','handoff'),handoff_reason='助手身份已改变，未排队回复',version=version+1 WHERE id=?").bind(c.id).run();}
    return true;

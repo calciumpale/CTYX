@@ -31,18 +31,20 @@ const requireAccount = (account, expectedId, message) => {
 const digest = text => createHash('sha256').update(text).digest('hex').slice(0, 28);
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const replyViewKey = (input, snapshotId) => JSON.stringify([input.senderAccountId, input.recipientId, input.conversationId, snapshotId]);
-const replyView = observed => {
+const replyView = (observed, { allowRepeatedLatest = false } = {}) => {
   const latest = observed.messages.at(-1);
   if (!observed.reliable || !observed.proof?.covered || latest?.direction !== 'inbound') return null;
-  if (latest.id.startsWith('dom:') && observed.messages.filter(message =>
+  const repeatedLatest = latest.id.startsWith('dom:') && observed.messages.filter(message =>
     message.direction === latest.direction && message.text === latest.text &&
-    message.postedAt === latest.postedAt && message.contentType === latest.contentType).length !== 1) return null;
-  return { latestId: latest.id, rows: observed.proof.rowDigests };
+    message.postedAt === latest.postedAt && message.contentType === latest.contentType).length !== 1;
+  if (repeatedLatest && !allowRepeatedLatest) return null;
+  return { latestId: latest.id, repeatedLatest, rows: observed.proof.rowDigests };
 };
 const sameReplyView = (approved, current) => {
   if (!approved || !current || approved.latestId !== current.latestId) return false;
   const missingOldest = approved.rows.length - current.rows.length;
-  return (missingOldest === 0 || missingOldest === 1 && current.rows.length >= 3) &&
+  const sameLength = missingOldest === 0 && !approved.repeatedLatest && !current.repeatedLatest;
+  return (sameLength || missingOldest === 1 && current.rows.length >= 3) &&
     current.rows.every((row, index) => row === approved.rows[index + missingOldest]);
 };
 
@@ -65,7 +67,8 @@ function snapshotMismatchDiagnostics({ stage, actor, proofSource, cacheHit, cach
   else if (!current) reason = 'latest_ambiguous';
   else if (!latestSame) reason = 'latest_changed';
   else if (approvedRows - rows.length === 1 && rows.length < 3) reason = 'insufficient_rows';
-  else if (approvedRows - rows.length < 0 || approvedRows - rows.length > 1) reason = 'oldest_row_count';
+  else if (approvedRows - rows.length < 0 || approvedRows - rows.length > 1 ||
+      approvedRows === rows.length && (approved.repeatedLatest || current.repeatedLatest)) reason = 'oldest_row_count';
   return {
     stage, proofSource, reason, cacheHit, cacheFresh, comparedProof: Boolean(approved && current),
     observedReliable: observed.reliable, observedCovered: observed.proof?.covered === true,
@@ -874,11 +877,15 @@ export class DouyinBrowserAdapter {
       if (!conversationReply) return;
       const observed = await readConversationTranscript(root, { ...input, limit: 100, signal, timeoutMs: this.timeoutMs, includeProof: true });
       if (observed.snapshotId === input.expectedSnapshotId) {
-        approvedView = replyView(observed);
+        // Repeated DOM-only inbound text can anchor the final check only after
+        // this reply has seen the exact approved snapshot before filling.
+        approvedView = replyView(observed, { allowRepeatedLatest: stage === 'before_fill' && input.actor === 'agent' });
         proofSource = 'exact';
         snapshotComparison = undefined;
       } else {
-        const current = input.actor === 'agent' ? replyView(observed) : null;
+        const current = input.actor === 'agent' ? replyView(observed, {
+          allowRepeatedLatest: stage === 'before_dispatch' && proofSource === 'exact',
+        }) : null;
         if (input.actor !== 'agent' || !sameReplyView(approvedView, current)) {
           const error = new BridgeError('会话内容已有变化，请同步最新消息并重新确认回复。', 'CONVERSATION_CHANGED');
           error.replySnapshotDiagnostics = snapshotMismatchDiagnostics({ stage, actor: input.actor, proofSource,

@@ -401,7 +401,7 @@ export async function runOnce(rawConfig, {
   const polled = await request('poll', {
     deviceId: config.deviceId, authenticated: account.authenticated === true, ...accountClaim,
     message: account.message, sendRetryVersion: 1, conversationVersion: 1,
-    ...(quietConversationSync === true ? { quietConversationSync: true } : {}),
+    ...(quietConversationSync === true ? { quietConversationSync: true, replySamePassProofVersion: 1 } : {}),
     ...(verifiedReadOnlyAccountId ? { verifiedReadOnlyAccountId } : {}),
   });
   if (!object(polled) || !Object.hasOwn(polled, 'job')) fail('工作台未返回有效任务。', 'API_FORMAT');

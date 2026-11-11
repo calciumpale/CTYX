@@ -878,6 +878,26 @@ for(const scenario of ['same question','after composer failure','newer inbound',
   await f.store.complete(x.device.deviceId,explicit.id,explicit.leaseToken,{outcome:'failed',error:snapshotError});
   f.advance(91000);await f.store.seen(x.device.deviceId,{authenticated:true,accountId:'MS4wSender001'});
   await f.chat.schedule(x.device.deviceId,{quiet:true});assert.equal(await f.store.claim(x.device.deviceId,false,true),null);
+  await f.chat.schedule(x.device.deviceId,{quiet:true,replySamePassProofVersion:1});
+  const downgraded=await f.store.claim(x.device.deviceId,false,true);assert.equal(downgraded?.kind,'readConversation');
+  assert.equal(downgraded?.input.replySamePassProofVersion,undefined);
+  const completeRead=(job:NonNullable<typeof downgraded>,snapshotId:string)=>f.store.complete(x.device.deviceId,job.id,job.leaseToken,{senderAccountId:'MS4wSender001',recipientId:'MS4wRecipient001',observedAt:f.now(),snapshotId,reliable:true,covered:true,messages:[inbound]});
+  await completeRead(downgraded!,'same-pass-legacy-claim');
+  assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',decide),false);
+  f.advance(91000);await f.store.seen(x.device.deviceId,{authenticated:true,accountId:'MS4wSender001'});
+  await f.chat.schedule(x.device.deviceId,{quiet:true,replySamePassProofVersion:1});
+  const upgraded=await f.store.claim(x.device.deviceId,false,true,true);assert.equal(upgraded?.kind,'readConversation');
+  assert.equal(upgraded?.input.replySamePassProofVersion,1);
+  await completeRead(upgraded!,'same-pass-verified');
+  assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',decide),true);
+  assert.equal(decisions.at(-1),decisions[0]);
+  const upgradedReply=await f.store.claim(x.device.deviceId,false,true,true);assert.equal(upgradedReply?.kind,'reply');
+  assert.equal(upgradedReply?.input.expectedSnapshotId,'same-pass-verified');
+  await f.store.complete(x.device.deviceId,upgradedReply!.id,upgradedReply!.leaseToken,{outcome:'failed',error:snapshotError});
+  f.advance(91000);await f.store.seen(x.device.deviceId,{authenticated:true,accountId:'MS4wSender001'});
+  await f.chat.schedule(x.device.deviceId,{quiet:true,replySamePassProofVersion:1});
+  assert.equal(await f.store.claim(x.device.deviceId,false,true,true),null);
+  assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',decide),false);
  }
 });
 

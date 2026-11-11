@@ -5,14 +5,15 @@ import {useState,useEffect,useRef,useCallback,useId,type KeyboardEvent} from 're
 import type {MaterialKind,MaterialInput,PublicMaterialTask} from '../lib/marketing-material-types';
 import DigitalHumanWorkspace from './DigitalHumanWorkspace';
 import MomentsMaterials from './MomentsMaterials';
+import CreativeStudio from './CreativeStudio';
 import './marketing-materials.css';
 
 type GenerationKind='image'|'video';
-type MaterialSection='generate'|'moments'|'digitalhuman';
+type MaterialSection='generate'|'moments'|'digitalhuman'|'creative';
 type AttemptIdentity={id:string;hash:string};
 type MaterialProps={notify:(message:string)=>void;onBusyChange?:(busy:boolean)=>void;onDirtyChange?:(dirty:boolean)=>void};
 const kinds:Record<GenerationKind,string>={image:'营销图片',video:'营销视频'};
-const sections:Record<MaterialSection,string>={generate:'图文生成',moments:'AI 朋友圈',digitalhuman:'数字人'};
+const sections:Record<MaterialSection,string>={generate:'图文生成',moments:'AI 朋友圈',digitalhuman:'数字人',creative:'创作与设计'};
 const sectionOrder=Object.keys(sections) as MaterialSection[];
 const statuses={submitting:'正在提交',submission_unknown:'提交结果未知',queued:'排队中',processing:'生成中',saving:'保存中',completed:'已完成',failed:'生成失败',expired:'结果链接已过期'};
 
@@ -28,12 +29,14 @@ export default function MarketingMaterials({notify,onBusyChange,onDirtyChange}:M
  const [section,setSection]=useState<MaterialSection>('generate');
  const [humanVisited,setHumanVisited]=useState(false);
  const [momentsVisited,setMomentsVisited]=useState(false);
+ const [creativeVisited,setCreativeVisited]=useState(false);
  const [generationBusy,setGenerationBusy]=useState(false),[humanBusy,setHumanBusy]=useState(false),[momentsBusy,setMomentsBusy]=useState(false);
  const [generationDirty,setGenerationDirty]=useState(false),[humanDirty,setHumanDirty]=useState(false),[momentsDirty,setMomentsDirty]=useState(false);
- const busy=generationBusy||humanBusy||momentsBusy,dirty=generationDirty||humanDirty||momentsDirty;
+ const [creativeBusy,setCreativeBusy]=useState(false),[creativeDirty,setCreativeDirty]=useState(false);
+ const busy=generationBusy||humanBusy||momentsBusy||creativeBusy,dirty=generationDirty||humanDirty||momentsDirty||creativeDirty;
  useEffect(()=>{onBusyChange?.(busy);return()=>onBusyChange?.(false);},[busy,onBusyChange]);
  useEffect(()=>{onDirtyChange?.(dirty);return()=>onDirtyChange?.(false);},[dirty,onDirtyChange]);
- function selectSection(next:MaterialSection){if(busy)return;if(next==='digitalhuman')setHumanVisited(true);if(next==='moments')setMomentsVisited(true);setSection(next);}
+ function selectSection(next:MaterialSection){if(busy)return;if(next==='digitalhuman')setHumanVisited(true);if(next==='moments')setMomentsVisited(true);if(next==='creative')setCreativeVisited(true);setSection(next);}
  function handleTabKey(event:KeyboardEvent<HTMLButtonElement>){
   if(busy||!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;
   event.preventDefault();
@@ -57,6 +60,9 @@ export default function MarketingMaterials({notify,onBusyChange,onDirtyChange}:M
   </div>
   <div className="material-panel" role="tabpanel" id={`${id}-digitalhuman-panel`} aria-labelledby={`${id}-digitalhuman-tab`} hidden={section!=='digitalhuman'}>
    {humanVisited&&<DigitalHumanWorkspace notify={notify} active={section==='digitalhuman'} onBusyChange={setHumanBusy} onDirtyChange={setHumanDirty}/>}
+  </div>
+  <div className="material-panel" role="tabpanel" id={`${id}-creative-panel`} aria-labelledby={`${id}-creative-tab`} hidden={section!=='creative'}>
+   {creativeVisited&&<CreativeStudio notify={notify} onBusyChange={setCreativeBusy} onDirtyChange={setCreativeDirty}/>}
   </div>
  </section>;
 }

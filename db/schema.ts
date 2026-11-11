@@ -243,3 +243,47 @@ export const workbenchDigitalHumanOperations = sqliteTable('workbench_digital_hu
   liveId: text('live_id').notNull(), action: text('action').notNull(), payloadHash: text('payload_hash').notNull(),
   status: text('status').notNull(), dataJson: text('data_json').notNull(),
 }, table => [primaryKey({columns: [table.ownerId, table.memberId, table.requestId]}), index('workbench_dh_operation_live').on(table.ownerId, table.memberId, table.liveId)]);
+
+/** Creative documents and their version history are private to a business member. */
+export const workbenchCreativeProjects = sqliteTable('workbench_creative_projects', {
+  ownerId: text('owner_id').notNull(),
+  memberId: text('member_id').notNull(),
+  id: text('id').notNull(),
+  title: text('title').notNull(),
+  kind: text('kind').notNull(),
+  version: integer('version').notNull(),
+  updatedAt: text('updated_at').notNull(),
+  archivedAt: text('archived_at'),
+  saveToken: text('save_token').notNull(),
+  documentJson: text('document_json').notNull(),
+}, table => [
+  primaryKey({ columns: [table.ownerId, table.memberId, table.id] }),
+  index('workbench_creative_project_member').on(table.ownerId, table.memberId, table.archivedAt, table.updatedAt),
+]);
+
+export const workbenchCreativeVersions = sqliteTable('workbench_creative_versions', {
+  ownerId: text('owner_id').notNull(),
+  memberId: text('member_id').notNull(),
+  projectId: text('project_id').notNull(),
+  version: integer('version').notNull(),
+  updatedAt: text('updated_at').notNull(),
+  documentJson: text('document_json').notNull(),
+}, table => [
+  primaryKey({ columns: [table.ownerId, table.memberId, table.projectId, table.version] }),
+]);
+
+/** Only explicit board snapshots are visible to other business members. */
+export const workbenchCreativeTemplates = sqliteTable('workbench_creative_templates', {
+  id: text('id').primaryKey(),
+  ownerId: text('owner_id').notNull(),
+  memberId: text('member_id').notNull(),
+  projectId: text('project_id').notNull(),
+  title: text('title').notNull(),
+  kind: text('kind').notNull(),
+  description: text('description').notNull(),
+  boardsJson: text('boards_json').notNull(),
+  updatedAt: text('updated_at').notNull(),
+}, table => [
+  uniqueIndex('workbench_creative_template_project').on(table.ownerId, table.memberId, table.projectId),
+  index('workbench_creative_template_owner').on(table.ownerId, table.updatedAt),
+]);

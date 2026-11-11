@@ -36,6 +36,119 @@ async function createFixture(source) {
   return { server, origin, cacheDir };
 }
 
+test('creative studio connects copy, design, saved versions, and independent template drafts', { timeout: 60000 }, async () => {
+  const { chromium } = await import(pathToFileURL(path.join(root, 'tools/douyin-bridge/node_modules/playwright/index.mjs')).href);
+  const { server, origin, cacheDir } = await createFixture(fixture.replace('<MaterialConnectionSettings/>', ''));
+  let browser;
+  try {
+    browser = await chromium.launch({ headless: true });
+    const page = await browser.newPage({ viewport: { width: 1360, height: 860 } });
+    page.setDefaultTimeout(8000);
+    const pageErrors = [];
+    page.on('pageerror', error => pageErrors.push(error.message));
+    const projects = new Map();
+    const actions = [];
+    const coverRequests = [];
+    const mediaTasks = [];
+    const time = '2026-11-12T00:00:00.000Z';
+    const copy = { title: '园区周末市集', caption: '来逛一圈周末市集。', script: '带你看看摊位。', coverPrompt: '街区市集全景', shots: [{ visual: '摊位全景', voiceover: '周末见', seconds: 5 }] };
+    await page.route('**/api/marketing-materials', route => {
+      if (route.request().method() === 'GET') return route.fulfill({ json: { tasks: mediaTasks, availability: { image: true, video: false } } });
+      const body = route.request().postDataJSON();
+      assert.equal(body.action, 'generate');
+      coverRequests.push(body.requestId);
+      if (coverRequests.length === 1) return route.abort();
+      const task = { id: 'cover-1', requestId: body.requestId, version: 2, status: 'submission_unknown', input: body.input, files: [] };
+      mediaTasks.push(task);
+      return route.fulfill({ json: { task } });
+    });
+    await page.route('**/api/creative-studio*', route => {
+      const request = route.request();
+      const query = new URL(request.url()).searchParams;
+      if (request.method() === 'GET') {
+        if (query.has('market')) return route.fulfill({ json: { templates: [] } });
+        if (query.has('id')) {
+          const versions = projects.get(query.get('id')) ?? [];
+          const project = query.has('version') ? versions.find(item => item.version === Number(query.get('version'))) : versions[0];
+          return route.fulfill({ json: { project, versions: versions.map(({ version, updatedAt }) => ({ version, updatedAt })) } });
+        }
+        return route.fulfill({ json: { projects: [...projects.values()].map(([item]) => ({
+          id: item.id, title: item.document.title, kind: item.document.kind, version: item.version, updatedAt: item.updatedAt,
+        })), modelAvailable: true } });
+      }
+      const body = request.postDataJSON();
+      actions.push(body.action);
+      if (body.action === 'generate') {
+        assert.equal(body.mode, 'copy');
+        assert.equal(body.document.brief, '园区周末举办市集，拍摄摊位。');
+        return route.fulfill({ json: { copy } });
+      }
+      assert.equal(body.action, 'save');
+      const versions = projects.get(body.id) ?? [];
+      assert.equal(body.version, versions[0]?.version ?? 0);
+      const project = { id: body.id, version: body.version + 1, document: body.document, updatedAt: time };
+      projects.set(body.id, [project, ...versions]);
+      return route.fulfill({ json: { project } });
+    });
+    await page.goto(origin);
+    await page.getByRole('tab', { name: '创作与设计' }).click();
+    await page.getByRole('button', { name: '营销创作', exact: false }).click();
+    await page.getByLabel('灵感与产品资料').fill('园区周末举办市集，拍摄摊位。');
+    await page.getByRole('button', { name: '生成稿件', exact: true }).click();
+    await page.waitForFunction(() => [...document.querySelectorAll('input')].some(input => input.value === '园区周末市集'));
+    assert.equal(await page.getByRole('textbox', { name: /^画面/ }).inputValue(), '摊位全景');
+    await page.getByRole('button', { name: '用稿件做画板' }).click();
+    await page.getByRole('region', { name: '画板浏览区' }).waitFor();
+    await page.getByLabel('项目名称', { exact: true }).fill('市集第一版');
+    await page.getByRole('button', { name: '保存', exact: true }).click();
+    await page.getByText('版本 1', { exact: true }).waitFor();
+    await page.getByRole('button', { name: '成稿', exact: true }).click();
+    await page.getByRole('button', { name: '生成封面图片', exact: true }).click();
+    await page.getByRole('alert').filter({ hasText: /fetch|请求/i }).waitFor();
+    await page.reload();
+    await page.getByRole('tab', { name: '创作与设计' }).click();
+    await page.getByRole('button', { name: /市集第一版/ }).click();
+    await page.getByRole('button', { name: '生成封面图片', exact: true }).click();
+    await page.getByText('封面图片：提交结果待核对', { exact: false }).waitFor();
+    assert.equal(coverRequests.length, 2);
+    assert.equal(coverRequests[0], coverRequests[1]);
+    assert.equal(await page.getByRole('button', { name: '生成封面图片', exact: true }).isDisabled(), true);
+    await page.getByLabel('项目名称', { exact: true }).fill('市集第二版');
+    await page.getByRole('button', { name: '保存', exact: true }).click();
+    await page.getByText('版本 2', { exact: true }).waitFor();
+    await page.getByRole('button', { name: '版本比较', exact: true }).click();
+    await page.getByRole('region', { name: '左侧版本' }).getByText('市集第一版', { exact: true }).waitFor();
+    await page.getByRole('region', { name: '右侧版本' }).getByText('市集第二版', { exact: true }).waitFor();
+    await page.getByRole('button', { name: '恢复为草稿' }).click();
+    assert.equal(await page.getByLabel('项目名称', { exact: true }).inputValue(), '市集第一版');
+    await page.getByRole('button', { name: '保存', exact: true }).click();
+    await page.getByText('版本 3', { exact: true }).waitFor();
+    await page.getByRole('button', { name: '设计市场', exact: true }).click();
+    await page.getByRole('button', { name: '小程序', exact: true }).click();
+    await page.getByRole('button', { name: /^使用模板 / }).first().click();
+    await page.getByRole('region', { name: '画板浏览区' }).waitFor();
+    await page.getByRole('button', { name: '保存', exact: true }).click();
+    await page.getByText('版本 1', { exact: true }).waitFor();
+    assert.deepEqual(actions, ['generate', 'save', 'save', 'save', 'save']);
+    assert.equal(projects.size, 2);
+    assert.deepEqual([...projects.values()].map(([item]) => item.document.kind), ['poster', 'mini']);
+    if (process.env.STUDIO_QA_ARTIFACT_DIR) {
+      await page.screenshot({ path: path.join(process.env.STUDIO_QA_ARTIFACT_DIR, 'studio-desktop.png'), fullPage: true });
+    }
+    await page.setViewportSize({ width: 390, height: 844 });
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+    if (process.env.STUDIO_QA_ARTIFACT_DIR) {
+      await page.getByRole('region', { name: '画板浏览区' }).scrollIntoViewIfNeeded();
+      await page.screenshot({ path: path.join(process.env.STUDIO_QA_ARTIFACT_DIR, 'studio-mobile.png') });
+    }
+    assert.deepEqual(pageErrors, []);
+  } finally {
+    await browser?.close();
+    await server.close();
+    await rm(cacheDir, { recursive: true, force: true });
+  }
+});
+
 
 test('unified material entries retain image/video drafts, remove deck tools and fit mobile', {timeout:60000},async()=>{
  const {chromium}=await import(pathToFileURL(path.join(root,'tools/douyin-bridge/node_modules/playwright/index.mjs')).href);const {server,origin,cacheDir}=await createFixture(fixture);let browser;
@@ -44,7 +157,7 @@ test('unified material entries retain image/video drafts, remove deck tools and 
   await page.route('**/api/marketing-materials',route=>route.fulfill({json:{tasks,availability:{presentation:true,image:false,video:false}}}));await page.route('**/api/material-connection',route=>{if(route.request().method()==='POST')connectionWrites++;return route.fulfill({json:{connection:{kind:'apimart',configured:false,hasSecret:false,enabled:false,version:0,imageModel:'gpt-image-1-official',storageReady:true},message:'已保存'}});});
   await page.goto(origin);await page.getByLabel('产品与生成要求').waitFor();
   assert.equal(await page.getByRole('heading',{name:'AI营销素材',exact:true}).count(),1);
-  assert.deepEqual(await page.getByRole('tab').allTextContents(),['图文生成','AI 朋友圈','数字人']);
+  assert.deepEqual(await page.getByRole('tab').allTextContents(),['图文生成','AI 朋友圈','数字人','创作与设计']);
   assert.equal(await page.getByRole('tab',{name:'产品演示稿'}).count(),0);assert.equal(await page.getByText('历史演示稿',{exact:true}).count(),0);assert.equal(await page.getByRole('button',{name:'导出可编辑 PPTX'}).count(),0);
   assert.equal(await page.getByLabel('输出类型',{exact:true}).inputValue(),'image');
   await page.getByLabel('产品与生成要求').fill('保留的图片输入');assert.equal(await page.getByRole('button',{name:'生成营销图片'}).isDisabled(),true);

@@ -57,6 +57,92 @@ async function propertyPageFixture(f:ReturnType<typeof fixture>,legacy=false){
  return{x,sent,question,page,messages};
 }
 
+const pageSnapshotError='会话内容已有变化，请同步最新消息并重新确认回复。';
+const pageComposerError='私信输入框的文案与批准的内容不一致，未发送。';
+const pageMissingPrevious='未找到已提交的上一页房源，请核实后回复。';
+async function failedPropertyPageFixture(f:ReturnType<typeof fixture>,composer=false){
+ const x=await propertyPageFixture(f);
+ const nextLookup={...pageLookup,sourceIds:['property-record:two']};
+ assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',async(_o,_u,input)=>({
+  action:'reply',reply:composer?'嘉兴另有92平商铺。\n现况待核实。':'嘉兴另有92平商铺，现况待核实。',
+  answeredMessageIds:[input.inbound.id],knowledgeLookup:nextLookup,evidenceIds:nextLookup.sourceIds,propertyQuery:{...pageQuery,page:2},propertyHasNext:false,
+ })),true);
+ const failed=(await f.store.claim(x.x.device.deviceId,false,true))!;assert.equal(failed.kind,'reply');
+ await f.store.complete(x.x.device.deviceId,failed.id,failed.leaseToken,{outcome:'failed',error:composer?pageComposerError:pageSnapshotError});
+ f.advance(91000);await f.store.seen(x.x.device.deviceId,{authenticated:true,accountId:'MS4wSender001'});
+ await f.chat.schedule(x.x.device.deviceId,{quiet:true,...(composer?{replySamePassProofVersion:1 as const}:{})});
+ const read=(await f.store.claim(x.x.device.deviceId,false,true,composer))!;assert.equal(read.kind,'readConversation');
+ await f.store.complete(x.x.device.deviceId,read.id,read.leaseToken,{senderAccountId:'MS4wSender001',recipientId:'MS4wRecipient001',observedAt:f.now(),snapshotId:'failed-page-verified',reliable:true,covered:true,messages:x.messages});
+ const conversation=(await f.chat.snapshot('owner-a','member-a','sales',x.x.campaign.id)).conversations[0];assert.equal(conversation.mode,'agent');
+ const marker=composer?'paragraphRecoveredInboundId':'snapshotRecoveredInboundId';
+ const audit=JSON.parse(String(f.sqlite.prepare('SELECT memory_json FROM workbench_prospect_conversations WHERE id=?').get(conversation.id)?.memory_json));
+ assert.equal(audit[marker],failed.input.answeredMessageIds?.[0]);
+ return{...x,failed,marker,inboundId:String(failed.input.answeredMessageIds?.[0])};
+}
+
+function mutateFailedPage(f:ReturnType<typeof fixture>,failed:Awaited<ReturnType<typeof failedPropertyPageFixture>>['failed'],mutation:string){
+ if(mutation==='submit evidence')f.sqlite.prepare("UPDATE workbench_prospect_jobs SET result_json=json_set(result_json,'$.evidence','outbound bubble observed') WHERE id=?").run(failed.id);
+ if(mutation==='body mismatch')f.sqlite.prepare("UPDATE workbench_prospect_jobs SET input_json=json_set(input_json,'$.message','unapproved changed body') WHERE id=?").run(failed.id);
+ if(mutation==='wrong session'||mutation==='wrong binding'||mutation==='wrong policy'){
+  const key=mutation==='wrong session'?'sessionId':mutation==='wrong binding'?'bindingVersion':'policyVersion';
+  f.sqlite.prepare('UPDATE workbench_prospect_jobs SET input_json=json_set(input_json,?,json(?)) WHERE id=?').run('$.'+key,JSON.stringify(mutation==='wrong session'?'other-session':999),failed.id);
+ }
+ if(mutation==='wrong campaign')f.sqlite.prepare("UPDATE workbench_prospect_jobs SET campaign_id='another-campaign' WHERE id=?").run(failed.id);
+ if(mutation==='wrong citations')f.sqlite.prepare("UPDATE workbench_prospect_jobs SET result_json=json_set(result_json,'$.evidenceIds',json('[\"knowledge-document:other\"]')) WHERE id=?").run(failed.id);
+ if(mutation==='human draft')f.sqlite.prepare("UPDATE workbench_prospect_messages SET actor='human' WHERE job_id=?").run(failed.id);
+ if(mutation==='sent draft')f.sqlite.prepare("UPDATE workbench_prospect_messages SET status='sent',posted_at=? WHERE job_id=?").run(f.now(),failed.id);
+ if(['queued','running','unknown'].includes(mutation)){
+  f.sqlite.prepare('UPDATE workbench_prospect_jobs SET status=?,lease_until=? WHERE id=?').run(mutation,new Date(Date.parse(f.now())+3600000).toISOString(),failed.id);
+  f.sqlite.prepare('UPDATE workbench_prospect_messages SET status=? WHERE job_id=?').run(mutation==='running'?'sending':mutation,failed.id);
+ }
+}
+
+for(const scenario of ['snapshot','composer','submit evidence','body mismatch','wrong session','wrong binding','wrong policy','wrong campaign','wrong citations','human draft','sent draft','queued','running','unknown'] as const)test(`pagination skips only a proven unsubmitted page draft: ${scenario}`,async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await failedPropertyPageFixture(f,scenario==='composer');
+ mutateFailedPage(f,x.failed,scenario);
+ let context:Parameters<typeof chooseProspectChatAction>[0]['propertyPage']|undefined;
+ const worked=await f.chat.processOne('owner-a','member-a','https://example.test',async(_o,_u,input)=>{context=input.propertyPage;return{action:'handoff',reason:'fixture'};});
+ if(['queued','running','unknown'].includes(scenario)){assert.equal(worked,false);assert.equal(context,undefined);return;}
+ assert.equal(worked,true);
+ if(scenario==='snapshot'||scenario==='composer')assert.deepEqual(context,{query:pageQuery,hasNext:true,evidenceIds:pageLookup.sourceIds});
+ else assert.equal(context,null);
+ assert.equal(f.sqlite.prepare('SELECT status FROM workbench_prospect_jobs WHERE id=?').get(x.failed.id)?.status,'failed');
+});
+
+for(const scenario of ['snapshot','composer','submit evidence','body mismatch','wrong binding','wrong citations','human draft','no recovery marker','new inbound','new outbound','uncovered read','manual takeover','atomic takeover'] as const)test(`quiet recovery of a page draft routing miss is bounded: ${scenario}`,async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await failedPropertyPageFixture(f,scenario==='composer');
+ let decisions=0;
+ const oldNullDecision=async()=>{decisions++;return{action:'handoff' as const,reason:pageMissingPrevious};};
+ assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',oldNullDecision),true);
+ const conversation=async()=>(await f.chat.snapshot('owner-a','member-a','sales',x.x.campaign.id)).conversations[0];
+ const before=await conversation();assert.equal(before.mode,'human');assert.equal(before.handoffReason,pageMissingPrevious);
+ mutateFailedPage(f,x.failed,scenario);
+ if(scenario==='no recovery marker')f.sqlite.prepare('UPDATE workbench_prospect_conversations SET memory_json=json_remove(memory_json,?) WHERE id=?').run('$.'+x.marker,before.id);
+ if(scenario==='manual takeover')await f.chat.takeover('owner-a','member-a',before.id,before.version);
+ f.advance(91000);await f.store.seen(x.x.device.deviceId,{authenticated:true,accountId:'MS4wSender001'});
+ await f.chat.schedule(x.x.device.deviceId,{quiet:true});const read=await f.store.claim(x.x.device.deviceId,false,true);
+ if(['submit evidence','body mismatch','wrong binding','wrong citations','human draft','no recovery marker','manual takeover'].includes(scenario)){assert.equal(read,null);return;}
+ assert.equal(read?.kind,'readConversation');
+ if(scenario==='atomic takeover')f.interceptNextBatch(()=>f.sqlite.prepare("UPDATE workbench_prospect_conversations SET mode='human',handoff_reason='已由销售接管',version=version+1 WHERE id=?").run(before.id));
+ const messages=[...x.messages,...(scenario==='new inbound'?[{id:'failed-page-new-inbound',direction:'inbound',text:'还有别的区域吗'}]:scenario==='new outbound'?[{id:'failed-page-new-outbound',direction:'outbound',text:'销售已经回复'}]:[])];
+ await f.store.complete(x.x.device.deviceId,read!.id,read!.leaseToken,{senderAccountId:'MS4wSender001',recipientId:'MS4wRecipient001',observedAt:f.now(),snapshotId:'page-draft-route-recovered',reliable:true,covered:scenario!=='uncovered read',messages});
+ const mayRecover=scenario==='snapshot'||scenario==='composer';
+ assert.equal((await conversation()).mode,mayRecover?'agent':'human');
+ assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',async(_o,_u,input)=>{
+  assert.equal(input.inbound.id,x.inboundId);assert.deepEqual(input.propertyPage,{query:pageQuery,hasNext:true,evidenceIds:pageLookup.sourceIds});return oldNullDecision();
+ }),mayRecover);
+ assert.equal(decisions,mayRecover?2:1);
+ const audit=JSON.parse(String(f.sqlite.prepare('SELECT memory_json FROM workbench_prospect_conversations WHERE id=?').get(before.id)?.memory_json));
+ assert.equal(audit[x.marker],x.inboundId);
+ if(mayRecover){
+  assert.equal(audit.propertyPageDraftRecoveredInboundId,x.inboundId);
+  assert.equal(f.sqlite.prepare('SELECT status FROM workbench_prospect_jobs WHERE id=?').get(x.failed.id)?.status,'failed');
+  f.advance(91000);await f.store.seen(x.x.device.deviceId,{authenticated:true,accountId:'MS4wSender001'});
+  await f.chat.schedule(x.x.device.deviceId,{quiet:true});assert.equal(await f.store.claim(x.x.device.deviceId,false,true),null);
+  assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',oldNullDecision),false);assert.equal(decisions,2);
+ }
+});
+
 for(const scenario of ['structured','task metadata updated','legacy','failed','wrong session','wrong binding','wrong policy','wrong department','human reply','newer outbound'] as const)test(`property pagination uses only a confirmed scoped outbound: ${scenario}`,async t=>{
  const f=fixture();t.after(()=>f.sqlite.close());const x=await propertyPageFixture(f,scenario==='legacy');
  if(scenario==='task metadata updated')f.sqlite.prepare('UPDATE workbench_prospect_campaigns SET updated_at=? WHERE id=?').run(f.now(),x.x.campaign.id);

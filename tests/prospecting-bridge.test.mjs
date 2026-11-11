@@ -138,13 +138,13 @@ test('a reply snapshot mismatch stores only sanitized diagnostics in the local j
     replyId: 'reply-1', expectedSnapshotId: 'snapshot-approved', actor: 'agent' } };
   const approved = { stage: 'before_dispatch', proofSource: 'exact', reason: 'row_suffix_mismatch',
     cacheHit: true, cacheFresh: true, comparedProof: true, observedReliable: true, observedCovered: true,
-    latestSame: true, approvedRows: 20, observedRows: 19, observedMessages: 19, matchingTailRows: 16 };
+    latestSame: true, approvedRows: 20, observedRows: 19, observedMessages: 19, matchingTailRows: 16, resampled: true, fieldDifferences: { text: 1 } };
   let completion;
   await runOnce(config, {
     journal, adapter: { accountStatus: account, async reply() {
       const error = new BridgeError('会话内容已有变化，请同步最新消息并重新确认回复。', 'CONVERSATION_CHANGED');
       error.replySnapshotDiagnostics = { ...approved, latestId: 'private-id', rawText: 'private-content',
-        unsafeHash: 'private-hash', observedLatestDirection: 'private-url' };
+        unsafeHash: 'private-hash', observedLatestDirection: 'private-url', fieldDifferences: { text: 1, nativeId: 'private-id', url: 'private-url', state: -1, media: 999999 } };
       throw error;
     } },
     fetchImpl: async (url, request) => {
@@ -732,7 +732,7 @@ browserTest('a changed conversation after lease renewal rejects an approved repl
     assert.deepEqual(error.replySnapshotDiagnostics, {
       stage: 'before_dispatch', proofSource: 'exact', reason: 'row_suffix_mismatch', cacheHit: true, cacheFresh: true,
       comparedProof: true, observedReliable: true, observedCovered: true, observedLatestDirection: 'inbound',
-      latestSame: true, approvedRows: 1, observedRows: 1, observedMessages: 1, matchingTailRows: 0,
+      latestSame: true, approvedRows: 1, observedRows: 1, observedMessages: 1, matchingTailRows: 0, fieldDifferences: { text: 1 },
     });
     return true;
   });
@@ -978,4 +978,43 @@ browserTest('visible text added to a Slate draft stops before the dispatch check
 browserTest('browser stops at verification instead of attempting to bypass it', async t => {
   const { adapter } = await fixture(t, { challenge: true });
   await assert.rejects(adapter.discover({ keywords: ['客服'] }), /验证/);
+});
+
+for (const mutation of ['none', 'text', 'time', 'state', 'media', 'nativeId']) browserTest(`same-pass old duplicate ordinal shift preserves exact content: ${mutation}`, async t => {
+  const duplicate = index => `<div data-index="${index}"><div class="messageMessageBoxmessageBox" data-message-direction="outgoing"><span data-e2e="message-text">较早的重复回复</span></div></div>`;
+  const history = incomingHistory + [1,2].map(i => `<div data-index="${i}"><div class="messageMessageBoxmessageBox" data-message-direction="outgoing" data-message-id="older-${i}"><span data-e2e="message-text">原消息${i}</span></div></div>`).join('') + duplicate(3) + duplicate(4);
+  const {adapter,clicks}=await fixture(t,{stackChat:true,history,chatReplyEcho:'outgoing'});
+  const input=conversationInput(),observed=await adapter.readConversation(input);let proof;
+  const action=()=>adapter.reply({...input,message:'这间商铺约88平方米。',replyId:'reply-old-duplicate',actor:'agent',expectedSnapshotId:observed.snapshotId},{
+    renewBeforeDispatch:async()=>{const page=await adapter.page();await page.locator('[data-index="4"]').evaluate(node=>node.remove());
+      await page.locator('[data-index="3"] .messageMessageBoxmessageBox').evaluate((node, mutation)=>{
+        if(mutation==='text')node.querySelector('[data-e2e="message-text"]').textContent='不同消息';
+        if(mutation==='time')node.insertAdjacentHTML('beforeend','<time datetime="2026-11-01T00:00:00Z">时间</time>');
+        if(mutation==='state')node.dataset.messageStatus='delivered';
+        if(mutation==='media')node.querySelector('[data-e2e="message-text"]').insertAdjacentHTML('beforeend','<img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" width="80" height="80">');
+        if(mutation==='nativeId')node.dataset.messageId='different-native-id';
+      },mutation);
+    },
+    beforeDispatch:async value=>{proof=value.conversation;},
+  });
+  if(mutation==='none'){assert.equal((await action()).outcome,'submitted');assert.equal(clicks(),1);assert.equal(proof.snapshotComparison,'one_oldest_missing');assert.equal(proof.priorMessageKeys.length,4);}
+  else {await assert.rejects(action(),{code:'CONVERSATION_CHANGED'});assert.equal(clicks(),0);assert.equal(proof,undefined);}
+});
+
+for(const restore of [true,false])browserTest(`same-pass final mismatch gets one passive resample: restore=${restore}`,async t=>{
+  const history=incomingHistory+[1,2,3].map(i=>`<div data-index="${i}"><div class="messageMessageBoxmessageBox" data-message-direction="outgoing" data-message-id="older-${i}"><span data-e2e="message-text">原消息${i}</span></div></div>`).join('');
+  const {adapter,clicks}=await fixture(t,{stackChat:true,history,chatReplyEcho:'outgoing'});
+  const input=conversationInput(),observed=await adapter.readConversation(input);let sampling=false,samples=0,dispatches=0;
+  const open=adapter.openConversation.bind(adapter);adapter.openConversation=async(...args)=>{const result=await open(...args),evaluate=result.root.evaluate.bind(result.root);result.root.evaluate=async(fn,arg)=>{
+    const value=await evaluate(fn,arg);
+    if(sampling&&arg?.senderAccountId&&arg?.recipientId){samples++;if(samples===2&&restore)await evaluate(chat=>{chat.querySelector('[data-index="3"] [data-e2e="message-text"]').textContent='原消息3';});}
+    return value;
+  };return result;};
+  const action=()=>adapter.reply({...input,message:'这间商铺约88平方米。',replyId:'reply-resample',actor:'agent',expectedSnapshotId:observed.snapshotId},{
+    renewBeforeDispatch:async()=>{await (await adapter.page()).locator('[data-index="3"] [data-e2e="message-text"]').evaluate(node=>{node.textContent='暂时不同的正文';});sampling=true;},
+    beforeDispatch:async()=>{sampling=false;dispatches++;},
+  });
+  if(restore){assert.equal((await action()).outcome,'submitted');assert.equal(clicks(),1);assert.equal(dispatches,1);}
+  else {await assert.rejects(action(),error=>{assert.equal(error.code,'CONVERSATION_CHANGED');assert.equal(error.replySnapshotDiagnostics.resampled,true);assert.equal(error.replySnapshotDiagnostics.fieldDifferences.text,1);return true;});assert.equal(clicks(),0);assert.equal(dispatches,0);}
+  assert.equal(samples,4);
 });

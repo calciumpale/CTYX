@@ -38,7 +38,7 @@ const replyView = (observed, { allowRepeatedLatest = false } = {}) => {
     message.direction === latest.direction && message.text === latest.text &&
     message.postedAt === latest.postedAt && message.contentType === latest.contentType).length !== 1;
   if (repeatedLatest && !allowRepeatedLatest) return null;
-  return { latestId: latest.id, repeatedLatest, rows: observed.proof.rowDigests };
+  return { latestId: latest.id, repeatedLatest, rows: observed.proof.rowDigests, contentRows: observed.proof.rowContentDigests, fields: observed.proof.rowFieldDigests };
 };
 const sameReplyView = (approved, current) => {
   if (!approved || !current || approved.latestId !== current.latestId) return false;
@@ -47,6 +47,11 @@ const sameReplyView = (approved, current) => {
   return (sameLength || missingOldest === 1 && current.rows.length >= 3) &&
     current.rows.every((row, index) => row === approved.rows[index + missingOldest]);
 };
+
+const sameContentSuffix = (approved, current) => Boolean(approved && current && approved.latestId === current.latestId &&
+  approved.rows.length - current.rows.length === 1 && current.rows.length >= 3 &&
+  approved.contentRows?.length === approved.rows.length && current.contentRows?.length === current.rows.length &&
+  current.contentRows.every((row, index) => row === approved.contentRows[index + 1]));
 
 function snapshotMismatchDiagnostics({ stage, actor, proofSource, cacheHit, cacheFresh, approved, current, observed }) {
   const latest = observed.messages.at(-1);
@@ -69,7 +74,19 @@ function snapshotMismatchDiagnostics({ stage, actor, proofSource, cacheHit, cach
   else if (approvedRows - rows.length === 1 && rows.length < 3) reason = 'insufficient_rows';
   else if (approvedRows - rows.length < 0 || approvedRows - rows.length > 1 ||
       approvedRows === rows.length && (approved.repeatedLatest || current.repeatedLatest)) reason = 'oldest_row_count';
+  const fieldDifferences = {};
+  const currentFields = observed.proof?.rowFieldDigests;
+  if (approved?.fields && currentFields) {
+    for (const field of ['nativeId', 'direction', 'text', 'postedAt', 'contentType', 'state', 'media', 'system', 'unsupported']) {
+      let count = 0;
+      for (let i = 1; i <= Math.min(approved.fields.length, currentFields.length); i++) {
+        if (approved.fields.at(-i)[field] !== currentFields.at(-i)[field]) count++;
+      }
+      if (count) fieldDifferences[field] = count;
+    }
+  }
   return {
+    ...(Object.keys(fieldDifferences).length ? { fieldDifferences } : {}),
     stage, proofSource, reason, cacheHit, cacheFresh, comparedProof: Boolean(approved && current),
     observedReliable: observed.reliable, observedCovered: observed.proof?.covered === true,
     observedLatestDirection: latest?.direction ?? 'missing',
@@ -875,28 +892,42 @@ export class DouyinBrowserAdapter {
     let snapshotComparison;
     const verifyConversation = async stage => {
       if (!conversationReply) return;
-      const observed = await readConversationTranscript(root, { ...input, limit: 100, signal, timeoutMs: this.timeoutMs, includeProof: true });
-      if (observed.snapshotId === input.expectedSnapshotId) {
-        // Repeated DOM-only inbound text can anchor the final check only after
-        // this reply has seen the exact approved snapshot before filling.
-        approvedView = replyView(observed, { allowRepeatedLatest: stage === 'before_fill' && input.actor === 'agent' });
-        proofSource = 'exact';
-        snapshotComparison = undefined;
-      } else {
-        const current = input.actor === 'agent' ? replyView(observed, {
-          allowRepeatedLatest: stage === 'before_dispatch' && proofSource === 'exact',
-        }) : null;
-        if (input.actor !== 'agent' || !sameReplyView(approvedView, current)) {
-          const error = new BridgeError('会话内容已有变化，请同步最新消息并重新确认回复。', 'CONVERSATION_CHANGED');
-          error.replySnapshotDiagnostics = snapshotMismatchDiagnostics({ stage, actor: input.actor, proofSource,
-            cacheHit: Boolean(remembered), cacheFresh, approved: approvedView, current, observed });
-          throw error;
+      let resampled = false;
+      for (;;) {
+        const observed = await readConversationTranscript(root, { ...input, limit: 100, signal, timeoutMs: this.timeoutMs, includeProof: true });
+        if (observed.snapshotId === input.expectedSnapshotId) {
+          // Repeated DOM-only inbound text can anchor the final check only after
+          // this reply has seen the exact approved snapshot before filling.
+          approvedView = replyView(observed, { allowRepeatedLatest: stage === 'before_fill' && input.actor === 'agent' });
+          proofSource = 'exact';
+          snapshotComparison = undefined;
+        } else {
+          const current = input.actor === 'agent' ? replyView(observed, {
+            allowRepeatedLatest: stage === 'before_dispatch' && proofSource === 'exact',
+          }) : null;
+          const samePass = stage === 'before_dispatch' && proofSource === 'exact' && input.actor === 'agent';
+          if (input.actor !== 'agent' || !(sameReplyView(approvedView, current) || samePass && sameContentSuffix(approvedView, current))) {
+            const error = new BridgeError('会话内容已有变化，请同步最新消息并重新确认回复。', 'CONVERSATION_CHANGED');
+            error.replySnapshotDiagnostics = snapshotMismatchDiagnostics({ stage, actor: input.actor, proofSource,
+              cacheHit: Boolean(remembered), cacheFresh, approved: approvedView, current, observed });
+            const diagnostics = error.replySnapshotDiagnostics;
+            const missing = approvedView && current ? approvedView.rows.length - current.rows.length : -1;
+            // One passive second sample only; it must pass the unchanged exact checks above.
+            if (!resampled && samePass && current && diagnostics.latestSame && observed.reliable && observed.proof?.covered &&
+                missing >= 0 && missing <= 1 && diagnostics.matchingTailRows >= 3) {
+              resampled = true;
+              await sleep(250); checkAbort(signal);
+              continue;
+            }
+            if (resampled) diagnostics.resampled = true;
+            throw error;
+          }
+          snapshotComparison = approvedView.rows.length === current.rows.length ? 'canonical_rows' : 'one_oldest_missing';
         }
-        snapshotComparison = approvedView.rows.length === current.rows.length ? 'canonical_rows' : 'one_oldest_missing';
+        if (input.actor === 'agent' && !observed.reliable) fail('当前会话的消息方向或正文未能完整核实，请由人工接管。', 'CONVERSATION_UNREADABLE');
+        if (input.actor === 'agent' && observed.messages.at(-1)?.direction !== 'inbound') fail('当前没有可核实的新来信，智能体未继续发送。', 'NO_INBOUND_MESSAGE');
+        return observed;
       }
-      if (input.actor === 'agent' && !observed.reliable) fail('当前会话的消息方向或正文未能完整核实，请由人工接管。', 'CONVERSATION_UNREADABLE');
-      if (input.actor === 'agent' && observed.messages.at(-1)?.direction !== 'inbound') fail('当前没有可核实的新来信，智能体未继续发送。', 'NO_INBOUND_MESSAGE');
-      return observed;
     };
     await verifyConversation('before_fill');
     const priorSubmission = async () => {

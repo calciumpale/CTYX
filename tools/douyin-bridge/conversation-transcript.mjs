@@ -113,7 +113,7 @@ export async function readConversationTranscript(root, { senderAccountId, recipi
     if (Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 150));
   } while (Date.now() < deadline);
   const identity = `${senderAccountId}\n${recipientId}\n${conversationId}`;
-  const occurrences = new Map(), usedIds = new Set(), rowOccurrences = new Map(), rowKeys = [], rowDigests = [], messageKeys = {};
+  const occurrences = new Map(), usedIds = new Set(), rowOccurrences = new Map(), rowKeys = [], rowDigests = [], rowContentDigests = [], rowFieldDigests = [], messageKeys = {};
   let reliable = snapshot.reliable && stable;
   const messages = [];
   for (const row of snapshot.rows) {
@@ -124,6 +124,10 @@ export async function readConversationTranscript(root, { senderAccountId, recipi
     if (includeProof) {
       const { index: _index, order: _order, ...content } = row;
       rowDigests.push(digest(JSON.stringify([rowKey, content])));
+      // Proof-only hashes: exclude synthetic occurrence keys, retain every payload field.
+      rowContentDigests.push(digest(JSON.stringify(content)));
+      rowFieldDigests.push(Object.fromEntries(['nativeId', 'direction', 'text', 'postedAt', 'contentType', 'state', 'media', 'system', 'unsupported']
+        .map(field => [field, digest(JSON.stringify(content[field] ?? null))])));
     }
     if (row.system || row.direction === 'unknown' || !row.text || row.unsupported && row.contentType !== 'image' || /pending|sending|failed|error|发送失败|发送中/.test(row.state)) continue;
     const base = `${identity}\n${row.direction}\n${row.text}\n${row.postedAt || ''}${row.contentType === 'image' ? '\n' + row.media.join('\n') : ''}`;
@@ -139,5 +143,5 @@ export async function readConversationTranscript(root, { senderAccountId, recipi
   return { senderAccountId, recipientId, observedAt: new Date().toISOString(),
     snapshotId: `snapshot:${digest(`${identity}\n${JSON.stringify(snapshot)}`).slice(0, 48)}`,
     messages: messages.slice(-maximum), reliable, covered,
-    ...(includeProof ? { proof: { covered, rowKeys, rowDigests, messageKeys } } : {}) };
+    ...(includeProof ? { proof: { covered, rowKeys, rowDigests, rowContentDigests, rowFieldDigests, messageKeys } } : {}) };
 }

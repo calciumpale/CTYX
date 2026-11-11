@@ -33,51 +33,118 @@ const multilinePropertyReplySql=(thread:string,draft:string,failed:string)=>`(
 const legacyShopConflict='资料内容存在冲突，请核实后回复。';
 const legacyShopRecoveryMs=60*60_000;
 const propertyPageHandoff='现有资料无法确认客户问题，请核实后回复。';
+const propertyPageMissingHandoff='未找到已提交的上一页房源，请核实后回复。';
 const propertyNextInvitation='还有匹配，回复“下一页”查看。';
+// A draft stopped before dispatch is not an actual later message. Require the
+// exact current turn, scope, body and failed result before ignoring its row.
+const unsubmittedPropertyPageDraftProofSql=(thread:string,question:string,draft:string)=>`EXISTS (
+ SELECT 1 FROM workbench_prospect_jobs pageFailed
+ JOIN workbench_prospect_memory_bindings failedBinding ON failedBinding.thread_id=${thread}.id
+ JOIN workbench_prospect_campaigns failedPolicy ON failedPolicy.id=${thread}.campaign_id
+ JOIN workbench_member_accounts failedAccount ON failedAccount.owner_id=${thread}.owner_id AND failedAccount.account_id=${thread}.member_id
+ WHERE ((${draft}.conversation_id=${thread}.id AND ${draft}.owner_id=${thread}.owner_id AND ${draft}.member_id=${thread}.member_id)
+  AND (${draft}.direction='outbound' AND ${draft}.actor='agent' AND ${draft}.status='failed' AND ${draft}.posted_at IS NULL)
+  AND (${draft}.rowid>${question}.rowid AND ${draft}.source_key='reply:'||${draft}.id
+   AND ${draft}.error IN ('${snapshotChangedBeforeDispatch}','${composerChangedBeforeDispatch}')))
+ AND (pageFailed.id=${draft}.job_id AND pageFailed.kind='reply' AND pageFailed.status='failed' AND pageFailed.started_at IS NOT NULL
+  AND pageFailed.error=${draft}.error AND json_extract(pageFailed.result_json,'$.outcome')='failed'
+  AND json_extract(pageFailed.result_json,'$.summary')='会话回复未提交' AND COALESCE(json_extract(pageFailed.result_json,'$.evidence'),'')='')
+ AND ((pageFailed.owner_id=${thread}.owner_id AND pageFailed.member_id=${thread}.member_id AND pageFailed.campaign_id=${thread}.campaign_id)
+  AND (pageFailed.lead_id=${thread}.lead_id AND pageFailed.sender_id=${thread}.sender_id)
+  AND (json_extract(pageFailed.input_json,'$.conversationId')=${thread}.id AND json_extract(pageFailed.input_json,'$.recipientId')=${thread}.recipient_id
+   AND json_extract(pageFailed.input_json,'$.senderAccountId')=${thread}.sender_id AND json_extract(pageFailed.input_json,'$.profileUrl')=${thread}.profile_url))
+ AND (json_extract(pageFailed.input_json,'$.replyId')=${draft}.id AND json_extract(pageFailed.input_json,'$.message')=${draft}.text
+  AND json_extract(pageFailed.input_json,'$.actor')='agent' AND json_extract(pageFailed.input_json,'$.sessionId')=failedBinding.active_session_id
+  AND json_extract(pageFailed.input_json,'$.bindingVersion')=failedBinding.version
+  AND json_array_length(json_extract(pageFailed.input_json,'$.answeredMessageIds'))=1 AND json_extract(pageFailed.input_json,'$.answeredMessageIds[0]')=${question}.id)
+ AND (failedPolicy.owner_id=${thread}.owner_id AND failedPolicy.member_id=${thread}.member_id AND failedPolicy.status='active'
+  AND json_extract(failedPolicy.data_json,'$.chatEnabled')=1
+  AND COALESCE(json_extract(pageFailed.input_json,'$.policyVersion'),0)=COALESCE(json_extract(failedPolicy.data_json,'$.chatPolicyVersion'),0)
+  AND EXISTS (SELECT 1 FROM workbench_prospect_memory_sources source WHERE source.session_id=failedBinding.active_session_id AND source.message_id=${draft}.id))
+ AND (failedAccount.enabled=1 AND failedAccount.role IN ('sales','manager') AND json_extract(pageFailed.input_json,'$.knowledgeLookup.status')='ok'
+  AND json_extract(pageFailed.input_json,'$.knowledgeLookup.department')=CASE failedAccount.sales_id ${KNOWLEDGE_DEPARTMENTS.map(department=>`WHEN '${department.salesId}' THEN '${department.id}'`).join(' ')} END
+  AND json_type(pageFailed.result_json,'$.evidenceIds')='array' AND json_array_length(json_extract(pageFailed.result_json,'$.evidenceIds'))>0
+  AND json_extract(pageFailed.input_json,'$.knowledgeLookup.sourceIds')=json_extract(pageFailed.result_json,'$.evidenceIds')
+  AND NOT EXISTS (SELECT 1 FROM json_each(pageFailed.result_json,'$.evidenceIds') evidence WHERE evidence.type<>'text' OR evidence.value NOT LIKE 'property-record:%')))`;
+// Materialize this bounded proof once per statement. Inlining it under the sent
+// page and recovery checks exceeds D1's expression-depth limit of 100.
+const propertyPageDraftProofCte=(scope:string)=>`WITH verifiedPageDrafts AS MATERIALIZED (
+ SELECT thread.id AS thread_id,question.id AS question_id,draft.id AS draft_id
+ FROM workbench_prospect_conversations thread
+ JOIN workbench_prospect_messages draft ON draft.conversation_id=thread.id AND draft.direction='outbound' AND draft.status='failed'
+ JOIN workbench_prospect_jobs failedLink ON failedLink.id=draft.job_id
+ JOIN workbench_prospect_messages question ON question.id=json_extract(failedLink.input_json,'$.answeredMessageIds[0]') AND question.conversation_id=thread.id
+ WHERE (${scope}) AND ${unsubmittedPropertyPageDraftProofSql('thread','question','draft')}) `;
+const unsubmittedPropertyPageDraftSql=(thread:string,question:string,draft:string)=>`EXISTS (SELECT 1 FROM verifiedPageDrafts verifiedDraft
+ WHERE verifiedDraft.thread_id=${thread}.id AND verifiedDraft.question_id=${question}.id AND verifiedDraft.draft_id=${draft}.id)`;
 // Pagination is grounded in the latest actually submitted reply in this task.
 // A quoted invitation or an unsubmitted draft does not establish a prior page.
-const confirmedPropertyPageSql=(thread:string,question:string)=>`SELECT json_object('input',json(pageJob.input_json),'result',json(pageJob.result_json),'question',original.text)
+const confirmedPropertyPageSql=(thread:string,question:string)=>`SELECT json_object('input',json(pageJob.input_json),'result',json(pageJob.result_json),'question',original.text,'jobId',pageJob.id,'inputJson',pageJob.input_json,'resultJson',pageJob.result_json)
  FROM workbench_prospect_messages pageReply JOIN workbench_prospect_jobs pageJob ON pageJob.id=pageReply.job_id
  JOIN workbench_prospect_memory_bindings pageBinding ON pageBinding.thread_id=${thread}.id
  JOIN workbench_prospect_memory_sessions pageSession ON pageSession.id=pageBinding.active_session_id
  JOIN workbench_prospect_campaigns pagePolicy ON pagePolicy.id=${thread}.campaign_id
  JOIN workbench_member_accounts pageAccount ON pageAccount.owner_id=${thread}.owner_id AND pageAccount.account_id=${thread}.member_id
  JOIN workbench_prospect_messages original ON original.id=json_extract(pageJob.input_json,'$.answeredMessageIds[0]')
- WHERE (pageReply.conversation_id=${thread}.id AND pageReply.owner_id=${thread}.owner_id AND pageReply.member_id=${thread}.member_id
-  AND pageReply.direction='outbound' AND pageReply.actor='agent' AND pageReply.status='sent' AND pageReply.rowid<${question}.rowid
-  AND pageReply.id=json_extract(pageJob.input_json,'$.replyId') AND pageReply.text=json_extract(pageJob.input_json,'$.message'))
- AND (pageJob.kind='reply' AND pageJob.status='done' AND pageJob.owner_id=${thread}.owner_id AND pageJob.member_id=${thread}.member_id
-  AND pageJob.campaign_id=${thread}.campaign_id AND pageJob.lead_id=${thread}.lead_id AND pageJob.sender_id=${thread}.sender_id
-  AND json_extract(pageJob.input_json,'$.conversationId')=${thread}.id AND json_extract(pageJob.input_json,'$.senderAccountId')=${thread}.sender_id
-  AND json_extract(pageJob.input_json,'$.recipientId')=${thread}.recipient_id AND json_extract(pageJob.input_json,'$.profileUrl')=${thread}.profile_url
-  AND json_extract(pageJob.input_json,'$.actor')='agent' AND json_extract(pageJob.input_json,'$.sessionId')=pageBinding.active_session_id
-  AND json_extract(pageJob.input_json,'$.bindingVersion')=pageBinding.version)
+ WHERE (
+ ((pageReply.conversation_id=${thread}.id AND pageReply.owner_id=${thread}.owner_id AND pageReply.member_id=${thread}.member_id)
+  AND (pageReply.direction='outbound' AND pageReply.actor='agent' AND pageReply.status='sent')
+  AND (pageReply.rowid<${question}.rowid AND pageReply.id=json_extract(pageJob.input_json,'$.replyId') AND pageReply.text=json_extract(pageJob.input_json,'$.message')))
+ AND ((pageJob.kind='reply' AND pageJob.status='done' AND pageJob.owner_id=${thread}.owner_id AND pageJob.member_id=${thread}.member_id)
+  AND (pageJob.campaign_id=${thread}.campaign_id AND pageJob.lead_id=${thread}.lead_id AND pageJob.sender_id=${thread}.sender_id)
+  AND (json_extract(pageJob.input_json,'$.conversationId')=${thread}.id AND json_extract(pageJob.input_json,'$.senderAccountId')=${thread}.sender_id
+   AND json_extract(pageJob.input_json,'$.recipientId')=${thread}.recipient_id AND json_extract(pageJob.input_json,'$.profileUrl')=${thread}.profile_url)
+  AND (json_extract(pageJob.input_json,'$.actor')='agent' AND json_extract(pageJob.input_json,'$.sessionId')=pageBinding.active_session_id
+   AND json_extract(pageJob.input_json,'$.bindingVersion')=pageBinding.version))
  AND (pagePolicy.owner_id=${thread}.owner_id AND pagePolicy.member_id=${thread}.member_id AND pagePolicy.status='active'
   AND json_extract(pagePolicy.data_json,'$.chatEnabled')=1
-  AND COALESCE(json_extract(pageJob.input_json,'$.policyVersion'),0)=COALESCE(json_extract(pagePolicy.data_json,'$.chatPolicyVersion'),0))
- AND (pageAccount.enabled=1 AND pageAccount.role IN ('sales','manager') AND json_extract(pageJob.input_json,'$.knowledgeLookup.status')='ok'
-  AND json_extract(pageJob.input_json,'$.knowledgeLookup.department')=CASE pageAccount.sales_id ${KNOWLEDGE_DEPARTMENTS.map(department=>`WHEN '${department.salesId}' THEN '${department.id}'`).join(' ')} END
-  AND json_type(pageJob.input_json,'$.knowledgeLookup.libraryIds')='array' AND json_array_length(json_extract(pageJob.input_json,'$.knowledgeLookup.libraryIds'))>0
-  AND json_type(pageJob.result_json,'$.evidenceIds')='array' AND json_array_length(json_extract(pageJob.result_json,'$.evidenceIds'))>0
-  AND json_extract(pageJob.input_json,'$.knowledgeLookup.sourceIds')=json_extract(pageJob.result_json,'$.evidenceIds')
-  AND NOT EXISTS (SELECT 1 FROM json_each(pageJob.result_json,'$.evidenceIds') evidence WHERE evidence.type<>'text' OR evidence.value NOT LIKE 'property-record:%'))
- AND (original.conversation_id=${thread}.id AND original.direction='inbound' AND original.eligible=1 AND original.processed=1 AND original.rowid<pageReply.rowid
-  AND json_array_length(json_extract(pageJob.input_json,'$.answeredMessageIds'))=1
-  AND EXISTS (SELECT 1 FROM workbench_prospect_memory_sources source WHERE source.session_id=pageBinding.active_session_id AND source.message_id=original.id)
-  AND EXISTS (SELECT 1 FROM workbench_prospect_memory_sources source WHERE source.session_id=pageBinding.active_session_id AND source.message_id=pageReply.id)
-  AND EXISTS (SELECT 1 FROM workbench_prospect_memory_sources source WHERE source.session_id=pageBinding.active_session_id AND source.message_id=${question}.id)
-  AND NOT EXISTS (SELECT 1 FROM json_each(pageSession.state_json,'$.ignoredSourceIds') ignored WHERE ignored.value IN (original.id,pageReply.id,${question}.id)))
- AND (json_type(pageJob.input_json,'$.propertyQuery')='object' OR (json_type(pageJob.input_json,'$.propertyQuery') IS NULL AND substr(pageReply.text,-${propertyNextInvitation.length})='${propertyNextInvitation}'))
- AND NOT EXISTS (SELECT 1 FROM workbench_prospect_messages later WHERE later.conversation_id=${thread}.id AND later.direction='outbound' AND later.rowid>pageReply.rowid)`;
-const propertyPageRecoveryAuditSql=(thread:string,question:string)=>`(${thread}.mode='human' AND ${thread}.handoff_reason='${propertyPageHandoff}'
- AND json_extract(${thread}.memory_json,'$.lastDecision.action')='handoff' AND json_extract(${thread}.memory_json,'$.lastDecision.queued')=0
- AND ${question}.id=json_extract(${thread}.memory_json,'$.lastDecision.inboundId') AND ${question}.conversation_id=${thread}.id
- AND ${question}.direction='inbound' AND ${question}.eligible=1 AND ${question}.processed=1 AND ${question}.text='下一页'
- AND COALESCE(json_extract(${thread}.memory_json,'$.propertyPageRecoveredInboundId'),'')<>${question}.id
+  AND COALESCE(json_extract(pageJob.input_json,'$.policyVersion'),0)=COALESCE(json_extract(pagePolicy.data_json,'$.chatPolicyVersion'),0)))
+ AND (
+ (((pageAccount.enabled=1 AND pageAccount.role IN ('sales','manager') AND json_extract(pageJob.input_json,'$.knowledgeLookup.status')='ok')
+   AND (json_extract(pageJob.input_json,'$.knowledgeLookup.department')=CASE pageAccount.sales_id ${KNOWLEDGE_DEPARTMENTS.map(department=>`WHEN '${department.salesId}' THEN '${department.id}'`).join(' ')} END
+    AND json_type(pageJob.input_json,'$.knowledgeLookup.libraryIds')='array' AND json_array_length(json_extract(pageJob.input_json,'$.knowledgeLookup.libraryIds'))>0))
+  AND ((json_type(pageJob.result_json,'$.evidenceIds')='array' AND json_array_length(json_extract(pageJob.result_json,'$.evidenceIds'))>0)
+   AND (json_extract(pageJob.input_json,'$.knowledgeLookup.sourceIds')=json_extract(pageJob.result_json,'$.evidenceIds')
+    AND NOT EXISTS (SELECT 1 FROM json_each(pageJob.result_json,'$.evidenceIds') evidence WHERE evidence.type<>'text' OR evidence.value NOT LIKE 'property-record:%'))))
+ AND (((original.conversation_id=${thread}.id AND original.direction='inbound' AND original.eligible=1)
+   AND (original.processed=1 AND original.rowid<pageReply.rowid AND json_array_length(json_extract(pageJob.input_json,'$.answeredMessageIds'))=1))
+  AND ((EXISTS (SELECT 1 FROM workbench_prospect_memory_sources source WHERE source.session_id=pageBinding.active_session_id AND source.message_id=original.id)
+    AND EXISTS (SELECT 1 FROM workbench_prospect_memory_sources source WHERE source.session_id=pageBinding.active_session_id AND source.message_id=pageReply.id))
+   AND (EXISTS (SELECT 1 FROM workbench_prospect_memory_sources source WHERE source.session_id=pageBinding.active_session_id AND source.message_id=${question}.id)
+    AND NOT EXISTS (SELECT 1 FROM json_each(pageSession.state_json,'$.ignoredSourceIds') ignored WHERE ignored.value IN (original.id,pageReply.id,${question}.id))))))
+ AND (
+ (json_type(pageJob.input_json,'$.propertyQuery')='object' OR (json_type(pageJob.input_json,'$.propertyQuery') IS NULL AND substr(pageReply.text,-${propertyNextInvitation.length})='${propertyNextInvitation}'))
+ AND NOT EXISTS (SELECT 1 FROM workbench_prospect_messages later WHERE later.conversation_id=${thread}.id AND later.direction='outbound' AND later.rowid>pageReply.rowid
+  AND NOT ${unsubmittedPropertyPageDraftSql(thread,question,'later')}))`;
+const confirmedPropertyPageExistsSql=(thread:string,question:string,separateAtomicGuard:boolean)=>separateAtomicGuard
+ ?'1'
+ :`EXISTS (${confirmedPropertyPageSql(thread,question)})`;
+const propertyPageRecoveryAuditSql=(thread:string,question:string,materialized=false)=>`(
+ (${thread}.mode='human' AND ${thread}.handoff_reason='${propertyPageHandoff}'
+  AND json_extract(${thread}.memory_json,'$.lastDecision.action')='handoff' AND json_extract(${thread}.memory_json,'$.lastDecision.queued')=0)
+ AND (${question}.id=json_extract(${thread}.memory_json,'$.lastDecision.inboundId') AND ${question}.conversation_id=${thread}.id
+  AND ${question}.direction='inbound' AND ${question}.eligible=1 AND ${question}.processed=1)
+ AND (${question}.text='下一页' AND COALESCE(json_extract(${thread}.memory_json,'$.propertyPageRecoveredInboundId'),'')<>${question}.id)
  AND NOT EXISTS (SELECT 1 FROM workbench_prospect_messages later WHERE later.conversation_id=${thread}.id AND later.rowid>${question}.rowid)
  AND NOT EXISTS (SELECT 1 FROM workbench_prospect_jobs pending WHERE pending.owner_id=${thread}.owner_id AND pending.sender_id=${thread}.sender_id
   AND pending.kind IN ('send','reply') AND (pending.status='queued' OR ${unresolvedOutboundSql('pending')}) AND json_extract(pending.input_json,'$.recipientId')=${thread}.recipient_id)
- AND EXISTS (${confirmedPropertyPageSql(thread,question)}))`;
+ AND ${confirmedPropertyPageExistsSql(thread,question,materialized)})`;
+const propertyPageDraftRecoveryAuditSql=(thread:string,question:string,materialized=false)=>`(
+ (${thread}.mode='human' AND ${thread}.handoff_reason='${propertyPageMissingHandoff}'
+  AND json_extract(${thread}.memory_json,'$.lastDecision.action')='handoff' AND json_extract(${thread}.memory_json,'$.lastDecision.queued')=0
+  AND ${question}.id=json_extract(${thread}.memory_json,'$.lastDecision.inboundId') AND ${question}.conversation_id=${thread}.id)
+ AND (${question}.direction='inbound' AND ${question}.eligible=1 AND ${question}.processed=1 AND ${question}.text='下一页'
+  AND COALESCE(json_extract(${thread}.memory_json,'$.propertyPageDraftRecoveredInboundId'),'')<>${question}.id)
+ AND EXISTS (SELECT 1 FROM workbench_prospect_messages draft JOIN workbench_prospect_jobs failed ON failed.id=draft.job_id
+  WHERE ${unsubmittedPropertyPageDraftSql(thread,question,'draft')}
+   AND failed.updated_at<=json_extract(${thread}.memory_json,'$.lastDecision.at')
+   AND ((draft.error='${snapshotChangedBeforeDispatch}' AND (json_extract(${thread}.memory_json,'$.snapshotRecoveredInboundId')=${question}.id OR json_extract(${thread}.memory_json,'$.samePassRecoveredInboundId')=${question}.id))
+    OR (draft.error='${composerChangedBeforeDispatch}' AND json_extract(${thread}.memory_json,'$.paragraphRecoveredInboundId')=${question}.id)))
+ AND NOT EXISTS (SELECT 1 FROM workbench_prospect_messages later WHERE later.conversation_id=${thread}.id AND later.rowid>${question}.rowid
+  AND NOT ${unsubmittedPropertyPageDraftSql(thread,question,'later')})
+ AND NOT EXISTS (SELECT 1 FROM workbench_prospect_jobs pending WHERE pending.owner_id=${thread}.owner_id AND pending.sender_id=${thread}.sender_id
+  AND pending.kind IN ('send','reply') AND (pending.status='queued' OR ${unresolvedOutboundSql('pending')}) AND json_extract(pending.input_json,'$.recipientId')=${thread}.recipient_id)
+ AND ${confirmedPropertyPageExistsSql(thread,question,materialized)})`;
 const isLegacyShopInquiry=(value:string)=>/店铺/.test(value)&&!/(?:商铺|铺位|房源|门面|店面|空铺|空置)/.test(value)&&isPropertyInventoryInquiry(value);
 const legacyShopAuditSql=(thread:string,policy:string,question:string)=>`(
   (${thread}.mode='human' AND ${thread}.handoff_reason='${legacyShopConflict}'
@@ -386,8 +453,14 @@ export function createProspectingChatStore(db:D1Database,now:()=>number=Date.now
       AND (c.handoff_reason='${snapshotChangedBeforeDispatch}' OR ${multilinePropertyReplySql('c','draft','failed')})
       AND NOT EXISTS (SELECT 1 FROM workbench_prospect_messages later WHERE later.conversation_id=c.id AND later.rowid>draft.rowid)))`;
   const legacyShopResync=`EXISTS (SELECT 1 FROM workbench_prospect_messages question WHERE ${legacyShopAuditSql('c','p','question')})`;
-  const propertyPageResync=`EXISTS (SELECT 1 FROM workbench_prospect_messages question WHERE ${propertyPageRecoveryAuditSql('c','question')})`;
-  const quietThreads=quiet?`AND ((c.mode='agent' OR ${snapshotResync}) OR (${legacyShopResync} OR ${propertyPageResync} OR EXISTS (
+  // Keep this proof out of the combined legacy scheduler expression. Recovery
+  // repeats it atomically when consuming the fresh read; this lookup only picks
+  // which human thread may be read and cannot authorize a reply by itself.
+  const pageRecoveryCandidates=quiet?(await db.prepare(`${propertyPageDraftProofCte('thread.owner_id=? AND thread.member_id=? AND thread.sender_id=?')}
+   SELECT c.id FROM workbench_prospect_conversations c JOIN workbench_prospect_messages question ON question.conversation_id=c.id
+   WHERE (c.owner_id=? AND c.member_id=? AND c.sender_id=?) AND (c.status='active' AND c.mode='human')
+    AND (${propertyPageRecoveryAuditSql('c','question')} OR ${propertyPageDraftRecoveryAuditSql('c','question')})`).bind(d.owner_id,d.member_id,d.account_id,d.owner_id,d.member_id,d.account_id).all<{id:string}>()).results.map(row=>row.id):[];
+  const quietThreads=quiet?`AND ((c.mode='agent' OR ${snapshotResync}) OR (${legacyShopResync} OR c.id IN (SELECT value FROM json_each(?)) OR EXISTS (
    SELECT 1 FROM workbench_prospect_jobs uncertain
    WHERE uncertain.owner_id=c.owner_id AND uncertain.sender_id=c.sender_id
     AND json_extract(uncertain.input_json,'$.recipientId')=c.recipient_id AND ${unresolvedOutboundSql('uncertain')}
@@ -397,11 +470,11 @@ export function createProspectingChatStore(db:D1Database,now:()=>number=Date.now
   // Rotating by attempt time lets unread or failing conversations share the device.
   const c=await db.prepare(`SELECT c.* FROM workbench_prospect_conversations c JOIN workbench_prospect_campaigns p ON p.id=c.campaign_id
    LEFT JOIN workbench_prospect_jobs attempted ON attempted.id=(SELECT j.id FROM workbench_prospect_jobs j WHERE j.owner_id=c.owner_id AND j.member_id=c.member_id AND j.sender_id=c.sender_id AND j.kind='readConversation' AND json_extract(j.input_json,'$.conversationId')=c.id ORDER BY j.created_at DESC,j.rowid DESC LIMIT 1)
-   WHERE c.owner_id=? AND c.member_id=? AND c.sender_id=? AND c.status='active' AND p.status='active' AND json_extract(p.data_json,'$.chatEnabled')=1
+   WHERE (c.owner_id=? AND c.member_id=? AND c.sender_id=?) AND (c.status='active' AND p.status='active' AND json_extract(p.data_json,'$.chatEnabled')=1)
     ${quietThreads}
     AND (attempted.id IS NULL OR attempted.updated_at<=CASE WHEN attempted.status='done' AND COALESCE(json_extract(attempted.result_json,'$.reliable'),json_extract(attempted.result_json,'$.summary') LIKE '已同步%')=1 THEN ? ELSE ? END)
     AND NOT EXISTS (SELECT 1 FROM workbench_prospect_jobs j WHERE j.active_key=('chat-read:'||c.id))
-   ORDER BY ${resumeFirst} COALESCE(attempted.updated_at,''),c.id LIMIT 1`).bind(d.owner_id,d.member_id,d.account_id,...(quiet?[samePassProof?1:0,samePassProof?1:0,d.id,new Date(now()-snapshotRecoveryMs).toISOString(),new Date(now()-legacyShopRecoveryMs).toISOString()]:[]),new Date(now()-30000).toISOString(),new Date(now()-15000).toISOString()).first<ConversationRow>();if(!c)return;
+   ORDER BY ${resumeFirst} COALESCE(attempted.updated_at,''),c.id LIMIT 1`).bind(d.owner_id,d.member_id,d.account_id,...(quiet?[samePassProof?1:0,samePassProof?1:0,d.id,new Date(now()-snapshotRecoveryMs).toISOString(),new Date(now()-legacyShopRecoveryMs).toISOString(),JSON.stringify(pageRecoveryCandidates)]:[]),new Date(now()-30000).toISOString(),new Date(now()-15000).toISOString()).first<ConversationRow>();if(!c)return;
   const audit=object(JSON.parse(c.memory_json||'{}'));
   const inboundId=object(audit.lastDecision).inboundId;
   const upgradeRecovery=samePassProof&&c.mode==='human'&&typeof inboundId==='string'&&
@@ -582,13 +655,14 @@ export function createProspectingChatStore(db:D1Database,now:()=>number=Date.now
     statements.push(db.prepare(`UPDATE workbench_prospect_messages SET eligible=1,processed=0 WHERE conversation_id=? AND source_key=? AND direction='inbound' AND ${verifiedGuard}`).bind(c.id,last.id,...verifiedValues));
    }
   }
-  const reopenAuditedTurn=(questionId:string,reason:string,marker:'snapshotRecoveredInboundId'|'samePassRecoveredInboundId'|'paragraphRecoveredInboundId'|'legacyShopRecoveredInboundId'|'propertyPageRecoveredInboundId',proof:string,proofValues:unknown[])=>{
+  const reopenAuditedTurn=(questionId:string,reason:string,marker:'snapshotRecoveredInboundId'|'samePassRecoveredInboundId'|'paragraphRecoveredInboundId'|'legacyShopRecoveredInboundId'|'propertyPageRecoveredInboundId'|'propertyPageDraftRecoveredInboundId',proof:string,proofValues:unknown[],proofCte?:{sql:string;values:unknown[];guard?:string;guardValues?:unknown[]})=>{
    const markerPath=`$.${marker}`;
-   statements.push(db.prepare(`UPDATE workbench_prospect_conversations SET mode='agent',handoff_reason=NULL,
+   statements.push(db.prepare(`${proofCte?.sql??''}UPDATE workbench_prospect_conversations SET mode='agent',handoff_reason=NULL,
     memory_json=json_set(memory_json,?,?),version=version+1,processing_token=NULL,processing_until=NULL
     WHERE (id=? AND version=? AND status='active' AND mode='human' AND handoff_reason=? AND COALESCE(json_extract(memory_json,?),'')<>?)
     AND EXISTS (${guard}) AND EXISTS (${proof})
-    AND NOT EXISTS (SELECT 1 FROM workbench_prospect_jobs uncertain WHERE uncertain.owner_id=? AND uncertain.sender_id=? AND ${unresolvedOutboundSql('uncertain')} AND json_extract(uncertain.input_json,'$.recipientId')=?)`).bind(markerPath,questionId,c.id,c.version,reason,markerPath,questionId,...values,...proofValues,c.owner_id,c.sender_id,c.recipient_id));
+    AND NOT EXISTS (SELECT 1 FROM workbench_prospect_jobs uncertain WHERE uncertain.owner_id=? AND uncertain.sender_id=? AND ${unresolvedOutboundSql('uncertain')} AND json_extract(uncertain.input_json,'$.recipientId')=?)
+    ${proofCte?.guard?`AND EXISTS (${proofCte.guard})`:''}`).bind(...(proofCte?.values??[]),markerPath,questionId,c.id,c.version,reason,markerPath,questionId,...values,...proofValues,c.owner_id,c.sender_id,c.recipient_id,...(proofCte?.guardValues??[])));
    statements.push(db.prepare(`UPDATE workbench_prospect_messages SET processed=0 WHERE id=? AND direction='inbound' AND eligible=1 AND processed=1
     AND EXISTS (${guard}) AND EXISTS (SELECT 1 FROM workbench_prospect_conversations WHERE id=? AND version=? AND status='active' AND mode='agent' AND handoff_reason IS NULL AND json_extract(memory_json,?)=?)`).bind(questionId,...values,c.id,c.version+1,markerPath,questionId));
   };
@@ -655,24 +729,42 @@ export function createProspectingChatStore(db:D1Database,now:()=>number=Date.now
     reopenAuditedTurn(auditedQuestion.id,legacyShopConflict,'legacyShopRecoveredInboundId',proof,proofValues);
    }
   }
-  if(automatic&&input.manualSync!==true&&read.reliable&&read.covered===true&&c.status==='active'&&c.mode==='human'&&c.handoff_reason===propertyPageHandoff&&
+  const pageDraftRecovery=c.handoff_reason===propertyPageMissingHandoff;
+  const pageRecoveryMarker=pageDraftRecovery?'propertyPageDraftRecoveredInboundId':'propertyPageRecoveredInboundId';
+  let verifiedPage:Awaited<ReturnType<typeof confirmedPropertyPage>>;
+  if(automatic&&input.manualSync!==true&&read.reliable&&read.covered===true&&c.status==='active'&&c.mode==='human'&&(c.handoff_reason===propertyPageHandoff||pageDraftRecovery)&&
    !unresolved&&!stopObserved&&c.has_baseline===1&&taskView.isActive&&auditedQuestion?.eligible===1&&auditedQuestion.processed===1&&
-   sessionIds.has(auditedQuestion.id)&&!taskView.state.ignoredSourceIds.includes(auditedQuestion.id)&&audit.propertyPageRecoveredInboundId!==auditedQuestion.id&&
+   sessionIds.has(auditedQuestion.id)&&!taskView.state.ignoredSourceIds.includes(auditedQuestion.id)&&audit[pageRecoveryMarker]!==auditedQuestion.id&&
    snapshotAudit.action==='handoff'&&snapshotAudit.queued===false&&snapshotAudit.inboundId===auditedQuestion.id&&
-   failedSnapshotDraft?.id===auditedQuestion.id&&auditedQuestion.text==='下一页'&&!read.messages.some(message=>!bySource.has(message.id))&&
-   await propertyPageContext(c,auditedQuestion.id)){
-   // This old page command was already consumed by the generic handoff path.
-   // Reopen it once after a fresh covered read; the sent prior page is the proof,
-   // so overnight delay alone does not discard an otherwise current request.
+   (pageDraftRecovery||failedSnapshotDraft?.id===auditedQuestion.id)&&auditedQuestion.text==='下一页'&&!read.messages.some(message=>!bySource.has(message.id))&&
+   (verifiedPage=await confirmedPropertyPage(c,auditedQuestion.id))){
+   // A prior release consumed this command without recovering its sent page.
+   // Each migration has its own one-shot marker; a failed new attempt cannot
+   // erase earlier snapshot/composer recoveries or repeat this migration.
    const proof=`SELECT 1 FROM workbench_prospect_conversations thread
     JOIN workbench_prospect_messages question ON question.conversation_id=thread.id
     JOIN workbench_prospect_memory_bindings binding ON binding.thread_id=thread.id
     JOIN workbench_prospect_devices device ON device.owner_id=thread.owner_id AND device.member_id=thread.member_id
-    WHERE thread.id=? AND question.id=? AND binding.active_session_id=? AND binding.version=?
-     AND device.id=? AND device.enabled=1 AND device.authenticated=1 AND device.account_id=thread.sender_id AND device.last_seen_at>?
-     AND ${propertyPageRecoveryAuditSql('thread','question')}
+    WHERE (thread.id=? AND question.id=? AND binding.active_session_id=? AND binding.version=?)
+     AND (device.id=? AND device.enabled=1 AND device.authenticated=1 AND device.account_id=thread.sender_id AND device.last_seen_at>?)
+     AND ${pageDraftRecovery?propertyPageDraftRecoveryAuditSql('thread','question',true):propertyPageRecoveryAuditSql('thread','question',true)}
      AND NOT EXISTS (SELECT 1 FROM workbench_prospect_contact_optouts stopped WHERE stopped.owner_id=thread.owner_id AND stopped.sender_id=thread.sender_id AND stopped.recipient_id=thread.recipient_id)`;
-   reopenAuditedTurn(auditedQuestion.id,propertyPageHandoff,'propertyPageRecoveredInboundId',proof,[c.id,auditedQuestion.id,taskView.sessionId,taskView.bindingVersion,row.device_id,new Date(now()-90000).toISOString()]);
+   // The full read-only page proof above is sealed here by exact job metadata,
+   // current policy/account scope, and the same atomic thread/binding version.
+   // Keep it independent of the failed-draft audit to stay within D1 depth 100.
+   const sentPageGuard=`SELECT 1 FROM workbench_prospect_messages sent JOIN workbench_prospect_jobs sentJob ON sentJob.id=sent.job_id
+    JOIN workbench_prospect_campaigns policy ON policy.id=workbench_prospect_conversations.campaign_id
+    JOIN workbench_member_accounts account ON account.owner_id=workbench_prospect_conversations.owner_id AND account.account_id=workbench_prospect_conversations.member_id
+    WHERE (sentJob.id=? AND sentJob.input_json=? AND sentJob.result_json=? AND sentJob.kind='reply' AND sentJob.status='done')
+     AND (sent.conversation_id=workbench_prospect_conversations.id AND sent.id=json_extract(sentJob.input_json,'$.replyId')
+      AND sent.direction='outbound' AND sent.actor='agent' AND sent.status='sent' AND sent.text=json_extract(sentJob.input_json,'$.message'))
+     AND (sentJob.owner_id=workbench_prospect_conversations.owner_id AND sentJob.member_id=workbench_prospect_conversations.member_id
+      AND sentJob.campaign_id=workbench_prospect_conversations.campaign_id AND sentJob.lead_id=workbench_prospect_conversations.lead_id AND sentJob.sender_id=workbench_prospect_conversations.sender_id)
+     AND (policy.status='active' AND json_extract(policy.data_json,'$.chatEnabled')=1
+      AND COALESCE(json_extract(policy.data_json,'$.chatPolicyVersion'),0)=COALESCE(json_extract(sentJob.input_json,'$.policyVersion'),0))
+     AND (account.enabled=1 AND account.role IN ('sales','manager')
+      AND json_extract(sentJob.input_json,'$.knowledgeLookup.department')=CASE account.sales_id ${KNOWLEDGE_DEPARTMENTS.map(department=>`WHEN '${department.salesId}' THEN '${department.id}'`).join(' ')} END)`;
+   reopenAuditedTurn(auditedQuestion.id,c.handoff_reason!,pageRecoveryMarker,proof,[c.id,auditedQuestion.id,taskView.sessionId,taskView.bindingVersion,row.device_id,new Date(now()-90000).toISOString()],{sql:propertyPageDraftProofCte('thread.id=?'),values:[c.id],guard:sentPageGuard,guardValues:[verifiedPage.jobId,verifiedPage.inputJson,verifiedPage.resultJson]});
   }
   statements.push(db.prepare(`UPDATE workbench_prospect_conversations SET last_read_at=CASE WHEN ?=1 THEN ? ELSE last_read_at END,last_snapshot_id=?,has_baseline=CASE WHEN ?=1 THEN 1 ELSE has_baseline END,last_message_at=?,last_message_preview=?,mode=CASE WHEN ?=1 AND ${recoverableReadPauseSql} THEN 'agent' ELSE mode END,handoff_reason=CASE WHEN ?=1 AND ${replaceableReadHandoffSql} THEN '会话读取尚不可靠，已暂停自动回复；请稍后重新同步，核实消息后再继续。' WHEN ?=1 AND ${recoverableReadPauseSql} THEN NULL ELSE handoff_reason END,version=version+?,processing_token=CASE WHEN ?=1 THEN NULL ELSE processing_token END,processing_until=CASE WHEN ?=1 THEN NULL ELSE processing_until END,updated_at=? WHERE id=? AND EXISTS (${guard})`).bind(read.reliable?1:0,read.observedAt,read.reliable||read.covered===true?read.snapshotId:null,read.reliable?1:0,last?.postedAt??(last?read.observedAt:c.last_message_at),last?text(last.text,200):c.last_message_preview,recovering&&(!resuming||resumeVerified)?1:0,automatic&&!read.reliable?1:0,recovering&&(!resuming||resumeVerified)?1:0,changed||!read.reliable?1:0,changed||!read.reliable?1:0,changed||!read.reliable?1:0,time,c.id,...values));
   if(stopObserved){const memory=normalizeChatMemory(c.memory_json),reason='客户明确要求停止联系';
@@ -760,16 +852,18 @@ export function createProspectingChatStore(db:D1Database,now:()=>number=Date.now
  const memoryEdit=(ownerId:string,memberId:string,id:string,campaignId:string,sessionVersion:number,bindingVersion:number,change:TaskMemoryEdit)=>memoryStore.mutate(ownerId,memberId,id,campaignId,sessionVersion,bindingVersion,change);
  const switchTask=(ownerId:string,memberId:string,id:string,targetCampaignId:string,threadVersion:number,bindingVersion:number)=>memoryStore.switchTask(ownerId,memberId,id,targetCampaignId,threadVersion,bindingVersion);
  async function assertActiveCampaign(ownerId:string,memberId:string,id:string,campaignId?:string){if(campaignId&&!(await memoryStore.getView(ownerId,memberId,id,campaignId)).isActive)throw new DomainError('该任务当前未接待此客户，请先切换接待任务',409);}
- async function propertyPageContext(c:ConversationRow,questionId:string):Promise<PropertyPageContext|null>{
-  const row=await db.prepare(`SELECT (${confirmedPropertyPageSql('thread','question')}) AS proof_json FROM workbench_prospect_conversations thread
-   JOIN workbench_prospect_messages question ON question.conversation_id=thread.id WHERE thread.id=? AND question.id=?`).bind(c.id,questionId).first<{proof_json:string|null}>();
+ async function confirmedPropertyPage(c:ConversationRow,questionId:string):Promise<{context:PropertyPageContext;jobId:string;inputJson:string;resultJson:string}|null>{
+  const row=await db.prepare(`${propertyPageDraftProofCte('thread.id=?')}SELECT (${confirmedPropertyPageSql('thread','question')}) AS proof_json FROM workbench_prospect_conversations thread
+   JOIN workbench_prospect_messages question ON question.conversation_id=thread.id WHERE thread.id=? AND question.id=?`).bind(c.id,c.id,questionId).first<{proof_json:string|null}>();
   if(!row?.proof_json)return null;
   const proof=object(JSON.parse(row.proof_json)),input=object(proof.input),result=object(proof.result);
+  if(typeof proof.jobId!=='string'||typeof proof.inputJson!=='string'||typeof proof.resultJson!=='string')return null;
   const evidenceIds=result.evidenceIds as string[];
-  if(input.propertyQuery)return{query:input.propertyQuery as PropertyPageContext['query'],hasNext:input.propertyHasNext===true,evidenceIds};
-  if(typeof proof.question!=='string'||!isPropertyQuestion(proof.question))return null;
-  return{question:proof.question,hasNext:true,evidenceIds};
+  const context:PropertyPageContext|undefined=input.propertyQuery?{query:input.propertyQuery as PropertyPageContext['query'],hasNext:input.propertyHasNext===true,evidenceIds}
+   :typeof proof.question==='string'&&isPropertyQuestion(proof.question)?{question:proof.question,hasNext:true,evidenceIds}:undefined;
+  return context?{context,jobId:proof.jobId,inputJson:proof.inputJson,resultJson:proof.resultJson}:null;
  }
+ async function propertyPageContext(c:ConversationRow,questionId:string):Promise<PropertyPageContext|null>{return(await confirmedPropertyPage(c,questionId))?.context??null;}
  async function processOne(ownerId:string,memberId:string,origin:string,decide?: (ownerId:string,origin:string,input:ProspectChatAgentInput)=>Promise<ProspectChatDecision>,stopOnly=false):Promise<boolean>{
   await member(ownerId,memberId);await materialize(ownerId,memberId);const token=crypto.randomUUID(),time=stamp();
   const dayStart=new Date(Math.floor((now()+8*3600000)/86400000)*86400000-8*3600000).toISOString();
@@ -818,7 +912,7 @@ export function createProspectingChatStore(db:D1Database,now:()=>number=Date.now
   if(decision.close)statements.push(...closeStatements(c,text(safeProspectError(decision.reason),500)||'客户要求停止联系',memory,guard,values));
   const handoff=decision.action==='handoff'||unresolved;if(handoff&&!decision.close)memory.stage='handoff';if(captured||c.contact_captured)memory.contactCaptured=true;if(unresolved)decision.reason='上一条回复结果待确认，已保留人工接管';
   const previousAudit=object(JSON.parse(c.memory_json||'{}'));
-  statements.push(db.prepare(`UPDATE workbench_prospect_conversations SET memory_json=?,status=CASE WHEN ?=1 THEN 'closed' ELSE status END,close_reason=CASE WHEN ?=1 THEN ? ELSE close_reason END,mode=CASE WHEN ?=1 THEN 'human' ELSE mode END,handoff_reason=CASE WHEN ?=1 THEN ? ELSE handoff_reason END,version=version+1,processing_token=NULL,processing_until=NULL,updated_at=? WHERE id=? AND EXISTS (${guard})`).bind(JSON.stringify({...memory,legacyRecoveredInboundId:previousAudit.legacyRecoveredInboundId,snapshotRecoveredInboundId:previousAudit.snapshotRecoveredInboundId,samePassRecoveredInboundId:previousAudit.samePassRecoveredInboundId,paragraphRecoveredInboundId:previousAudit.paragraphRecoveredInboundId,legacyShopRecoveredInboundId:previousAudit.legacyShopRecoveredInboundId,propertyPageRecoveredInboundId:previousAudit.propertyPageRecoveredInboundId,lastDecision:{knowledgeLookup:decision.knowledgeLookup,action:decision.action,inboundId:inbound.id,queued:!!replyJobId,snapshotId:c.last_snapshot_id,at:stamp()}}),decision.close?1:0,decision.close?1:0,text(safeProspectError(decision.reason),500)||'客户要求停止联系',handoff?1:0,handoff?1:0,text(safeProspectError(decision.reason),500)||'已转交销售',stamp(),c.id,...values));
+  statements.push(db.prepare(`UPDATE workbench_prospect_conversations SET memory_json=?,status=CASE WHEN ?=1 THEN 'closed' ELSE status END,close_reason=CASE WHEN ?=1 THEN ? ELSE close_reason END,mode=CASE WHEN ?=1 THEN 'human' ELSE mode END,handoff_reason=CASE WHEN ?=1 THEN ? ELSE handoff_reason END,version=version+1,processing_token=NULL,processing_until=NULL,updated_at=? WHERE id=? AND EXISTS (${guard})`).bind(JSON.stringify({...memory,legacyRecoveredInboundId:previousAudit.legacyRecoveredInboundId,snapshotRecoveredInboundId:previousAudit.snapshotRecoveredInboundId,samePassRecoveredInboundId:previousAudit.samePassRecoveredInboundId,paragraphRecoveredInboundId:previousAudit.paragraphRecoveredInboundId,legacyShopRecoveredInboundId:previousAudit.legacyShopRecoveredInboundId,propertyPageRecoveredInboundId:previousAudit.propertyPageRecoveredInboundId,propertyPageDraftRecoveredInboundId:previousAudit.propertyPageDraftRecoveredInboundId,lastDecision:{knowledgeLookup:decision.knowledgeLookup,action:decision.action,inboundId:inbound.id,queued:!!replyJobId,snapshotId:c.last_snapshot_id,at:stamp()}}),decision.close?1:0,decision.close?1:0,text(safeProspectError(decision.reason),500)||'客户要求停止联系',handoff?1:0,handoff?1:0,text(safeProspectError(decision.reason),500)||'已转交销售',stamp(),c.id,...values));
   try{const results=await db.batch(statements);if(!results.at(-1)?.meta.changes){await db.prepare('UPDATE workbench_prospect_conversations SET processing_token=NULL,processing_until=NULL WHERE id=? AND processing_token=?').bind(c.id,token).run();return true;}
    if(replyJobId){const queued=await db.prepare('SELECT id FROM workbench_prospect_jobs WHERE id=?').bind(replyJobId).first();if(!queued)await db.prepare("UPDATE workbench_prospect_conversations SET mode='human',memory_json=json_set(memory_json,'$.stage','handoff'),handoff_reason='助手身份已改变，未排队回复',version=version+1 WHERE id=?").bind(c.id).run();}
    return true;

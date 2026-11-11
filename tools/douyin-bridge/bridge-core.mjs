@@ -346,11 +346,19 @@ function safeReplySnapshotDiagnostics(error) {
     'latest_not_inbound', 'latest_ambiguous', 'latest_changed', 'insufficient_rows', 'oldest_row_count', 'row_suffix_mismatch'];
   if (!reasons.includes(value.reason)) return;
   const result = { stage: value.stage, proofSource: value.proofSource, reason: value.reason };
-  for (const key of ['cacheHit', 'cacheFresh', 'comparedProof', 'observedReliable', 'observedCovered', 'latestSame']) {
+  for (const key of ['cacheHit', 'cacheFresh', 'comparedProof', 'observedReliable', 'observedCovered', 'latestSame', 'resampled']) {
     if (typeof value[key] === 'boolean') result[key] = value[key];
   }
   for (const key of ['approvedRows', 'observedRows', 'observedMessages', 'matchingTailRows']) {
     if (Number.isSafeInteger(value[key]) && value[key] >= 0 && value[key] <= 10000) result[key] = value[key];
+  }
+  if (object(value.fieldDifferences)) {
+    const counts = {};
+    for (const field of ['nativeId', 'direction', 'text', 'postedAt', 'contentType', 'state', 'media', 'system', 'unsupported']) {
+      const count = value.fieldDifferences[field];
+      if (Number.isSafeInteger(count) && count > 0 && count <= 500) counts[field] = count;
+    }
+    if (Object.keys(counts).length) result.fieldDifferences = counts;
   }
   if (['inbound', 'outbound', 'missing'].includes(value.observedLatestDirection)) result.observedLatestDirection = value.observedLatestDirection;
   return result;

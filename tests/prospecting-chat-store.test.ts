@@ -39,6 +39,71 @@ async function readConversation(f:ReturnType<typeof fixture>,x:Awaited<ReturnTyp
  return job;
 }
 
+const pageQuery={status:'vacant' as const,minArea:80,maxArea:100,groups:[{field:'location' as const,values:['嘉兴']}],page:1,pageSize:3};
+const pageLookup={status:'ok' as const,department:'zs' as const,libraryIds:['property-library'],sourceIds:['property-record:one']};
+async function propertyPageFixture(f:ReturnType<typeof fixture>,legacy=false){
+ const x=await prepared(f);await f.chat.settings('owner-a','member-a',x.campaign.id,true);
+ await readConversation(f,x,[],'page-baseline');f.advance(61000);
+ const question={id:'page-origin',direction:'inbound' as const,text:'嘉兴80-100平空置商铺有哪些'};
+ await readConversation(f,x,[question],'page-origin-snapshot',true);
+ const reply='嘉兴有88平商铺。还有匹配，回复“下一页”查看。';
+ await f.chat.processOne('owner-a','member-a','https://example.test',async(_o,_u,input)=>({action:'reply',reply,answeredMessageIds:[input.inbound.id],knowledgeLookup:pageLookup,evidenceIds:pageLookup.sourceIds,...(!legacy?{propertyQuery:pageQuery,propertyHasNext:true}:{})}));
+ const sent=(await f.store.claim(x.device.deviceId,false,true))!;assert.equal(sent.kind,'reply');
+ await f.store.complete(x.device.deviceId,sent.id,sent.leaseToken,{outcome:'submitted'});
+ f.advance(61000);
+ const page={id:'page-next',direction:'inbound' as const,text:'下一页'};
+ const messages=[question,{id:'page-outbound',direction:'outbound' as const,text:reply},page];
+ await readConversation(f,x,messages,'page-next-snapshot',true);
+ return{x,sent,question,page,messages};
+}
+
+for(const scenario of ['structured','task metadata updated','legacy','failed','wrong session','wrong binding','wrong policy','wrong department','human reply','newer outbound'] as const)test(`property pagination uses only a confirmed scoped outbound: ${scenario}`,async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await propertyPageFixture(f,scenario==='legacy');
+ if(scenario==='task metadata updated')f.sqlite.prepare('UPDATE workbench_prospect_campaigns SET updated_at=? WHERE id=?').run(f.now(),x.x.campaign.id);
+ if(scenario==='failed')f.sqlite.prepare("UPDATE workbench_prospect_jobs SET status='failed' WHERE id=?").run(x.sent.id);
+ if(scenario==='wrong session'||scenario==='wrong binding'||scenario==='wrong policy'||scenario==='wrong department'||scenario==='human reply'){
+  const key=scenario==='wrong session'?'sessionId':scenario==='wrong binding'?'bindingVersion':scenario==='wrong policy'?'policyVersion':scenario==='wrong department'?'knowledgeLookup.department':'actor';
+  f.sqlite.prepare('UPDATE workbench_prospect_jobs SET input_json=json_set(input_json,?,json(?)) WHERE id=?').run('$.'+key,JSON.stringify(scenario==='wrong binding'||scenario==='wrong policy'?999:scenario==='wrong department'?'yy':scenario==='human reply'?'human':'other-session'),x.sent.id);
+ }
+ if(scenario==='newer outbound')f.sqlite.prepare("INSERT INTO workbench_prospect_messages (id,conversation_id,owner_id,member_id,source_key,direction,actor,text,status,created_at) VALUES ('page-human',?,'owner-a','member-a','page-human','outbound','human','换个话题','received',?)").run(x.x.conversation.id,f.now());
+ let context:Parameters<typeof chooseProspectChatAction>[0]['propertyPage']|undefined;
+ await f.chat.processOne('owner-a','member-a','https://example.test',async(_o,_u,input)=>{context=input.propertyPage;return {action:'handoff',reason:'fixture'};});
+ if(scenario==='structured'||scenario==='task metadata updated'){
+  assert.deepEqual(context,{query:pageQuery,hasNext:true,evidenceIds:pageLookup.sourceIds});
+  const row=f.sqlite.prepare('SELECT input_json,result_json FROM workbench_prospect_jobs WHERE id=?').get(x.sent.id)!;
+  assert.deepEqual(JSON.parse(String(row.input_json)).propertyQuery,pageQuery);assert.equal(JSON.parse(String(row.result_json)).propertyQuery,undefined);
+ }else if(scenario==='legacy')assert.deepEqual(context,{question:x.question.text,hasNext:true,evidenceIds:pageLookup.sourceIds});
+ else assert.equal(context,null);
+});
+
+for(const scenario of ['legacy after eight hours','structured','uncovered read','new inbound','new outbound','manual takeover','wrong binding','wrong department','atomic takeover'] as const)test(`quiet property page recovery is scoped and one-shot: ${scenario}`,async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());const x=await propertyPageFixture(f,scenario!=='structured');
+ let calls=0;
+ const decide=async()=>{calls++;return {action:'handoff' as const,reason:'现有资料无法确认客户问题，请核实后回复。'};};
+ assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',decide),true);
+ const conversation=async()=>(await f.chat.snapshot('owner-a','member-a','sales',x.x.campaign.id)).conversations[0];
+ const c=await conversation();assert.equal(c.mode,'human');
+ if(scenario==='manual takeover')await f.chat.takeover('owner-a','member-a',c.id,c.version);
+ if(scenario==='wrong binding'||scenario==='wrong department')f.sqlite.prepare('UPDATE workbench_prospect_jobs SET input_json=json_set(input_json,?,json(?)) WHERE id=?').run(scenario==='wrong binding'?'$.bindingVersion':'$.knowledgeLookup.department',JSON.stringify(scenario==='wrong binding'?999:'yy'),x.sent.id);
+ f.advance(scenario==='legacy after eight hours'?8*3600000:91000);await f.store.seen(x.x.device.deviceId,{authenticated:true,accountId:'MS4wSender001'});
+ await f.chat.schedule(x.x.device.deviceId,{quiet:true});const read=await f.store.claim(x.x.device.deviceId,false,true);
+ if(['manual takeover','wrong binding','wrong department'].includes(scenario)){assert.equal(read,null);return;}
+ assert.equal(read?.kind,'readConversation');
+ const messages=[...x.messages,...(scenario==='new inbound'?[{id:'page-later-inbound',direction:'inbound',text:'先不用了'}]:scenario==='new outbound'?[{id:'page-later-outbound',direction:'outbound',text:'销售已经接待'}]:[])];
+ if(scenario==='atomic takeover')f.interceptNextBatch(()=>f.sqlite.prepare("UPDATE workbench_prospect_conversations SET mode='human',handoff_reason='已由销售接管',version=version+1 WHERE id=?").run(c.id));
+ await f.store.complete(x.x.device.deviceId,read!.id,read!.leaseToken,{senderAccountId:'MS4wSender001',recipientId:'MS4wRecipient001',observedAt:f.now(),snapshotId:'page-recovery-verified',reliable:true,covered:scenario!=='uncovered read',messages});
+ const recheck=scenario==='legacy after eight hours'||scenario==='structured';
+ assert.equal((await conversation()).mode,recheck?'agent':'human');
+ assert.equal(await f.chat.processOne('owner-a','member-a','https://example.test',decide),recheck);
+ assert.equal(calls,recheck?2:1);
+ if(recheck){
+  const audit=JSON.parse(String(f.sqlite.prepare('SELECT memory_json FROM workbench_prospect_conversations WHERE id=?').get(c.id)?.memory_json));
+  assert.equal(audit.propertyPageRecoveredInboundId,audit.lastDecision.inboundId);
+  f.advance(91000);await f.store.seen(x.x.device.deviceId,{authenticated:true,accountId:'MS4wSender001'});
+  await f.chat.schedule(x.x.device.deviceId,{quiet:true});assert.equal(await f.store.claim(x.x.device.deviceId,false,true),null);
+ }
+});
+
 test('chat is opt-in and only a capable bridge can read a successfully contacted recipient',async t=>{
  const f=fixture();t.after(()=>f.sqlite.close());const x=await prepared(f);assert.ok(x.conversation);
  await f.chat.schedule(x.device.deviceId);assert.equal(await f.store.claim(x.device.deviceId,false,true),null);

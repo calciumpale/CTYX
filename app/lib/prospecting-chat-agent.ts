@@ -4,7 +4,7 @@ import type {ModelMessage} from './model-client.ts';
 import {object} from './prospecting-domain.ts';
 import {isChatOptOut, normalizeChatMemory, redactChatText} from './prospecting-chat-policy.ts';
 import {CUSTOMER_REPLY_MAX_CHARS} from './prospecting-reply-limit.ts';
-import {isPropertyInventoryInquiry,isPropertyQuestion} from './property-query.ts';
+import {isPropertyInventoryInquiry,isPropertyQuestion,parsePropertyPageRequest} from './property-query.ts';
 import type {ProspectChatAgentInput, ProspectChatDecision, ProspectChatMemory, ProspectContactType} from './prospecting-chat-types.ts';
 import {AI_REPLY_STYLE} from './ai-reply-style.ts';
 
@@ -41,7 +41,7 @@ const modelHandoffReasons:Record<string,string>={
   human_confirmation:'客户问题需要人工确认，请查看消息后回复。',
 };
 const factualQuestion=/(?:多少|哪里|哪儿|在哪|哪天|几点|多长|多久|什么时候|什么时间|能否|是否|支持|有没有|有吗|还有吗|可以.{0,12}[吗么]|能.{0,12}[吗么]|地址|定位|位置|费用|价格|价位|单价|月租|租金|库存|面积|营业|开门|详情|介绍一下|怎么办|怎么(?:用|做|预约|购买|收费)|什么(?:条件|要求|规格|配置|服务))/;
-const isPageRequest=(value:string)=>/^(?:第\s*\d+\s*页|下一页|上一?页)[。.!！?？\s]*$/.test(value.normalize('NFKC').trim());
+const isPageRequest=(value:string)=>parsePropertyPageRequest(value)!==undefined;
 const activeIntent=/预约|看铺|看房|看店|到店|面谈|试用|下单|采购|想.{0,8}(?:买|租)|求租|约.{0,6}(?:时间|明天|周[一二三四五六日天])|预算.{0,12}(?:\d|万|千|百)|急需|尽快|对接/;
 const generalIntent=/感兴趣|想问|想了解|咨询|了解一下|合适|联系我|加我|打给我|回复我|方便/;
 const cautiousIntent=/还没决定|只是看看|先看看|仅了解|不着急|没有预算|没预算|不打算|暂时不考虑/;
@@ -219,7 +219,9 @@ export async function chooseProspectChatAction(input:ProspectChatAgentInput,tool
   const declinesContact=contactDeclined.test(inbound)||Boolean(lastOut&&asksContact.test(lastOut.text)&&/^(?:不需要|不用(?:了)?|先不留|不方便)[。！!，,\s]*$/.test(inbound.trim()));
   if(declinesContact&&!taskState)memory.contactDeclines++;
   const factualQuestionAsked=needsFactualAnswer(inbound);
-  const propertyPage=isPageRequest(inbound)&&isPropertyQuestion(previousInbound.slice(-6).findLast(message=>!isPageRequest(message.text))?.text??'');
+  const pageText=pending.every(message=>message.contentType!=='image'&&isPageRequest(message.text))?pending.at(-1)?.text:undefined;
+  const continuation=pageText!==undefined?input.propertyPage:undefined;
+  const propertyPage=pageText!==undefined&&(continuation!==undefined?Boolean(continuation):isPropertyQuestion(previousInbound.slice(-6).findLast(message=>!isPageRequest(message.text))?.text??''));
   const businessQuestion=factualQuestionAsked||propertyPage||isPropertyInventoryInquiry(inbound)||/有合适|推荐|(?:查询|筛选|列出|有哪些|还有哪些).{0,20}(?:房源|商铺|铺位|空铺)/.test(inbound);
   const questionNeed:NeedKey|undefined=factualQuestionAsked?
     /面积|多大|几平|多少平|\d+(?:\.\d+)?\s*(?:[-~～至到]\s*\d+(?:\.\d+)?)?\s*(?:平|㎡)/.test(inbound)?'area':
@@ -254,6 +256,7 @@ export async function chooseProspectChatAction(input:ProspectChatAgentInput,tool
     return finish({action:'handoff',reason,...base});
   };
   if(handoff.test(inbound))return transfer(handoffTopics.find(([pattern])=>pattern.test(inbound))?.[1]??modelHandoffReasons.human_confirmation);
+  if(continuation===null)return transfer('未找到已提交的上一页房源，请核实后回复。');
   if(tools.preflightKnowledge){
     try{knowledgeLookup=await tools.preflightKnowledge([redact(inbound),...previousInbound.slice(-2).map(m=>redact(m.text))].join('\n').slice(-1500)||'客户图片咨询');}
     catch{knowledgeLookup={department:null,libraryIds:[],sourceIds:[],status:'failed'};}
@@ -299,7 +302,8 @@ export async function chooseProspectChatAction(input:ProspectChatAgentInput,tool
     let shared:KnowledgeAgentResult|undefined;
     if(tools.answerKnowledge){
       shared=await tools.answerKnowledge({
-        question:redact(inbound),intent:businessQuestion?'business':'auto',audience:'customer',
+        question:redact(pageText??inbound),intent:businessQuestion?'business':'auto',audience:'customer',
+        ...(continuation?{propertyPage:continuation}:{}),
         context:taskContext?.facts.filter(f=>f.status==='confirmed').map(f=>({id:f.id,text:`${needLabels[f.key as NeedKey]??'条件'}：${f.value}`,kind:'customer_fact' as const})),
         history:(taskContext?taskContext.recent:previous).filter(m=>!pendingIds.has(m.id)).map(m=>({role:m.direction==='inbound'?'user' as const:'assistant' as const,content:redact(m.text)})),
         retrievalQuery:query,maxAnswerChars:CUSTOMER_REPLY_MAX_CHARS,instructions:agentPrompt+`\n当前可邀请留资：${mayAskContact}。已留资：${memory.contactCaptured}。当前任务：${redact(input.campaign.name)}。`,
@@ -316,7 +320,8 @@ export async function chooseProspectChatAction(input:ProspectChatAgentInput,tool
           return unavailableKnowledge();
         }
         if(knowledgeLookup)knowledgeLookup={...knowledgeLookup,sourceIds:evidenceIds.slice(0,20)};
-        return finish({action:'reply',reply,evidenceIds,route:'retrieve',answeredMessageIds:[input.inbound.id],...base});
+        return finish({action:'reply',reply,evidenceIds,route:'retrieve',answeredMessageIds:[input.inbound.id],
+          ...(shared.recordLookup.query?{propertyQuery:shared.recordLookup.query,propertyHasNext:shared.recordLookup.hasNext===true}:{}),...base});
       }
       if(shared.action==='unavailable')return sharedFallback();
       if(shared.action==='handoff')return shared.route==='no_evidence'||shared.route==='failed'?sharedFallback():transfer(modelHandoffReasons.human_confirmation);

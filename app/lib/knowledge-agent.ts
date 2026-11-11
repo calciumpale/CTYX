@@ -1,5 +1,5 @@
 import type {ModelMessage} from './model-client.ts';
-import type {PropertyQuery} from './property-query.ts';
+import type {PropertyPageContext,PropertyQuery} from './property-query.ts';
 import {AI_REPLY_STYLE} from './ai-reply-style.ts';
 export interface KnowledgeAgentEvidence {id:string;title:string;content:string;}
 export interface KnowledgeAgentRequest {
@@ -8,10 +8,12 @@ export interface KnowledgeAgentRequest {
  history?:{role:'user'|'assistant';content:string}[];instructions?:string;maxAnswerChars?:number;retrievalQuery?:string;
  /** Resolved filters from the caller's persisted prior run; never an authorization scope. */
  propertyQuery?:PropertyQuery;
+ /** Customer pagination is tied to the evidence of a confirmed prior page. */
+ propertyPage?:PropertyPageContext;
  /** Customer-facing answers use only fields suitable for a private message. */
  audience?:'customer';
 }
-export interface KnowledgeAgentResult {action:'answer'|'unavailable'|'handoff';answer?:string;evidenceIds:string[];knowledge:KnowledgeAgentEvidence[];route:'direct'|'retrieved'|'no_evidence'|'failed'|'conflict';recordLookup?:{kind:'property';total:number;complete:boolean;query?:PropertyQuery};}
+export interface KnowledgeAgentResult {action:'answer'|'unavailable'|'handoff';answer?:string;evidenceIds:string[];knowledge:KnowledgeAgentEvidence[];route:'direct'|'retrieved'|'no_evidence'|'failed'|'conflict';recordLookup?:{kind:'property';total:number;complete:boolean;query?:PropertyQuery;hasNext?:boolean};}
 export interface KnowledgeAgentTools {retrieve:(query:string)=>Promise<KnowledgeAgentEvidence[]>;generate?:(messages:ModelMessage[],options?:{phase:'route'|'answer'})=>Promise<string>;}
 export interface KnowledgePreparedContext {route:KnowledgeAgentResult['route'];knowledge:KnowledgeAgentEvidence[];evidenceIds:string[];query?:string;answer?:string;recordLookup?:KnowledgeAgentResult['recordLookup'];}
 // Inputs are untrusted data; only caller-owned tool closures can establish access scope.

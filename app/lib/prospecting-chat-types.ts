@@ -1,4 +1,5 @@
 import type {TaskMemoryState,TaskMemoryView} from './prospecting-memory-types.ts';
+import type {PropertyPageContext,PropertyQuery} from './property-query.ts';
 export type ProspectChatActor = 'customer' | 'agent' | 'human';
 export type ProspectChatMode = 'agent' | 'human';
 export type ProspectChatDirection = 'inbound' | 'outbound';
@@ -100,6 +101,8 @@ export interface ProspectChatAgentInput {
   inbound: Pick<ProspectChatMessage, 'id' | 'text' | 'contentType'>;
   now?: string;
   pending?: Pick<ProspectChatMessage, 'id' | 'text' | 'contentType'>[];
+  /** Only the store may supply context from a confirmed outbound reply. */
+  propertyPage?:PropertyPageContext|null;
 }
 
 export interface ProspectChatDecision {
@@ -111,6 +114,8 @@ export interface ProspectChatDecision {
   memory?: ProspectChatMemory;
   taskMemoryState?: TaskMemoryState;
   answeredMessageIds?: string[];
+  propertyQuery?:PropertyQuery;
+  propertyHasNext?:boolean;
   route?: 'direct' | 'retrieve' | 'fallback' | 'handoff';
   close?: boolean;
   lead?: {

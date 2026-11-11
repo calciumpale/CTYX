@@ -42,7 +42,7 @@ export function formatCustomerPropertyReply(
   query: PropertyQuery,
   complete: boolean,
   maxChars: number,
-): {answer:string; rows:PropertyRow[]} {
+): {answer:string; rows:PropertyRow[]; hasNext:boolean} {
   const scope = {vacant:'空置表', rented:'在租表', any:'房源表'}[query.status];
   const count = complete ? `匹配${matches.length}条` : `已查到${matches.length}条`;
   const header = `${scope}${count}。`;
@@ -65,9 +65,11 @@ export function formatCustomerPropertyReply(
   }
   if (page.lines.length) pages.push(page);
   const selected = pages[query.page - 1];
-  if (!selected) return {answer:'', rows:[]};
+  if (!selected) return {answer:'', rows:[], hasNext:false};
+  const hasNext = query.page < pages.length;
   return {
-    answer: header + selected.lines.join(separator) + footer + (query.page < pages.length ? next : ''),
+    answer: header + selected.lines.join(separator) + footer + (hasNext ? next : ''),
     rows: selected.rows,
+    hasNext,
   };
 }

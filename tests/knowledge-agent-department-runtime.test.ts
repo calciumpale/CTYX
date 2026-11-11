@@ -241,3 +241,53 @@ test('customer inventory pages keep complete distinct rows within the reply limi
  assert.ok(second.evidenceIds.length > 0);
  assert.ok(second.evidenceIds.every(id => !first.evidenceIds.includes(id)));
 });
+
+test('customer pagination resumes the confirmed 80–100㎡ search after it leaves conversation memory', async t => {
+ const f=fixture();
+ t.after(()=>f.sqlite.close());
+ const original='现在80-100平的空置商铺还有吗';
+ for(const title of ['空置房源','在租房源']){
+  const library=await f.store.createLibrary(title,'zs');
+  const text='## 工作表：'+title+'表\n第1行：A1=铺号；B1=面积（㎡）；C1=业态；D1=位置\n'+Array.from({length:24},(_,i)=>{
+   const row=i+2;
+   return `第${row}行：A${row}=${title}-${i}号铺；B${row}=${i===23?120:80+i%21}；C${row}=零售；D${row}=绮园`;
+  }).join('\n');
+  await f.store.upload({libraryId:library.id,title,fileName:title+'.xlsx',text,requestId:crypto.randomUUID(),strategy:'flat'});
+ }
+ const agent=createWorkbenchKnowledgeAgent(f.db,'alice','https://example.test',{departmentId:'zs',generate:async messages=>{
+  // A model must never turn the page command itself into a search filter.
+  assert.doesNotMatch(messages.at(-1)?.content??'',/^下一页/);
+  return '{"filters":[]}';
+ }});
+ const first=await agent.answer({question:original,intent:'business',audience:'customer'});
+ assert.equal(first.recordLookup?.total,23);
+ assert.equal(first.recordLookup?.hasNext,true);
+ assert.equal(first.evidenceIds.length,10);
+ const request:Parameters<typeof chooseProspectChatAction>[0]={
+  campaign:{name:'商铺接待',requirements:'查询空置和在租商铺',minIntentScore:70},
+  conversation:{nickname:'客户',mode:'agent'},messages:[],
+  inbound:{id:'second-page',text:'下一页'},
+  propertyPage:{question:original,evidenceIds:first.evidenceIds,hasNext:true},
+ };
+ const second=await chooseProspectChatAction(request,{answerKnowledge:agent.answer});
+ assert.equal(second.action,'reply');
+ assert.equal(second.propertyQuery?.page,2);
+ assert.equal(second.propertyQuery?.status,'vacant');
+ assert.equal(second.propertyQuery?.minArea,80);
+ assert.equal(second.propertyQuery?.maxArea,100);
+ assert.equal(second.propertyHasNext,true);
+ assert.ok(second.evidenceIds?.length===10&&second.evidenceIds.every(id=>!first.evidenceIds.includes(id)));
+ assert.ok(second.reply&&second.reply.length<=500);
+ const third=await chooseProspectChatAction({...request,inbound:{id:'third-page',text:'下一页'},propertyPage:{
+  query:second.propertyQuery,evidenceIds:second.evidenceIds!,hasNext:true,
+ }},{answerKnowledge:agent.answer});
+ assert.equal(third.action,'reply');
+ assert.equal(third.propertyQuery?.page,3);
+ assert.equal(third.propertyHasNext,false);
+ assert.equal(third.evidenceIds?.length,3);
+ assert.ok(third.evidenceIds?.every(id=>![...first.evidenceIds,...second.evidenceIds!].includes(id)));
+ const changed=await chooseProspectChatAction({...request,propertyPage:{...request.propertyPage!,evidenceIds:first.evidenceIds.slice(1)}},{answerKnowledge:agent.answer});
+ assert.equal(changed.action,'handoff','a changed previous page must not silently skip or duplicate rows');
+ const noPage=await chooseProspectChatAction({...request,propertyPage:null},{answerKnowledge:async()=>assert.fail('no confirmed page must not trigger a new lookup')});
+ assert.equal(noPage.action,'handoff');
+});

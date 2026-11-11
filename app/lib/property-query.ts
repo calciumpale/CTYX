@@ -2,6 +2,19 @@ import type {PropertyRow} from './property-records.ts';
 
 export interface PropertyFilterGroup {field:'location'|'usage'|'keyword';values:string[];exclude?:boolean;}
 export interface PropertyQuery {status:'vacant'|'rented'|'any';minArea?:number;maxArea?:number;minExclusive?:boolean;maxExclusive?:boolean;groups:PropertyFilterGroup[];page:number;pageSize:number;clarification?:string;}
+export interface PropertyPageContext {
+ query?:PropertyQuery;
+ question?:string;
+ hasNext?:boolean;
+ evidenceIds:string[];
+}
+export function parsePropertyPageRequest(text:string):number|'next'|'previous'|undefined{
+ const value=text.normalize('NFKC').trim().replace(/[。.!！?？\s]+$/,'');
+ if(value==='下一页')return 'next';
+ if(value==='上一页'||value==='上页')return 'previous';
+ const explicit=/^第\s*(\d+)\s*页$/.exec(value);
+ if(explicit)return Math.max(1,Math.min(10000,Number(explicit[1])));
+}
 const propertySubjects='(?:商铺|房源|铺位|门面|店面|店铺)';
 const propertySubjectOnly=new RegExp(`^${propertySubjects}$`);
 const propertyClauses=/[\n，。！？；,!?;]/;

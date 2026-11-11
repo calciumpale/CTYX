@@ -12,6 +12,7 @@ import {createKnowledgeLibraryStore} from './knowledge-library-store.ts';
 import {createTalkIndex} from './talktrack-index.ts';
 import {talkKnowledge} from './talktrack-domain.ts';
 import type {WorkbenchState} from './types.ts';
+import {CUSTOMER_REPLY_MAX_CHARS} from './prospecting-reply-limit.ts';
 
 /** Owner and optional library allowlist are captured here, never read from model output. */
 export function createWorkbenchKnowledgeAgent(db:D1Database,ownerId:string,origin:string,options:{departmentId?:KnowledgeDepartmentId|null;libraryIds?:string[];generate?:KnowledgeAgentTools['generate'];includeLegacy?:boolean}={}){
@@ -50,7 +51,8 @@ export function createWorkbenchKnowledgeAgent(db:D1Database,ownerId:string,origi
   prepare:async(request:KnowledgeAgentRequest)=>(await prepareProperty(request))??prepareKnowledgeContext(request,tools),
   async answer(request: KnowledgeAgentRequest) {
    const customerReply = request.audience === 'customer';
-   const max = Math.max(1, Math.min(customerReply ? 60 : 12000, request.maxAnswerChars ?? (customerReply ? 60 : 2000)));
+   const max = Math.max(1, Math.min(customerReply ? CUSTOMER_REPLY_MAX_CHARS : 12000,
+    request.maxAnswerChars ?? (customerReply ? CUSTOMER_REPLY_MAX_CHARS : 2000)));
    const prepared = await prepareProperty({...request,maxAnswerChars:max});
    if (!prepared) return runKnowledgeAgent({...request,maxAnswerChars:max},tools);
    const hasAnswer = prepared.answer && prepared.answer.length <= max;

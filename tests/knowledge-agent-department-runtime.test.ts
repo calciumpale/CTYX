@@ -154,7 +154,7 @@ test('fresh property searches and topic resets ignore saved filters while saved 
  assert.equal(result.knowledge.length,0,'scope fields are rejected rather than interpreted as filters');
 });
 
-test('customer inventory lookup answers the reported private message from matching vacant rows within 60 characters', async t => {
+test('customer inventory lookup answers the reported private message with matching vacant rows within 500 characters', async t => {
  const f = fixture();
  t.after(() => f.sqlite.close());
  for (const [department, title, address, area] of [
@@ -172,19 +172,41 @@ test('customer inventory lookup answers the reported private message from matchi
  }
  const agent = createWorkbenchKnowledgeAgent(f.db, 'alice', 'https://example.test', {departmentId:'zs'});
  const question = '现在80-100平的空置商铺还有吗';
- const answer = await agent.answer({question, intent:'business', audience:'customer', maxAnswerChars:60});
+ const answer = await agent.answer({question, intent:'business', audience:'customer'});
  assert.equal(answer.action, 'answer');
  assert.equal(answer.recordLookup?.total, 2);
  assert.equal(answer.route, 'retrieved');
- assert.ok(answer.answer && answer.answer.length <= 60);
+ assert.ok(answer.answer && answer.answer.length > 60 && answer.answer.length <= 500);
  assert.match(answer.answer, /绮园商业街.*(?:3-3-2|5-3-4)号商铺/);
  assert.match(answer.answer, /面积86(?:\.28)?/);
  assert.match(answer.answer, /单位未标/);
+ assert.match(answer.answer, /3-3-2号商铺/);
+ assert.match(answer.answer, /5-3-4号商铺/);
  assert.doesNotMatch(answer.answer, /内部备注|13800138000|在租专用地址|他部门地址|\.xlsx|第2行/);
  assert.ok(answer.evidenceIds.length);
  assert.ok(answer.evidenceIds.every(id => answer.knowledge.some(source => source.id === id)));
- const unmatched = await agent.answer({question:'现在800-1000平的空置商铺还有吗', intent:'business', audience:'customer', maxAnswerChars:60});
+ const unmatched = await agent.answer({question:'现在800-1000平的空置商铺还有吗', intent:'business', audience:'customer'});
  assert.equal(unmatched.action, 'handoff');
  assert.equal(unmatched.route, 'no_evidence');
  assert.equal(unmatched.answer, undefined);
+});
+
+test('customer inventory pages keep complete distinct rows within the reply limit', async t => {
+ const f = fixture();
+ t.after(() => f.sqlite.close());
+ const agent = await inventoryFixture(f);
+ const question = '所有空置房源';
+ const first = await agent.answer({question,intent:'business',audience:'customer',maxAnswerChars:900});
+ assert.equal(first.action,'answer');
+ assert.ok(first.answer && first.answer.length > 60 && first.answer.length <= 500);
+ assert.match(first.answer,/下一页/);
+ assert.ok(first.evidenceIds.length > 1);
+ const second = await agent.answer({
+  question:'下一页',intent:'business',audience:'customer',
+  history:[{role:'user',content:question},{role:'assistant',content:first.answer}],
+ });
+ assert.equal(second.action,'answer');
+ assert.ok(second.answer && second.answer.length <= 500);
+ assert.ok(second.evidenceIds.length > 0);
+ assert.ok(second.evidenceIds.every(id => !first.evidenceIds.includes(id)));
 });

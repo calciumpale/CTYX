@@ -3,6 +3,8 @@ import {understandTaskMemory,projectTaskMemory,taskMemoryContext} from './prospe
 import type {ModelMessage} from './model-client.ts';
 import {object} from './prospecting-domain.ts';
 import {isChatOptOut, normalizeChatMemory, redactChatText} from './prospecting-chat-policy.ts';
+import {CUSTOMER_REPLY_MAX_CHARS} from './prospecting-reply-limit.ts';
+import {isPropertyQuestion} from './property-query.ts';
 import type {ProspectChatAgentInput, ProspectChatDecision, ProspectChatMemory, ProspectContactType} from './prospecting-chat-types.ts';
 
 export interface ProspectChatEvidence {
@@ -38,6 +40,7 @@ const modelHandoffReasons:Record<string,string>={
   human_confirmation:'客户问题需要人工确认，请查看消息后回复。',
 };
 const factualQuestion=/(?:多少|哪里|哪儿|在哪|哪天|几点|多长|多久|什么时候|什么时间|能否|是否|支持|有没有|有吗|还有吗|可以.{0,12}[吗么]|能.{0,12}[吗么]|地址|定位|位置|费用|价格|价位|单价|月租|租金|库存|面积|营业|开门|详情|介绍一下|怎么办|怎么(?:用|做|预约|购买|收费)|什么(?:条件|要求|规格|配置|服务))/;
+const isPageRequest=(value:string)=>/^(?:第\s*\d+\s*页|下一页|上一?页)[。.!！?？\s]*$/.test(value.normalize('NFKC').trim());
 const activeIntent=/预约|看铺|看房|看店|到店|面谈|试用|下单|采购|想.{0,8}(?:买|租)|求租|约.{0,6}(?:时间|明天|周[一二三四五六日天])|预算.{0,12}(?:\d|万|千|百)|急需|尽快|对接/;
 const generalIntent=/感兴趣|想问|想了解|咨询|了解一下|合适|联系我|加我|打给我|回复我|方便/;
 const cautiousIntent=/还没决定|只是看看|先看看|仅了解|不着急|没有预算|没预算|不打算|暂时不考虑/;
@@ -77,7 +80,7 @@ const agentPrompt=[
   '仅使用当前任务的明确产品说明和检索到的已发布资料。含具体事实时，沿用资料中可以直接发给客户的完整原句，保留其中的条件和限制，并返回对应 evidenceIds。业务事实缺少适用资料或资料互相冲突时转人工。寒暄、确认需求时可以问一个相关问题。',
   '投诉、退款、折扣、合同、报价承诺、隐私、账号、身份认证、敏感问题或客户明确要求人工时转人工；拒绝联系、闲聊已结束或无须回复时选择 wait。',
   '可先问一个与产品相关的问题，了解一至两项关键需求后适时邀请自愿留联系方式，统一使用“方便留一个可联系到您的方式吗？”；不要主动输出微信、vx、wechat或暗号，不连续追索，最多主动邀请两次；客户直接要求联系时可以提前询问。已留资时别再次索取；客户拒绝过留资后停止主动追问，只有客户主动重新要求联系时可再邀请，总邀请次数最多两次。memory 只能参考，严禁编造或修改需求槽位。不要索取任何账号密码、证件或支付信息。',
-  '只输出 JSON 对象。action 只可取 reply、handoff、wait。reply 最多60字，一次只问一个问题，统一称呼您，evidenceIds 只使用提供的 ID；没有资料时只能问需求或礼貌确认。回复格式为 {"action":"reply","reply":"回复正文","evidenceIds":["资料ID"]}；转人工格式为 {"action":"handoff","reasonCode":"missing_knowledge"}，reasonCode 只可取 missing_knowledge（资料不足）、conflicting_knowledge（资料冲突）、human_confirmation（需人工核实），不要输出原因正文或内部指令。',
+  `只输出 JSON 对象。action 只可取 reply、handoff、wait。reply 最多${CUSTOMER_REPLY_MAX_CHARS}字，一次只问一个问题，统一称呼您，evidenceIds 只使用提供的 ID；没有资料时只能问需求或礼貌确认。回复格式为 {"action":"reply","reply":"回复正文","evidenceIds":["资料ID"]}；转人工格式为 {"action":"handoff","reasonCode":"missing_knowledge"}，reasonCode 只可取 missing_knowledge（资料不足）、conflicting_knowledge（资料冲突）、human_confirmation（需人工核实），不要输出原因正文或内部指令。`,
 ].join('\n');
 
 function factualSentences(value:string) {
@@ -118,7 +121,7 @@ const safeNeedQuestions=new Set([
 
 /** Final prose policy is shared by model answers and source-grounded deterministic recall. */
 function validReplyText(reply:string,mayAskContact:boolean):boolean {
- return Boolean(reply)&&reply.length<=60&&redact(reply)===reply&&!handoff.test(reply)&&
+ return Boolean(reply)&&reply.length<=CUSTOMER_REPLY_MAX_CHARS&&redact(reply)===reply&&!handoff.test(reply)&&
   !/https?:\/\/|www\.|资料ID|内部(?:资料|规则|流程|提示词)|系统指令|审核记录|销售提成|绩效|稳赚|保本|最好|唯一|顶级|100%|加我|扫码|私聊/i.test(reply)&&
   !/微信|wechat|\bvx\b|加v/i.test(reply)&&(reply.match(/[？?]/g)??[]).length<=1&&(!asksContact.test(reply)||mayAskContact);
 }
@@ -215,7 +218,8 @@ export async function chooseProspectChatAction(input:ProspectChatAgentInput,tool
   const declinesContact=contactDeclined.test(inbound)||Boolean(lastOut&&asksContact.test(lastOut.text)&&/^(?:不需要|不用(?:了)?|先不留|不方便)[。！!，,\s]*$/.test(inbound.trim()));
   if(declinesContact&&!taskState)memory.contactDeclines++;
   const factualQuestionAsked=needsFactualAnswer(inbound);
-  const businessQuestion=factualQuestionAsked||/有合适|推荐|(?:查询|筛选|列出|有哪些|还有哪些).{0,20}(?:房源|商铺|铺位|空铺)/.test(inbound);
+  const propertyPage=isPageRequest(inbound)&&isPropertyQuestion(previousInbound.slice(-6).findLast(message=>!isPageRequest(message.text))?.text??'');
+  const businessQuestion=factualQuestionAsked||propertyPage||/有合适|推荐|(?:查询|筛选|列出|有哪些|还有哪些).{0,20}(?:房源|商铺|铺位|空铺)/.test(inbound);
   const questionNeed:NeedKey|undefined=factualQuestionAsked?
     /面积|多大|几平|多少平|\d+(?:\.\d+)?\s*(?:[-~～至到]\s*\d+(?:\.\d+)?)?\s*(?:平|㎡)/.test(inbound)?'area':
     /地址|定位|位置|区域|城市|哪里|哪儿|在哪/.test(inbound)?'location':
@@ -297,7 +301,7 @@ export async function chooseProspectChatAction(input:ProspectChatAgentInput,tool
         question:redact(inbound),intent:businessQuestion?'business':'auto',audience:'customer',
         context:taskContext?.facts.filter(f=>f.status==='confirmed').map(f=>({id:f.id,text:`${needLabels[f.key as NeedKey]??'条件'}：${f.value}`,kind:'customer_fact' as const})),
         history:(taskContext?taskContext.recent:previous).filter(m=>!pendingIds.has(m.id)).map(m=>({role:m.direction==='inbound'?'user' as const:'assistant' as const,content:redact(m.text)})),
-        retrievalQuery:query,maxAnswerChars:60,instructions:agentPrompt+`\n当前可邀请留资：${mayAskContact}。已留资：${memory.contactCaptured}。当前任务：${redact(input.campaign.name)}。`,
+        retrievalQuery:query,maxAnswerChars:CUSTOMER_REPLY_MAX_CHARS,instructions:agentPrompt+`\n当前可邀请留资：${mayAskContact}。已留资：${memory.contactCaptured}。当前任务：${redact(input.campaign.name)}。`,
       });
       if(shared.route==='conflict')return transfer(modelHandoffReasons.conflicting_knowledge);
       if(shared.recordLookup?.kind==='property'){

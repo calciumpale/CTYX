@@ -976,7 +976,8 @@ for (const matching of [true, false]) {
   await libraryStore.upload({
    libraryId: library.id, title: '空置房源', fileName: '空置房源.xlsx', strategy: 'flat',
    text: '## 工作表：空置房源\n第1行：A1=区块；B1=地址；C1=面积；D1=建议业态\n' +
-    `第2行：A2=绮园商业街；B2=3-3-2号商铺；C2=${matching ? 86 : 150}；D2=轻餐饮`,
+    `第2行：A2=绮园商业街；B2=3-3-2号商铺；C2=${matching ? 86 : 150}；D2=轻餐饮\n` +
+    `第3行：A3=绮园商业街；B3=5-3-4号商铺；C3=${matching ? 86.28 : 220}；D3=茶饮咖啡`,
   });
   await readConversation(f,x,[{id:'shop-question',direction:'inbound',text:'现在80-100平的空置商铺还有吗',postedAt:f.now()}]);
   await f.chat.processOne('owner-a', 'member-a', 'https://example.test', async (owner, origin, input) => {
@@ -990,8 +991,11 @@ for (const matching of [true, false]) {
    assert.ok(job);
    const reply = JSON.parse(job.input_json);
    assert.match(reply.message, /绮园商业街3-3-2号商铺，面积86/);
+   assert.match(reply.message, /绮园商业街5-3-4号商铺，面积86\.28/);
+   assert.ok(reply.message.length > 60 && reply.message.length <= 500);
    assert.equal(reply.actor, 'agent');
    assert.equal(reply.answeredMessageIds.length, 1);
+   assert.equal(reply.knowledgeLookup.sourceIds.length, 2);
   } else {
    assert.equal(conversation.mode, 'human');
    assert.match(conversation.handoffReason ?? '', /资料|房源/);

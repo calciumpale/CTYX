@@ -12,15 +12,7 @@ function publicField(row: PropertyRow, labels: RegExp): string {
   return value;
 }
 
-/** Build a short customer reply from public fields of a single matched row. */
-export function formatCustomerPropertyReply(
-  matches: PropertyRow[],
-  query: PropertyQuery,
-  complete: boolean,
-  maxChars: number,
-): {answer:string; rows:PropertyRow[]} {
-  const row = matches[query.page - 1];
-  if (!row) return {answer:'', rows:[]};
+function formatPublicRow(row: PropertyRow, budget: number): string | undefined {
   const area = row.area;
   const size = area && !area.approximate
     ? `面积${area.min}${area.max !== area.min ? `–${area.max}` : ''}${area.unit === 'sqm' ? '㎡' : '（单位未标）'}`
@@ -30,19 +22,51 @@ export function formatCustomerPropertyReply(
   const unit = publicField(row, unitLabel);
   const location = address || unit;
   const fullLocation = block && location && !location.includes(block) ? block + location : location || block;
-  const scope = {vacant:'空置表', rented:'在租表', any:'房源表'}[query.status];
-  const count = complete ? `匹配${matches.length}条` : `已查到${matches.length}条`;
-  const prefix = `${scope}${count}${matches.length > 1 ? '，如' : '，'}`;
-  const suffix = '。现况待核实。';
+  const usage = publicField(row, /^建议业态$/);
   const details = [
+    [fullLocation, size, usage ? `建议业态${usage}` : ''],
     [fullLocation, size],
     [location, size],
     [block, size],
   ];
-  for (const [place, areaText] of details) {
-    if (!place) continue;
-    const answer = prefix + [place, areaText].filter(Boolean).join('，') + suffix;
-    if (answer.length <= maxChars) return {answer, rows:[row]};
+  for (const fields of details) {
+    if (!fields[0]) continue;
+    const line = fields.filter(Boolean).join('，');
+    if (line.length <= budget) return line;
   }
-  return {answer:'', rows:[]};
+}
+
+/** Paginate complete public row descriptions without exceeding the reply limit. */
+export function formatCustomerPropertyReply(
+  matches: PropertyRow[],
+  query: PropertyQuery,
+  complete: boolean,
+  maxChars: number,
+): {answer:string; rows:PropertyRow[]} {
+  const scope = {vacant:'空置表', rented:'在租表', any:'房源表'}[query.status];
+  const count = complete ? `匹配${matches.length}条` : `已查到${matches.length}条`;
+  const header = `${scope}${count}。\n`;
+  const footer = '\n现况待核实。';
+  const next = '还有匹配，回复“下一页”查看。';
+  const bodyBudget = maxChars - header.length - footer.length - (matches.length > 1 ? next.length : 0);
+  const pages: {rows:PropertyRow[]; lines:string[]; length:number}[] = [];
+  let page = {rows:[] as PropertyRow[], lines:[] as string[], length:0};
+  for (const row of matches) {
+    const line = formatPublicRow(row, bodyBudget);
+    if (!line) continue;
+    if (page.lines.length && (page.lines.length >= query.pageSize || page.length + 1 + line.length > bodyBudget)) {
+      pages.push(page);
+      page = {rows:[], lines:[], length:0};
+    }
+    page.length += line.length + (page.lines.length ? 1 : 0);
+    page.rows.push(row);
+    page.lines.push(line);
+  }
+  if (page.lines.length) pages.push(page);
+  const selected = pages[query.page - 1];
+  if (!selected) return {answer:'', rows:[]};
+  return {
+    answer: header + selected.lines.join('\n') + footer + (query.page < pages.length ? next : ''),
+    rows: selected.rows,
+  };
 }

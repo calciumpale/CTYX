@@ -1,3 +1,4 @@
+import { AI_REPLY_STYLE } from './ai-reply-style.ts';
 import { DomainError } from './domain.ts';
 import { readEffectiveModel } from './connection-store.ts';
 import { publicMaterialTask } from './marketing-material.ts';
@@ -57,7 +58,7 @@ export async function generateMomentCopy(
 ): Promise<{ text: string; imagePrompt: string }> {
   const style = styleBrief[input.style];
   const product = { productName: input.productName, productDetails: input.productDetails, style, includeImage: input.includeImage };
-  const raw = await requestModel([{ role: 'system', content: systemPrompt }, { role: 'user', content: JSON.stringify(product) }]);
+  const raw = await requestModel([{ role: 'system', content: `${systemPrompt}\n${AI_REPLY_STYLE}\n写作规则只用于 text，保留用户选择的风格。imagePrompt 仍按配图要求填写。` }, { role: 'user', content: JSON.stringify(product) }]);
   const decoded = decodeCopy(raw);
   const text = plain(decoded.text, 600);
   const source = `${input.productName}\n${input.productDetails}`;

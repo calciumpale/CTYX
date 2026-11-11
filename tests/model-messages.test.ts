@@ -9,6 +9,7 @@ test('main chat follows the actual latest question without a mandatory sales tem
  const messages=buildModelMessages(input());
  assert.match(messages[0].content,/优先.*当前问题/);
  assert.match(messages[0].content,/普通问答/);
+ assert.match(messages[0].content,/避免连续重复同一句式/);
  assert.match(messages.at(-1)!.content,/用户当前问题：\n1\+1等于几？只给答案$/);
  assert.doesNotMatch(messages[0].content,/仅依据提供的授权客户与已发布知识/);
 });
@@ -23,6 +24,7 @@ test('workflow nodes retain their actual instruction, upstream outputs and appro
  for(const text of ['输出三条核对事项','客户预算待确认','授权边界'])assert.ok(messages.at(-1)!.content.includes(text));
  assert.match(messages[0].content,/合成示例/);
  assert.match(messages[0].content,/不能批准/);
+ assert.match(messages[0].content,/避免连续重复同一句式/);
 });
 test('knowledge and past assistant output never replace the latest user question',()=>{
  const messages=buildModelMessages(input({query:'只解释风险的含义',previous:'旧专家回复',history:[{query:'旧问题',answer:'旧回复'}]}));

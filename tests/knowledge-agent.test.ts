@@ -12,6 +12,17 @@ test('business answers require retrieved sentences with real source ids',async()
  const result=await runKnowledgeAgent({question:'月租多少钱？',intent:'business'},{retrieve:async()=>evidence,generate:async(_messages,options)=>{phases.push(options!.phase);return JSON.stringify({answer:evidence[0].content,evidenceIds:['rent']});}});
  assert.equal(result.answer,evidence[0].content);assert.deepEqual(result.evidenceIds,['rent']);assert.equal(result.route,'retrieved');assert.deepEqual(phases,['answer']);
 });
+test('writing guidance applies to conversational answers and stays out of routing',async()=>{
+ const prompts:Record<string,string>={};
+ const result=await runKnowledgeAgent({question:'我想了解一下'},{retrieve:noLookup,generate:async(messages,options)=>{
+  const phase=options!.phase;
+  prompts[phase]=messages[0].content;
+  return phase==='route'?' {"action":"direct"}':'{"answer":"您想了解哪方面？","evidenceIds":[]}';
+ }});
+ assert.equal(result.answer,'您想了解哪方面？');
+ assert.doesNotMatch(prompts.route,/避免连续重复同一句式/);
+ assert.match(prompts.answer,/避免连续重复同一句式/);
+});
 test('auto planner can request one contextual query; customer budget is not product pricing',async()=>{
  let calls=0;let searched='';
  const result=await prepareKnowledgeContext({question:'那边有吗？',context:[{id:'new',kind:'customer_fact',text:'区域：萧山；预算：8000元/月'}]},{retrieve:async query=>{calls++;searched=query;return evidence;},generate:async()=>JSON.stringify({action:'retrieve',query:'萧山可租商铺'})});

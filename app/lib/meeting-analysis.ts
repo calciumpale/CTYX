@@ -1,3 +1,4 @@
+import { AI_REPLY_STYLE } from './ai-reply-style.ts';
 import {markSalesBusinessChanges} from './sales-project-eligibility.ts';
 import type {EffectiveModel} from './connection-config.ts';
 import {DomainError} from './domain.ts';
@@ -48,6 +49,8 @@ minutes是会议纪要摘要，不是逐字原话；transcript是自动转写，
 每个fact的value必须直接复制其quote中的连续文字，quote须精确存在于该source且包含该实体name，不能把别人的事实转给这个实体。没有这样的证据就不输出该fact。不要把否定、条件、区间或尚未批准的信息改成已确认事实。
 企业fact.field仅可为：${[...companyFields].join('、')}。人物fact.field仅可为：${[...personFields].join('、')}。字段只表示会议中相关表述，均未经外部核实。
 summary是分析摘要，nextSteps是建议，不是客户承诺或人工主数据；不得声称已修改客户资料、批准优惠、确认成单。nextSteps最多6条，summary最多1200字。资料不足时可返回空实体数组，不编造。
+${AI_REPLY_STYLE}
+写作规则只用于 summary 和 nextSteps，实体名称、值、引用和来源仍按原要求提取。
 只输出完整JSON，不要Markdown：{"summary":"会议分析摘要","companies":[{"name":"原文名称","quote":"含名称的原文证据","source":"minutes或transcript","facts":[{"field":"允许的字段","value":"原文连续文字","quote":"含实体名称和值的原文证据","source":"minutes或transcript"}]}],"people":[],"nextSteps":["待核实的下一步建议"]}`;
 
 /** Source storage is owned by the caller. A failed model response never becomes a guessed portrait. */

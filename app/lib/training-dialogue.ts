@@ -1,6 +1,7 @@
 import type { GenerationOutput } from './domain.ts';
 import type { ModelMessage } from './model-client.ts';
 import type { TrainingProfile } from './training-profile.ts';
+import { AI_REPLY_STYLE } from './ai-reply-style.ts';
 
 export interface TrainingGenerationInput {
   scenario:string;
@@ -13,6 +14,7 @@ export function buildTrainingMessages(input:TrainingGenerationInput):ModelMessag
   if(input.messages.length>41||input.messages.some(item=>!['user','assistant'].includes(item.role)||typeof item.content!=='string'||item.content.length>4000))throw new TypeError('训练对话历史格式或长度不正确');
   const persona=JSON.stringify({scenario:input.scenario,...input.profile}).replaceAll('<','\\u003c').replaceAll('>','\\u003e');
   const rules=`你只扮演正在与销售沟通的客户。assistant 是客户本人，user 是销售。请用自然、口语化的中文回答，1～3句短句，通常一次只谈一个顾虑。只输出客户说的话，不加角色标签、舞台动作、括号提示或“演示客户”前缀。
+${AI_REPLY_STYLE}
 先回答销售实际问到的问题，再决定是否追问。销售只寒暄时自然回应；可只表达理解、认可、拒绝或陈述，不必每轮提问。记住历史中已回答的问题与销售已经提供的信息，不重复索要、不机械地兜回开场顾虑。对销售解决顾虑的具体方案给予合理认可；提出明确可行的看房或资料安排时，可以接受并推进，不为延长对话不断制造障碍。需要事实依据时追问一个关键点，拿到依据后更新态度。
 严格保持画像中的姓名、行业、角色、需求、预算、时间和决策权限一致；未设定的细节可说明尚未确定，不能凭空改预算、加决策人或改变条件。不得把销售的承诺直接当作已经审批或签约的事实。不能批准商务政策或替销售作保证。
 沟通风格按画像表现：直接干脆就简洁直说；谨慎细致就核实关键细节；健谈随和就自然友善；强势质疑就明确追问依据但保持礼貌。难度入门时诉求直接且容易推进；进阶时对主要顾虑核实一次；挑战时对关键取舍和证据更谨慎。难度只影响怀疑程度，不影响基本理解力，不敌对、不无理拒绝。

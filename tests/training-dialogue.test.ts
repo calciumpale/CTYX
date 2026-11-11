@@ -159,6 +159,7 @@ test('training prompt retains full bounded role history and isolates hostile per
   assert.equal(result.filter(item=>item.role==='system').length,1);
   const rules=result[0].content;
   assert.match(rules,/客户/);assert.match(rules,/先回答/);assert.match(rules,/1[—–~-]3|一到三|1～3/);
+  assert.match(rules,/避免连续重复同一句式/);
   assert.match(rules,/不.*(?:教练|指导|点评|考官)/);assert.match(rules,/进阶/);assert.match(rules,/谨慎细致/);
   assert.match(rules,/<customer_persona>/);assert.match(rules,/不可信/);
   assert.equal(rules.split('</customer_persona>').length,2);

@@ -1,3 +1,4 @@
+import { AI_REPLY_STYLE } from './ai-reply-style.ts';
 import type { Deal } from './types.ts';
 import type { CallTranscript } from './talktrack-types.ts';
 import type { SalesAssessment, SalesDimension, SalesDimensionKey, SalesEvidence, SalesFactor, SalesGenerate, SalesHistoryEntry, SalesInput, SalesIntelligence, SalesNextAction, SalesSource } from './sales-intelligence-types.ts';
@@ -74,6 +75,8 @@ const SYSTEM = `你是营销工作台的客户洞察和商机预测分析员。
 同时核对最新与较早记录中的拒绝、暂停、预算未批和相互矛盾的信息。明确拒绝或暂无采购计划必须出现在负面 factors 中；存在未解释拒绝不能给高意向或高成交概率；不可仅挑选正面证据。
 成交概率与意向分是不同判断，不能直接复制总分。probability为0..100整数，range低值<=概率<=高值，confidence仅low/medium/high；这是未做历史校准的主观估计。不要声称统计准确率、真实赢率、审批通过或自动推进阶段。
 客户洞察和预测各给1至3个具体下一步（action、reason、证据），着重补缺和推动可验证承诺，不自行批准优惠或承诺交付。建议必须关联现有原文；缺项列入missingInfo。摘要<=400字，各原因<=500字，引用<=1200字，最多6个因素和6条缺项。
+${AI_REPLY_STYLE}
+写作规则只用于摘要、原因、下一步和待确认信息。保留评分、概率、原文 quote、来源 ID 及 JSON 格式。
 </rules>
 <output>只输出一个完整JSON对象，无Markdown或其他文字。所有字段必填：
 {"insight":{"summary":"客户意向概述","dimensions":[{"key":"need","score":null,"reason":"缺少依据","evidence":[]},{"key":"budget","score":null,"reason":"缺少依据","evidence":[]},{"key":"decision","score":null,"reason":"缺少依据","evidence":[]},{"key":"timeline","score":null,"reason":"缺少依据","evidence":[]},{"key":"engagement","score":null,"reason":"缺少依据","evidence":[]}],"nextActions":[{"action":"具体沟通动作","reason":"需要解决的问题","evidence":[{"refId":"现有标识","quote":"精确连续原文"}]}],"missingInfo":["待确认信息"]},"forecast":{"probability":null,"range":null,"confidence":null,"summary":"成交估计说明","factors":[{"direction":"positive或negative","reason":"具体依据","evidence":[{"refId":"现有标识","quote":"精确连续原文"}]}],"nextActions":[{"action":"具体推进动作","reason":"动作目的","evidence":[{"refId":"现有标识","quote":"精确连续原文"}]}]}}</output>`;

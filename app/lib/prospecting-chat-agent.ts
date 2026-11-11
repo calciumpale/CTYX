@@ -6,6 +6,7 @@ import {isChatOptOut, normalizeChatMemory, redactChatText} from './prospecting-c
 import {CUSTOMER_REPLY_MAX_CHARS} from './prospecting-reply-limit.ts';
 import {isPropertyQuestion} from './property-query.ts';
 import type {ProspectChatAgentInput, ProspectChatDecision, ProspectChatMemory, ProspectContactType} from './prospecting-chat-types.ts';
+import {AI_REPLY_STYLE} from './ai-reply-style.ts';
 
 export interface ProspectChatEvidence {
   id: string;
@@ -323,7 +324,7 @@ export async function chooseProspectChatAction(input:ProspectChatAgentInput,tool
       evidence=shared.knowledge.map(item=>({...item,title:redact(item.title),content:evidenceSnippet(item.content)})).slice(0,7);
     }
     const response=shared?JSON.stringify({action:'reply',reply:shared.answer,evidenceIds:shared.evidenceIds}):await tools.generate!([
-      {role:'system',content:agentPrompt},
+      {role:'system',content:`${agentPrompt}\n${AI_REPLY_STYLE}`},
       {role:'user',content:JSON.stringify({
         campaign:{name:redact(input.campaign.name),requirements:redact(input.campaign.requirements)},
         history:(taskContext?taskContext.recent.filter(m=>!pendingIds.has(m.id)):previous).map(message=>({direction:message.direction,actor:message.actor,at:message.postedAt??message.createdAt,text:redact(message.text).slice(0,600)})),

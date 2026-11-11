@@ -1,5 +1,6 @@
 import type {ModelMessage} from './model-client.ts';
 import type {PropertyQuery} from './property-query.ts';
+import {AI_REPLY_STYLE} from './ai-reply-style.ts';
 export interface KnowledgeAgentEvidence {id:string;title:string;content:string;}
 export interface KnowledgeAgentRequest {
  question:string;intent?:'auto'|'conversation'|'customer_memory'|'business';
@@ -78,8 +79,9 @@ export async function runKnowledgeAgent(input:KnowledgeAgentRequest,tools:Knowle
  if(prepared.answer)return prepared.answer.length<=max&&!unsafe.test(prepared.answer)&&redact(prepared.answer)===prepared.answer?{action:'answer',...prepared}:unavailable();
  if(prepared.route!=='direct'&&prepared.route!=='retrieved')return unavailable();
  if(!tools.generate)return unavailable();
+ const writingStyle=prepared.route==='direct'?`\n${AI_REPLY_STYLE}`:'';
  try{
-  const value=json(await tools.generate([{role:'system',content:policy+' 输出 {"answer":"给用户的答案","evidenceIds":["来源ID"]}。业务回答只能摘取来源完整原句，保留所有适用条件。资料冲突输出 {"action":"handoff"}。普通沟通可以提一个需求问题。答案最多'+max+'字。'},{role:'user',content:JSON.stringify({request,knowledge:prepared.knowledge})}],{phase:'answer'}));
+  const value=json(await tools.generate([{role:'system',content:policy+' 输出 {"answer":"给用户的答案","evidenceIds":["来源ID"]}。业务回答只能摘取来源完整原句，保留所有适用条件。资料冲突输出 {"action":"handoff"}。普通沟通可以提一个需求问题。答案最多'+max+'字。'+writingStyle},{role:'user',content:JSON.stringify({request,knowledge:prepared.knowledge})}],{phase:'answer'}));
   if(value.action==='handoff')return unavailable('conflict');
   const answer=typeof value.answer==='string'?value.answer.trim():'';
   const ids=Array.isArray(value.evidenceIds)?[...new Set(value.evidenceIds)]:[];

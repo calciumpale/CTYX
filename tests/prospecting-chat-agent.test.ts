@@ -81,10 +81,12 @@ test('ordinary clarification does not override identity or privacy handoffs',asy
 });
 
 test('an approved area fact can be followed by one qualifying question',async()=>{
+  let prompt='';
   const result=await chooseProspectChatAction(input('你们有哪些面积？'),{
     retrieve:async()=>[{id:'area',title:'可租面积',content:'可租面积为100至300平，具体空置情况需确认。'}],
-    generate:async()=>' {"action":"reply","reply":"可租面积为100至300平，具体空置情况需确认。您大概需要多大面积？","evidenceIds":["area"]} ',
+    generate:async messages=>{prompt=messages[0].content;return ' {"action":"reply","reply":"可租面积为100至300平，具体空置情况需确认。您大概需要多大面积？","evidenceIds":["area"]} ';},
   });
+  assert.match(prompt,/避免连续重复同一句式/);
   assert.equal(result.action,'reply');
   assert.match(result.reply??'',/100至300平，具体空置情况需确认/);
   assert.match(result.reply??'',/您大概需要多大面积/);

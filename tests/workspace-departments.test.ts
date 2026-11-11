@@ -39,7 +39,7 @@ test('existing department workspaces receive isolated stage examples once withou
   const examples = after.deals.slice(before.deals.length);
   assert.equal(examples.length, 20);
   assert.equal(new Set(examples.map(deal => deal.name)).size, 20);
-  assert.ok(examples.every(deal => deal.dataOrigin === 'sample' && deal.name.includes('演示') && !salesReportEligible(deal)));
+  assert.ok(examples.every(deal => deal.dataOrigin === 'sample' && deal.name.startsWith('【演示】') && deal.projectName?.startsWith('【演示】') && !salesReportEligible(deal)));
   for (const department of DEPARTMENTS) {
     const owned: Deal[] = projectState(after, 'sales', { salesId: department.salesId, displayName: department.username }).deals;
     assert.deepEqual(owned.filter(deal => deal.dataOrigin === 'sample').map(deal => deal.stage), ['商机', '方案', '合同', '回款']);

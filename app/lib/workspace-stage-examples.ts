@@ -7,6 +7,7 @@ const stages = [
   { id: 'contract', stage: '合同', progress: '商务条件已对齐，合同草案正在会审。', nextAction: '与法务逐项核对验收标准、付款节点和责任边界' },
   { id: 'payment', stage: '回款', progress: '已模拟签约及首期验收，正在核对付款资料。', nextAction: '核对开票信息和首期付款节点，登记对账结果' },
 ] as const;
+const exampleLabel = '【演示】';
 
 type Scenario = readonly [company: string, project: string, need: string];
 const scenarios: Record<typeof DEPARTMENTS[number]['username'], readonly [Scenario, Scenario, Scenario, Scenario]> = {
@@ -51,7 +52,8 @@ export function missingDepartmentStageExamples(state: WorkbenchState): Deal[] {
     if (existingIds.has(id)) return [];
     const [company, projectName, need] = scenarios[username][index];
     const deal: Deal = {
-      id, name: `【演示】${company}`, projectName, industry, ownerId: salesId, owner: username.toUpperCase(),
+      id, name: exampleLabel + company, projectName: exampleLabel + projectName,
+      industry, ownerId: salesId, owner: username.toUpperCase(),
       stage: phase.stage, outcome: 'open', dataOrigin: 'sample', source: '合成演示项目',
       summary: `演示场景：${need}。${phase.progress}`, needs: [need], nextAction: phase.nextAction,
       amount: 0, health: 0, priority: 'medium', contact: '', position: '', lastContact: '',

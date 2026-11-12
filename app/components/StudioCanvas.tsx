@@ -1,4 +1,6 @@
 'use client';
+/* Authenticated material images must bypass the public optimizer. */
+/* eslint-disable @next/next/no-img-element */
 
 import {useEffect, useRef, useState} from 'react';
 import type {CSSProperties, KeyboardEvent, PointerEvent, ReactNode} from 'react';
@@ -374,7 +376,7 @@ export default function StudioCanvas({document, onChange, selection, onSelection
     }
   }
 
-  function useLayerKeys(event: KeyboardEvent<HTMLDivElement>, source: StudioBoard, item: StudioLayer) {
+  function handleLayerKeys(event: KeyboardEvent<HTMLDivElement>, source: StudioBoard, item: StudioLayer) {
     if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault();
       onSelectionChange({boardId: source.id, layerId: item.id});
@@ -458,7 +460,7 @@ export default function StudioCanvas({document, onChange, selection, onSelection
                       return <div key={entry.id} className={'studio-canvas-layer studio-canvas-editable kind-' + entry.kind}
                         style={studioLayerStyle(shape)} role="button" tabIndex={0}
                         aria-label={entry.name || KIND_LABELS[entry.kind]} aria-pressed={selected && layer?.id === entry.id}
-                        onKeyDown={event => useLayerKeys(event, item, entry)}
+                        onKeyDown={event => handleLayerKeys(event, item, entry)}
                         onPointerDown={event => beginDrag(event, item, entry, scale)}
                         onPointerMove={moveDrag} onPointerUp={event => endDrag(event, true)}
                         onPointerCancel={event => endDrag(event, false)} onLostPointerCapture={event => endDrag(event, false)}>

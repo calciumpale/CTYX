@@ -25,7 +25,7 @@ export function assertMemberApi(role:MemberRole,pathname:string,method:string):v
   const path=pathname.replace(/\/$/,'');const verb=method.toUpperCase();
   if(path==='/api/workbench'){if(['GET','POST'].includes(verb))return;return denied();}
   if(path==='/api/agent-memory'){if(role!=='admin'&&['GET','POST'].includes(verb))return;return denied();}
-  if(['/api/web-prospects','/api/marketing-materials','/api/moments-materials','/api/creative-studio'].includes(path)){if(role!=='admin'&&['GET','POST'].includes(verb))return;return denied();}
+  if(['/api/web-prospects','/api/marketing-materials','/api/moments-materials','/api/creative-studio','/api/geo'].includes(path)){if(role!=='admin'&&['GET','POST'].includes(verb))return;return denied();}
   if(path==='/api/marketing-materials/result'){if(role!=='admin'&&['GET','HEAD'].includes(verb))return;return denied();}
   if(path==='/api/material-connection'){if(role==='admin'&&['GET','POST'].includes(verb))return;return denied();}
   if(path==='/api/digital-humans'){if(role!=='admin'&&['GET','POST'].includes(verb))return;return denied();}

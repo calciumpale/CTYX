@@ -1,6 +1,6 @@
 'use client';
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
-import { ArrowDown, ArrowRight, Bell, BookOpen, BriefcaseBusiness, CalendarDays, Check, ChevronDown, ChevronRight, CircleAlert, ClipboardCheck, Clock3, ExternalLink, GitBranch, Home, Loader2, LogOut, Menu, MessageSquare, Moon, PanelLeftClose, Presentation, Search, Settings, ShieldCheck, Sun, Users, Video, Workflow, X } from 'lucide-react';
+import { ArrowDown, ArrowRight, Bell, BookOpen, BriefcaseBusiness, CalendarDays, Check, ChevronDown, ChevronRight, CircleAlert, ClipboardCheck, Clock3, ExternalLink, GitBranch, Globe2, Home, Loader2, LogOut, Menu, MessageSquare, Moon, PanelLeftClose, Presentation, Search, Settings, ShieldCheck, Sun, Users, Video, Workflow, X } from 'lucide-react';
 import { useWorkbench } from '../lib/api';
 import { useChatScroll } from '../lib/use-chat-scroll';
 import { canOpenWorkspaceView, readWorkspaceRoute, workspaceManagementNavigation, workspaceNavigation, workspaceSearch, workspaceSection, workspaceTitle } from '../lib/workspace-navigation';
@@ -21,9 +21,10 @@ import { MeetingImportWorkspace } from './MeetingImportWorkspace';
 import { ProspectingWorkspace } from './ProspectingWorkspace';
 import { ScheduleWorkspace } from './ScheduleWorkspace';
 import MarketingMaterials from './MarketingMaterials';
+import GEOWorkspace from './GEOWorkspace';
 
 const navigationIcons: Partial<Record<View, typeof Home>> = {
-  home:Home, deals:BriefcaseBusiness, schedule:CalendarDays, meetings:Video, prospecting:Search, materials:Presentation,
+  home:Home, deals:BriefcaseBusiness, schedule:CalendarDays, meetings:Video, prospecting:Search, geo:Globe2, materials:Presentation,
   knowledge:BookOpen, training:MessageSquare, approvals:ClipboardCheck, contracts:ClipboardCheck,
   members:Users, rules:ShieldCheck, settings:Settings, studio:Workflow, runs:Clock3,
 };
@@ -217,6 +218,7 @@ export default function Workbench({member,onLogout}:{member:MemberSession;onLogo
         {view==='home'&&member.role==='admin'&&<AdminHome state={state} onNavigate={navigate}/>}
         {view==='reports'&&member.role==='manager'&&<SalesDailyReport state={state} notify={notify} onNavigate={navigate}/>}
         {view==='prospecting'&&member.role!=='admin'&&<ProspectingWorkspace onGuardReady={onProspectingGuardReady} initialSection={prospectingSection} onSectionChange={onProspectingSectionChange} onNavigateProject={id=>{void reload().then(()=>navigate('deals',id)).catch(()=>notify('项目已保存，工作台暂未刷新。请稍后重新打开。'));}}/>}
+        {view==='geo'&&member.role!=='admin'&&<GEOWorkspace member={member} notify={notify} onBusyChange={onProjectBusy} onDirtyChange={onProjectDirty}/>}
         {view==='materials'&&member.role!=='admin'&&<MarketingMaterials notify={notify} onBusyChange={onProjectBusy} onDirtyChange={onProjectDirty}/>}
         {view==='schedule'&&member.role!=='admin'&&<ScheduleWorkspace pendingApprovals={approvalPendingCount} state={state} member={member} notify={notify} onNavigate={navigate} onBusyChange={onProjectBusy} onDirtyChange={onProjectDirty}/>}
         {view==='deals'&&member.role!=='admin'&&<CustomerWorkspace member={member} {...props} onReload={reload} onBusyChange={onProjectBusy} onDirtyChange={onProjectDirty} onNavigate={navigate} initialDealId={focusedDeal} initialIntent={projectIntent} onSelectedDealChange={onSelectedDealChange}/>}

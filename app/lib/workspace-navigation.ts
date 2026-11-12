@@ -7,7 +7,7 @@ interface WorkspacePage {
   section?: WorkspaceSection;
 }
 
-export type WorkspaceSection = 'prospecting' | 'materials' | 'deals' | 'schedule' | 'contracts' | 'training' | 'knowledge';
+export type WorkspaceSection = 'prospecting' | 'geo' | 'materials' | 'deals' | 'schedule' | 'contracts' | 'training' | 'knowledge';
 export type ProspectingSection = 'create' | 'screen' | 'handoff' | 'web';
 
 // One registry owns page names, frontend access, and navigation order.
@@ -18,6 +18,7 @@ const pages: Record<View, WorkspacePage> = {
   schedule: { title:'提醒及日程', roles:['sales','manager'], section:'schedule' },
   meetings: { title:'会议', roles:['sales','manager','admin'], section:'deals' },
   prospecting: { title:'社交平台获客', roles:['sales','manager'], section:'prospecting' },
+  geo: { title:'GEO', roles:['sales','manager'], section:'geo' },
   materials: { title:'AI营销素材', roles:['sales','manager'], section:'materials' },
   knowledge: { title:'知识库', roles:['sales','manager','admin'], section:'knowledge' },
   training: { title:'培训提升', roles:['sales','manager'], section:'training' },
@@ -43,7 +44,7 @@ export function workspaceTitle(view: View, role: MemberRole): string {
 
 export function workspaceNavigation(role: MemberRole): Array<{id:View;label:string;mobileLabel?:string}> {
   const mobile: Partial<Record<View,string>>={prospecting:'获客',materials:'素材',deals:'项目',schedule:'日程',contracts:'合同',training:'陪练',knowledge:'知识库'};
-  return (['prospecting','materials','deals','schedule','contracts','training','knowledge'] as const)
+  return (['prospecting','geo','materials','deals','schedule','contracts','training','knowledge'] as const)
     .filter(id => canOpenWorkspaceView(role,id))
     .map(id => ({id,label:workspaceTitle(id,role),...(mobile[id]?{mobileLabel:mobile[id]}:{})}));
 }

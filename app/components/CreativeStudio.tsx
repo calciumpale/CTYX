@@ -148,9 +148,8 @@ export default function CreativeStudio({ notify, onDirtyChange, onBusyChange }: 
 
   useEffect(() => {
     mounted.current = true;
-    void loadIndex();
-    void loadMedia();
-    return () => { mounted.current = false; };
+    const timer = setTimeout(() => { void loadIndex(); void loadMedia(); }, 0);
+    return () => { mounted.current = false; clearTimeout(timer); };
   }, [loadIndex, loadMedia]);
   useEffect(() => { onDirtyChange?.(dirty || Boolean(idea.trim())); }, [dirty, idea, onDirtyChange]);
   useEffect(() => { onBusyChange?.(busy); }, [busy, onBusyChange]);

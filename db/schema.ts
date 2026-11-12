@@ -287,3 +287,25 @@ export const workbenchCreativeTemplates = sqliteTable('workbench_creative_templa
   uniqueIndex('workbench_creative_template_project').on(table.ownerId, table.memberId, table.projectId),
   index('workbench_creative_template_owner').on(table.ownerId, table.updatedAt),
 ]);
+
+/** GEO drafts are private to their author until explicitly submitted for review. */
+export const workbenchGeoProjects = sqliteTable('workbench_geo_projects', {
+  ownerId: text('owner_id').notNull(),
+  memberId: text('member_id').notNull(),
+  id: text('id').notNull(),
+  topic: text('topic').notNull(),
+  title: text('title').notNull(),
+  status: text('status').notNull(),
+  version: integer('version').notNull(),
+  updatedAt: text('updated_at').notNull(),
+  documentJson: text('document_json').notNull(),
+  reviewNote: text('review_note').notNull(),
+  reviewerId: text('reviewer_id'),
+  reviewedAt: text('reviewed_at'),
+  publicationJson: text('publication_json'),
+  observationsJson: text('observations_json').notNull(),
+}, table => [
+  primaryKey({ columns: [table.ownerId, table.id] }),
+  index('workbench_geo_author').on(table.ownerId, table.memberId, table.updatedAt),
+  index('workbench_geo_review_queue').on(table.ownerId, table.status, table.updatedAt),
+]);

@@ -1,23 +1,25 @@
 'use client';
 
-import { AppWindow, Archive, ArrowLeft, BookOpen, FilePenLine, Image, LayoutTemplate, PanelsTopLeft, Plus, RotateCcw, Save, Smartphone, Sparkles } from 'lucide-react';
+import { AppWindow, Archive, ArrowLeft, ArrowUp, ArrowUpRight, BookOpen, FilePenLine, FolderOpen, Image, LayoutTemplate, PanelsTopLeft, Plus, RotateCcw, Save, Smartphone, Sparkles } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { emptyStudioCopy, STUDIO_KINDS, STUDIO_KIND_LABELS } from '../lib/creative-studio-types';
 import type { StudioBoard, StudioDocument, StudioGenerateMode, StudioGenerateResult, StudioKind, StudioRecord,
-  StudioSelection, StudioSummary, StudioTemplate, StudioVersion } from '../lib/creative-studio-types';
+  StudioImage, StudioSelection, StudioSummary, StudioTemplate, StudioVersion } from '../lib/creative-studio-types';
 import { StudioRequestError, studioCoverRequestId, studioImageOptions, studioRequest } from '../lib/creative-studio-client';
 import type { MaterialKind, PublicMaterialTask } from '../lib/marketing-material-types';
-import StudioCanvas from './StudioCanvas';
+import StudioCanvas, { BoardPreview } from './StudioCanvas';
+import StudioAssets from './StudioAssets';
 import StudioContent from './StudioContent';
 import StudioMarket from './StudioMarket';
 import StudioVersions from './StudioVersions';
-import { createStarterBoards } from '../lib/creative-studio-templates';
+import { BUILTIN_STUDIO_TEMPLATES, createStarterBoards } from '../lib/creative-studio-templates';
 import './creative-studio.css';
 
 const titleByKind = { poster: '营销创作', web: '网页设计', app: 'App 设计', mini: '小程序设计' };
 const iconByKind = { poster: Image, web: AppWindow, app: Smartphone, mini: PanelsTopLeft };
 const panelLabels = { content: '成稿', canvas: '设计画布', versions: '版本比较' };
 type Panel = keyof typeof panelLabels;
+type Surface = 'home' | 'project' | 'market' | 'assets';
 type ProjectList = { projects: StudioSummary[]; modelAvailable: boolean };
 type ProjectDetail = { project: StudioRecord; versions: StudioVersion[] };
 type MediaList = { tasks: PublicMaterialTask[]; availability: Record<MaterialKind, boolean> };
@@ -28,6 +30,9 @@ const imageStates = {
 const terminalImages = ['completed', 'failed', 'expired'];
 const stamp = new Intl.DateTimeFormat('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Shanghai' });
 const MAX_BOARDS = 8;
+const previews = STUDIO_KINDS.map(kind => ({
+  kind, board: BUILTIN_STUDIO_TEMPLATES.find(template => template.kind === kind)?.boards[0],
+}));
 const firstBoard = (document: StudioDocument): StudioSelection =>
   document.boards[0] ? { boardId: document.boards[0].id } : null;
 const projectQuery = (id: string) => `?id=${encodeURIComponent(id)}`;
@@ -72,7 +77,8 @@ export default function CreativeStudio({ notify, onDirtyChange, onBusyChange }: 
   const [versions, setVersions] = useState<StudioVersion[]>([]);
   const [baseline, setBaseline] = useState('');
   const [panel, setPanel] = useState<Panel>('content');
-  const [market, setMarket] = useState(false);
+  const [surface, setSurface] = useState<Surface>('home');
+  const [idea, setIdea] = useState('');
   const [templates, setTemplates] = useState<StudioTemplate[]>([]);
   const [marketLoading, setMarketLoading] = useState(false);
   const [marketError, setMarketError] = useState('');
@@ -82,6 +88,7 @@ export default function CreativeStudio({ notify, onDirtyChange, onBusyChange }: 
   const [selection, setSelection] = useState<StudioSelection>(null);
   const [revisionNote, setRevisionNote] = useState('');
   const [media, setMedia] = useState<MediaList>();
+  const [mediaLoading, setMediaLoading] = useState(true);
   const [assetError, setAssetError] = useState('');
   const [modelAvailable, setModelAvailable] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -96,6 +103,8 @@ export default function CreativeStudio({ notify, onDirtyChange, onBusyChange }: 
   const mounted = useRef(false);
   const document = record?.document;
   const dirty = Boolean(record && (record.version === 0 || JSON.stringify(document) !== baseline));
+  const market = surface === 'market';
+  const inProject = surface === 'project' && Boolean(record);
   const busy = Boolean(pending || scheduleBusy);
   const images = studioImageOptions(media?.tasks ?? []);
   const imageTask = record && media?.tasks.find(task => task.requestId.startsWith(`studio-cover-${record.id}-`));
@@ -114,11 +123,14 @@ export default function CreativeStudio({ notify, onDirtyChange, onBusyChange }: 
     }
   }, []);
   const loadMedia = useCallback(async () => {
+    setMediaLoading(true);
     try {
       const data = await studioRequest<MediaList>('', undefined, '/api/marketing-materials');
       if (mounted.current) { setMedia(data); setAssetError(''); }
     } catch (error) {
       if (mounted.current) setAssetError(displayError(error));
+    } finally {
+      if (mounted.current) setMediaLoading(false);
     }
   }, []);
   const loadMarket = useCallback(async () => {
@@ -140,7 +152,7 @@ export default function CreativeStudio({ notify, onDirtyChange, onBusyChange }: 
     void loadMedia();
     return () => { mounted.current = false; };
   }, [loadIndex, loadMedia]);
-  useEffect(() => { onDirtyChange?.(dirty); }, [dirty, onDirtyChange]);
+  useEffect(() => { onDirtyChange?.(dirty || Boolean(idea.trim())); }, [dirty, idea, onDirtyChange]);
   useEffect(() => { onBusyChange?.(busy); }, [busy, onBusyChange]);
   useEffect(() => () => { onDirtyChange?.(false); onBusyChange?.(false); }, [onDirtyChange, onBusyChange]);
 
@@ -171,17 +183,27 @@ export default function CreativeStudio({ notify, onDirtyChange, onBusyChange }: 
     setRevisionNote('');
     setError('');
     setConflict(false);
-    setMarket(false);
+    setSurface('project');
     setPublishing(false);
     setProjectListOpen(false);
     setPanel(destination);
   }
-  function start(kind: StudioKind, template?: StudioTemplate) {
+  function start(kind: StudioKind, template?: StudioTemplate, brief = '') {
     if (!canLeave()) return;
-    selectProject(newProject(kind, template), [], template || kind !== 'poster' ? 'canvas' : 'content');
+    const next = newProject(kind, template);
+    if (brief) {
+      next.document.brief = brief;
+      next.document.title = brief.split(/[\n。！？]/)[0].trim().slice(0, 55) || next.document.title;
+      setIdea('');
+    }
+    selectProject(next, [], template || kind !== 'poster' ? 'canvas' : 'content');
   }
   function openProject(id: string, reload = false) {
-    if ((!reload && record?.id === id) || !canLeave()) return;
+    if (!reload && record?.id === id) {
+      setSurface('project'); setPublishing(false); setProjectListOpen(false);
+      return;
+    }
+    if (!canLeave()) return;
     void run('读取项目…', async () => {
       const data = await studioRequest<ProjectDetail>(projectQuery(id));
       if (mounted.current) selectProject(data.project, data.versions, 'content');
@@ -213,6 +235,7 @@ export default function CreativeStudio({ notify, onDirtyChange, onBusyChange }: 
       if (!mounted.current) return;
       setProjects(current => current.filter(item => item.id !== record.id));
       setRecord(undefined);
+      setSurface('home');
       notify('项目已归档');
     });
   }
@@ -252,7 +275,7 @@ export default function CreativeStudio({ notify, onDirtyChange, onBusyChange }: 
     setPanel('canvas');
   }
   function image(action: 'generate' | 'refresh') {
-    if (!record?.version || !document || !media?.availability.image) return;
+    if (!record?.version || !document || !media?.availability.image || mediaLoading) return;
     const prompt = document.copy.coverPrompt.trim().slice(0, 1800);
     if (action === 'generate' && !prompt || action === 'refresh' && !imageTask) return;
     const input = { kind: 'image', prompt, size: document.kind === 'web' ? '3:2' : '2:3', n: 1 };
@@ -311,15 +334,55 @@ export default function CreativeStudio({ notify, onDirtyChange, onBusyChange }: 
   const canPublish = Boolean(record?.version && !dirty && document?.boards.length && document.boards.every(board => board.layers.every(layer => !layer.assetUrl)));
   const selectedBoard = document?.boards.find(board => board.id === selection?.boardId);
   const selectedName = selectedBoard?.layers.find(layer => layer.id === selection?.layerId)?.name ?? selectedBoard?.name;
+  const coverImage = imageTask?.status === 'completed' ? imageTask.files.find(file => file.type.startsWith('image/')) : undefined;
+  const assetBoard = selectedBoard ?? document?.boards[0];
 
-  return <section className="creative-studio" aria-label="创作与设计工作台">
-    <aside className="creative-projects" aria-label="创作项目" data-mobile-expanded={projectListOpen}>
+  function openSurface(next: Surface) {
+    if (busy) return;
+    if (next === 'market') void loadMarket();
+    if (next === 'assets' && !mediaLoading) void loadMedia();
+    setSurface(next);
+    setPublishing(false);
+    setError('');
+    setConflict(false);
+  }
+
+  function refreshMaterial(task: PublicMaterialTask) {
+    void run('查询素材状态…', async () => {
+      try {
+        const { task: updated } = await studioRequest<{ task: PublicMaterialTask }>('', {
+          action: 'refresh', taskId: task.id, version: task.version,
+        }, '/api/marketing-materials');
+        if (mounted.current) setMedia(current => current && { ...current, tasks: [updated, ...current.tasks.filter(item => item.id !== updated.id)] });
+      } catch (error) {
+        if (!(error instanceof StudioRequestError && error.status === 409)) throw error;
+        await loadMedia();
+      }
+    });
+  }
+
+  function useImage(file: StudioImage) {
+    if (!document || !assetBoard || assetBoard.layers.length >= 40) return;
+    const layerId = crypto.randomUUID();
+    update({ ...document, boards: document.boards.map(board => board.id !== assetBoard.id ? board : {
+      ...board, layers: [...board.layers, {
+        id: layerId, kind: 'image', name: file.name.slice(0, 100), assetUrl: file.url, text: '',
+        x: 14, y: 18, width: 72, height: 62, fill: 'transparent', color: '#25272A',
+        fontSize: 16, radius: 0, weight: 'normal', align: 'center',
+      }],
+    }) });
+    setSelection({ boardId: assetBoard.id, layerId });
+    setPanel('canvas');
+    openSurface('project');
+  }
+
+  return <section className="creative-studio" data-surface={surface} aria-label="创作与设计工作台">
+    {inProject && <aside className="creative-projects" aria-label="创作项目" data-mobile-expanded={projectListOpen}>
       <div className="creative-section-title"><h3><BookOpen size={17} /> 我的项目</h3>
         <button className="creative-mobile-projects" type="button" aria-expanded={projectListOpen}
           onClick={() => setProjectListOpen(value => !value)}><BookOpen size={16} /> 我的项目</button>
         <button type="button" disabled={busy} onClick={() => {
-          if (!canLeave()) return;
-          setRecord(undefined); setMarket(false); setPublishing(false); setError('');
+          openSurface('home');
         }} aria-label="新建创作项目"><Plus size={18} /></button>
       </div>
       <div className="creative-projects-body">
@@ -327,30 +390,33 @@ export default function CreativeStudio({ notify, onDirtyChange, onBusyChange }: 
       {loading && <p role="status">正在读取项目…</p>}
       {indexError && <p role="alert" className="material-error">{indexError} <button type="button" onClick={() => void loadIndex()}>重试</button></p>}
       <ul className="creative-project-list">
-        {record?.version === 0 && <li><button type="button" aria-current={!market ? 'page' : undefined} disabled={busy} onClick={() => { setMarket(false); setPublishing(false); }}>
+        {record?.version === 0 && <li><button type="button" aria-current="page" disabled={busy} onClick={() => openProject(record.id)}>
           <strong>{record.document.title || '未命名项目'}</strong><small>未保存 · {STUDIO_KIND_LABELS[record.document.kind]}</small>
         </button></li>}
         {filteredProjects.map(project => <li key={project.id}><button type="button" disabled={busy} aria-current={!market && record?.id === project.id ? 'page' : undefined}
-          onClick={() => { if (record?.id === project.id) { setMarket(false); setPublishing(false); } else openProject(project.id); }}>
+          onClick={() => openProject(project.id)}>
           <strong>{project.title}</strong><small>{STUDIO_KIND_LABELS[project.kind]} · {stamp.format(new Date(project.updatedAt))}</small>
         </button></li>)}
       </ul>
       {!loading && !indexError && filteredProjects.length === 0 && !record && <p>{search ? '没有找到匹配的项目。' : '已保存的项目会显示在这里。'}</p>}
       </div>
-    </aside>
+    </aside>}
     <div className="creative-main">
       <header className="creative-toolbar">
-        {market ? <h3>设计市场</h3> : !document ? <h3>创作与设计</h3> :
+        {inProject && document && record ?
           <form className="creative-title-form" onSubmit={save}>
             <label>项目名称<input value={document.title} maxLength={120} disabled={busy} required
               onChange={event => update({ ...document, title: event.target.value })} /></label>
             <span className="creative-save-state">{dirty ? '未保存' : `版本 ${record.version}`}</span>
             <button type="submit" className="creative-primary" disabled={busy || !dirty || !document.title.trim()}><Save size={16} /> 保存</button>
-          </form>}
-        <button type="button" disabled={busy} onClick={() => {
-          if (!market) void loadMarket();
-          setMarket(value => !value); setPublishing(false); setError('');
-        }}>{market ? <ArrowLeft size={16} /> : <LayoutTemplate size={16} />} {market ? '返回创作' : '设计市场'}</button>
+          </form> : <h3>{surface === 'home' ? '灵感墙' : surface === 'assets' ? '我的素材' : '模板与设计'}</h3>}
+        <div className="creative-toolbar-actions">
+          {surface !== 'home' && <button type="button" disabled={busy} onClick={() => openSurface(surface !== 'project' && record ? 'project' : 'home')}>
+            <ArrowLeft size={16} /> {surface === 'project' ? '灵感墙' : '返回创作'}
+          </button>}
+          {surface !== 'assets' && <button type="button" disabled={busy} onClick={() => openSurface('assets')}><FolderOpen size={16} /> 素材库</button>}
+          {!market && <button type="button" disabled={busy} onClick={() => openSurface('market')}><LayoutTemplate size={16} /> 设计市场</button>}
+        </div>
       </header>
       {pending && <p className="creative-notice" role="status">{pending}</p>}
       {error && <div className="creative-notice material-error" role="alert">{error}
@@ -369,17 +435,54 @@ export default function CreativeStudio({ notify, onDirtyChange, onBusyChange }: 
           canPublish={canPublish} onChoose={template => start(template.kind, template)} onRemove={removeTemplate}
           onPublish={() => { setTemplateTitle(document?.title ?? ''); setTemplateDescription(''); setPublishing(true); }} />
         {document && !canPublish && <p>共享模板需要先保存项目，画板需移除私有图片。</p>}
-      </div> : !document || !record ? <div className="creative-start creative-page">
-        <h3>新建创作</h3>
+      </div> : surface === 'assets' ? <div className="creative-page">
+        <StudioAssets tasks={media?.tasks ?? []} loading={mediaLoading} busy={busy} error={assetError}
+          onReload={() => void loadMedia()} onRefresh={refreshMaterial}
+          onUseImage={assetBoard && assetBoard.layers.length < 40 ? useImage : undefined} />
+      </div> : !inProject || !document || !record ? <div className="creative-start creative-page">
+        <section className="creative-idea">
+          <h3>今天想创作什么？</h3>
+          <p>记下一句灵感，接着写成稿、做画板。</p>
+          <form onSubmit={event => { event.preventDefault(); if (idea.trim()) start('poster', undefined, idea.trim()); }}>
+            <label className="creative-idea-field"><span className="sr-only">记录灵感</span>
+              <textarea rows={2} maxLength={8000} value={idea} onChange={event => setIdea(event.target.value)}
+                placeholder="写下一句灵感，或贴上产品资料" disabled={busy} />
+            </label>
+            <button type="submit" className="creative-primary" disabled={busy || !idea.trim()}><ArrowUp size={16} /> 开始创作</button>
+          </form>
+        </section>
+        <section className="creative-start-section" aria-label="新建创作">
+        <div className="creative-collection-head"><h3>新建创作</h3></div>
         <div className="creative-start-grid">
-          {STUDIO_KINDS.map(kind => {
+          {previews.map(({ kind, board }) => {
             const Icon = iconByKind[kind];
-            return <button key={kind} type="button" disabled={busy} onClick={() => start(kind)}>
-              <Icon size={25} /><strong>{titleByKind[kind]}</strong>
-              <span>{kind === 'poster' ? '文案、脚本、分镜和封面' : '画板、版本和源码'}</span>
+            return <button className="creative-start-card" key={kind} type="button" disabled={busy} onClick={() => start(kind)} aria-label={titleByKind[kind]}>
+              <span className="creative-start-preview" data-kind={kind} aria-hidden="true">
+                {board && <BoardPreview board={board} images={[]} maxWidth={190} maxHeight={132} />}
+              </span>
+              <span className="creative-start-caption"><Icon size={16} /><strong>{titleByKind[kind]}</strong><ArrowUpRight size={15} /></span>
             </button>;
           })}
         </div>
+        </section>
+        <section className="creative-recent" aria-label="最近项目">
+          <div className="creative-collection-head"><h3>最近项目</h3>
+            {projects.length > 0 && <label><span className="sr-only">搜索项目</span><input type="search" value={search}
+              onChange={event => setSearch(event.target.value)} placeholder="搜索项目" /></label>}
+          </div>
+          {loading && <p role="status">正在读取项目…</p>}
+          {indexError && <p role="alert" className="material-error">{indexError} <button type="button" onClick={() => void loadIndex()}>重试</button></p>}
+          {record?.version === 0 && <button className="creative-resume" type="button" onClick={() => openProject(record.id)} disabled={busy}>
+            <FilePenLine size={16} /> 继续编辑「{record.document.title || '未命名项目'}」
+          </button>}
+          {!loading && !indexError && !filteredProjects.length && record?.version !== 0 &&
+            <p>{search ? '没有找到匹配的项目。' : '开始创作后，保存的项目会显示在这里。'}</p>}
+          <ul className="creative-recent-grid">
+            {filteredProjects.map(project => <li key={project.id}><button type="button" disabled={busy} onClick={() => openProject(project.id)}>
+              <strong>{project.title}</strong><small>{STUDIO_KIND_LABELS[project.kind]} · {stamp.format(new Date(project.updatedAt))}</small>
+            </button></li>)}
+          </ul>
+        </section>
       </div> : <>
         <div className="creative-project-nav">
           <nav aria-label="项目工作区">
@@ -399,7 +502,8 @@ export default function CreativeStudio({ notify, onDirtyChange, onBusyChange }: 
             </div>}
             <StudioContent key={record.id} document={document} onChange={update} busy={busy} modelAvailable={modelAvailable}
               canDesign={document.boards.length < MAX_BOARDS} needsSaveForImage={Boolean(media?.availability.image && !record.version)}
-              canGenerateImage={Boolean(record.version && media?.availability.image &&
+              coverImage={coverImage}
+              canGenerateImage={Boolean(record.version && media?.availability.image && !mediaLoading &&
                 (!imageTask || terminalImages.includes(imageTask.status)))}
               onGenerate={instruction => generate('copy', instruction)} onCreateDesign={fromCopy} onGenerateImage={() => image('generate')}
               onScheduleBusy={setScheduleBusy} notify={notify} />

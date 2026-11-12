@@ -1,10 +1,11 @@
 'use client';
 
 import {useEffect, useRef, useState} from 'react';
-import type {KeyboardEvent, PointerEvent, ReactNode} from 'react';
-import {ChevronDown, ChevronUp, Code2, Copy, Download, Image as ImageIcon, Layers, Maximize2, Minus, MousePointer2, Plus, Square, Trash2, Type} from 'lucide-react';
+import type {CSSProperties, KeyboardEvent, PointerEvent, ReactNode} from 'react';
+import {ChevronDown, ChevronUp, Code2, Copy, Download, Hand, Image as ImageIcon, Layers, Maximize2, Minus, MousePointer2, Plus, Square, Trash2, Type} from 'lucide-react';
 import {buildStudioCodeZip, downloadStudioBlob, renderStudioBoardPng, studioBoardSize, studioColor, studioImagePath, studioLayerStyle} from '../lib/creative-studio-export.ts';
 import type {StudioCodeTarget} from '../lib/creative-studio-export.ts';
+import {STUDIO_KIND_LABELS} from '../lib/creative-studio-types.ts';
 import type {StudioBoard, StudioDocument, StudioImage, StudioKind, StudioLayer, StudioSelection} from '../lib/creative-studio-types.ts';
 import './studio-canvas.css';
 
@@ -59,7 +60,8 @@ function ArtboardSurface({board, scale, children}: {
       width: size.width, height: size.height,
       transform: 'scale(' + scale + ')',
       backgroundColor: studioColor(board.background, '#ffffff'),
-    }}>
+      '--studio-artboard-scale': scale,
+    } as CSSProperties}>
       {board.layers.map(layer => {
         let source: string | undefined;
         if (layer.kind === 'image' && layer.assetUrl) {
@@ -167,22 +169,86 @@ interface DragState {
 
 export default function StudioCanvas({document, onChange, selection, onSelectionChange, images, disabled = false, notify}: CanvasProps) {
   const [zoom, setZoom] = useState(1);
+  const [tool, setTool] = useState<'select' | 'pan'>('select');
+  const [panning, setPanning] = useState(false);
+  const pan = useRef<{pointer: number; x: number; y: number; left: number; top: number} | null>(null);
   const [target, setTarget] = useState<StudioCodeTarget>('html');
   const [exporting, setExporting] = useState<'png' | 'zip' | null>(null);
   const [motion, setMotion] = useState<DragState | null>(null);
   const drag = useRef<DragState | null>(null);
-  const stage = useRef<HTMLDivElement>(null);
-  const [stageWidth, setStageWidth] = useState(0);
+  const viewport = useRef<HTMLDivElement>(null);
+  const [{width: stageWidth, height: viewportHeight}, setViewportSize] = useState({width: 0, height: 0});
 
   useEffect(() => {
-    if (!stage.current) return;
-    const observer = new ResizeObserver(([entry]) => setStageWidth(entry.contentRect.width));
-    observer.observe(stage.current);
+    if (!viewport.current) return;
+    const observer = new ResizeObserver(([entry]) => {
+      const {width, height} = entry.contentRect;
+      setViewportSize({width, height});
+    });
+    observer.observe(viewport.current);
     return () => observer.disconnect();
   }, []);
   const board = document.boards.find(item => item.id === selection?.boardId) ?? document.boards[0];
   const layer = board?.layers.find(item => item.id === selection?.layerId);
   const presets = BOARD_PRESETS[document.kind];
+  const compact = stageWidth > 0 && stageWidth < 490;
+  const columns = compact ? 1 : Math.max(1, Math.min(document.boards.length, 3));
+  const preferredWidth = stageWidth ? (stageWidth - 54 - (columns - 1) * 26) / columns : 360;
+  const available = bounded(preferredWidth, 150, 390);
+  const deviceHeight = document.kind === 'app' ? 46 : document.kind === 'mini' ? 35 : document.kind === 'web' ? 24 : 0;
+  const availableHeight = viewportHeight ? bounded(viewportHeight - (compact ? 94 : 67) - deviceHeight, 120, 365) : 365;
+
+  const selectedBoardId = board?.id;
+  useEffect(() => {
+    const scroller = viewport.current;
+    const selected = scroller?.querySelector('.studio-canvas-artboard[data-selected=true]');
+    if (!scroller || !selected || !selectedBoardId) return;
+    const windowBounds = scroller.getBoundingClientRect();
+    const artboardBounds = selected.getBoundingClientRect();
+    const left = artboardBounds.left < windowBounds.left + 8 ? artboardBounds.left - windowBounds.left - 8 :
+      Math.max(0, artboardBounds.right - windowBounds.right + 8);
+    const top = artboardBounds.top < windowBounds.top + 8 ? artboardBounds.top - windowBounds.top - 8 :
+      Math.max(0, artboardBounds.bottom - windowBounds.bottom + 8);
+    if (left || top) scroller.scrollBy({left, top});
+  }, [selectedBoardId, compact]);
+
+  function boardScale(item: StudioBoard) {
+    const {width, height} = studioBoardSize(item);
+    return Math.min(1, available / width, availableHeight / height) * zoom;
+  }
+
+  function beginPan(event: PointerEvent<HTMLDivElement>) {
+    if (tool !== 'pan' || event.button !== 0 || !board) return;
+    const surface = event.currentTarget;
+    event.stopPropagation();
+    surface.focus({preventScroll: true});
+    pan.current = {pointer: event.pointerId, x: event.clientX, y: event.clientY,
+      left: surface.scrollLeft, top: surface.scrollTop};
+    surface.setPointerCapture(event.pointerId);
+    setPanning(true);
+  }
+
+  function movePan(event: PointerEvent<HTMLDivElement>) {
+    const position = pan.current;
+    if (!position || position.pointer !== event.pointerId) return;
+    event.currentTarget.scrollLeft = position.left + position.x - event.clientX;
+    event.currentTarget.scrollTop = position.top + position.y - event.clientY;
+  }
+
+  function endPan(event: PointerEvent<HTMLDivElement>) {
+    if (pan.current?.pointer !== event.pointerId) return;
+    pan.current = null;
+    setPanning(false);
+  }
+
+  function canvasShortcut(event: KeyboardEvent<HTMLDivElement>) {
+    if (event.currentTarget !== event.target || event.altKey || event.ctrlKey || event.metaKey) return;
+    const key = event.key.toLowerCase();
+    if (key === 'v' || key === 'h') {
+      event.preventDefault();
+      setTool(key === 'h' ? 'pan' : 'select');
+    }
+  }
 
   const updateBoard = (id: string, edit: (item: StudioBoard) => StudioBoard) => {
     onChange({...document, boards: document.boards.map(item => item.id === id ? edit(item) : item)});
@@ -241,6 +307,7 @@ export default function StudioCanvas({document, onChange, selection, onSelection
       radius: button ? 10 : 0, weight: text ? 'bold' : 'normal', align: button ? 'center' : 'left',
     };
     patchBoard({layers: [...board.layers, added]});
+    setTool('select');
     onSelectionChange({boardId: board.id, layerId: added.id});
   }
 
@@ -270,7 +337,7 @@ export default function StudioCanvas({document, onChange, selection, onSelection
   }
 
   function beginDrag(event: PointerEvent<HTMLDivElement>, source: StudioBoard, item: StudioLayer, scale: number) {
-    if (event.button !== 0) return;
+    if (tool !== 'select' || event.button !== 0) return;
     event.stopPropagation();
     onSelectionChange({boardId: source.id, layerId: item.id});
     if (disabled) return;
@@ -342,44 +409,46 @@ export default function StudioCanvas({document, onChange, selection, onSelection
 
   const layerIndex = board && layer ? board.layers.indexOf(layer) : -1;
   return <section className="studio-canvas" aria-label="设计画布">
-    <div className="studio-canvas-tools">
-      <div className="studio-canvas-tools-group">
-        <button type="button" onClick={addBoard} disabled={disabled || document.boards.length >= 8}>
-          <Plus aria-hidden="true" />新画板
-        </button>
-        <span className="studio-canvas-board-count">{document.boards.length} 个画板</span>
-      </div>
-      <div className="studio-canvas-tools-group studio-canvas-export-tools">
-        <button type="button" onClick={() => void exportBoard('png')} disabled={disabled || !board || !!exporting}>
-          <Download aria-hidden="true" />{exporting === 'png' ? '正在导出' : '导出 PNG'}
-        </button>
-        <select aria-label="代码导出格式" value={target} onChange={event => setTarget(event.target.value as StudioCodeTarget)} disabled={disabled || !board || !!exporting}>
-          {CODE_TARGETS.map(item => <option value={item.value} key={item.value}>{item.label}</option>)}
-        </select>
-        <button type="button" onClick={() => void exportBoard('zip')} disabled={disabled || !board || !!exporting}>
-          <Code2 aria-hidden="true" />{exporting === 'zip' ? '正在导出' : '代码 ZIP'}
-        </button>
-      </div>
-    </div>
     <div className="studio-canvas-body">
-      <div className="studio-canvas-stage" ref={stage}>
-        <div className="studio-canvas-scroll" tabIndex={0} role="region" aria-label="画板浏览区">
+      <div className="studio-canvas-stage" data-compact={compact}>
+        <header className="studio-canvas-tools">
+          <div className="studio-canvas-context">
+            <Layers aria-hidden="true" />
+            <strong>{STUDIO_KIND_LABELS[document.kind]}</strong>
+            <span className="studio-canvas-board-count">{document.boards.length} 个画板</span>
+            {board && <button type="button" className="studio-canvas-add-board" aria-label="新画板" title="新画板"
+              onClick={addBoard} disabled={disabled || document.boards.length >= 8}><Plus aria-hidden="true" /></button>}
+          </div>
+          <div className="studio-canvas-export-tools" aria-label="导出">
+            <button type="button" onClick={() => void exportBoard('png')} disabled={disabled || !board || !!exporting}>
+              <Download aria-hidden="true" />{exporting === 'png' ? '正在导出' : '导出 PNG'}
+            </button>
+            <div className="studio-canvas-code-controls">
+              <select aria-label="代码导出格式" value={target} onChange={event => setTarget(event.target.value as StudioCodeTarget)} disabled={disabled || !board || !!exporting}>
+                {CODE_TARGETS.map(item => <option value={item.value} key={item.value}>{item.label}</option>)}
+              </select>
+              <button type="button" className="studio-canvas-code" onClick={() => void exportBoard('zip')} disabled={disabled || !board || !!exporting}>
+                <Code2 aria-hidden="true" />{exporting === 'zip' ? '正在导出' : '代码 ZIP'}
+              </button>
+            </div>
+          </div>
+        </header>
+        <div className="studio-canvas-scroll" ref={viewport} tabIndex={0} role="region" aria-label="画板浏览区"
+          data-tool={tool} data-panning={panning} onKeyDown={canvasShortcut} onPointerDownCapture={beginPan}
+          onPointerMove={movePan} onPointerUp={endPan} onPointerCancel={endPan} onLostPointerCapture={endPan}>
           {document.boards.length ? <div className="studio-canvas-artboards">
             {document.boards.map((item, index) => {
-              const size = studioBoardSize(item);
-              const available = stageWidth ? Math.max(100, stageWidth - 60) : 360;
-              const base = Math.min(1, Math.min(360, available) / size.width, 365 / size.height);
-              const scale = base * zoom;
+              const scale = boardScale(item);
               const selected = board?.id === item.id;
               return <figure key={item.id} className={'studio-canvas-artboard studio-canvas-device-' + document.kind} data-selected={selected}>
                 <figcaption>
                   <button type="button" aria-pressed={selected && !layer} onClick={() => onSelectionChange({boardId: item.id})}>
                     {item.name || '画板 ' + (index + 1)}
                   </button>
-                  <span>{item.width} × {item.height}</span>
+                  <span className="studio-canvas-dimensions">{item.width} × {item.height}</span>
                 </figcaption>
                 <div className="studio-canvas-frame" onPointerDown={event => {
-                  if (event.button === 0) onSelectionChange({boardId: item.id});
+                  if (tool === 'select' && event.button === 0) onSelectionChange({boardId: item.id});
                 }}>
                   <DeviceChrome kind={document.kind} />
                   <ArtboardSurface board={item} scale={scale}>
@@ -406,13 +475,30 @@ export default function StudioCanvas({document, onChange, selection, onSelection
             <button type="button" disabled={disabled} onClick={addBoard}><Plus aria-hidden="true" />新画板</button>
           </div>}
         </div>
-        {!!document.boards.length && <div className="studio-canvas-zoom" role="group" aria-label="画布缩放">
-          <button type="button" aria-label="缩小" title="缩小" disabled={zoom <= .5}
-            onClick={() => setZoom(current => Math.max(.5, current - .125))}><Minus aria-hidden="true" /></button>
-          <output aria-live="polite">{Math.round(zoom * 100)}%</output>
-          <button type="button" aria-label="放大" title="放大" disabled={zoom >= 2}
-            onClick={() => setZoom(current => Math.min(2, current + .125))}><Plus aria-hidden="true" /></button>
-          <button type="button" aria-label="适合画布" title="适合画布" onClick={() => setZoom(1)}><Maximize2 aria-hidden="true" /></button>
+        {board && <div className="studio-canvas-floating">
+          <div className="studio-canvas-dock" role="group" aria-label="画布工具">
+            <div className="studio-canvas-dock-group">
+              <button type="button" aria-label="选择工具" title="选择 (V)" aria-pressed={tool === 'select'}
+                onClick={() => setTool('select')}><MousePointer2 aria-hidden="true" /></button>
+              <button type="button" aria-label="平移画布" title="平移 (H)" aria-pressed={tool === 'pan'}
+                onClick={() => setTool('pan')}><Hand aria-hidden="true" /></button>
+            </div>
+            <div className="studio-canvas-dock-group" role="group" aria-label="添加图层">
+              {(Object.keys(KIND_LABELS) as StudioLayer['kind'][]).map(kind => {
+                const Icon = KIND_ICONS[kind];
+                return <button type="button" title={'添加' + KIND_LABELS[kind]} aria-label={'添加' + KIND_LABELS[kind]}
+                  key={kind} disabled={disabled || board.layers.length >= 40} onClick={() => addLayer(kind)}><Icon aria-hidden="true" /></button>;
+              })}
+            </div>
+          </div>
+          <div className="studio-canvas-zoom" role="group" aria-label="画布缩放">
+            <button type="button" aria-label="缩小" title="缩小" disabled={zoom <= .5}
+              onClick={() => setZoom(current => Math.max(.5, current - .125))}><Minus aria-hidden="true" /></button>
+            <output aria-live="polite" aria-label="画板显示比例">{Math.round(boardScale(board) * 100)}%</output>
+            <button type="button" aria-label="放大" title="放大" disabled={zoom >= 2}
+              onClick={() => setZoom(current => Math.min(2, current + .125))}><Plus aria-hidden="true" /></button>
+            <button type="button" aria-label="适合画布" title="适合画布" onClick={() => setZoom(1)}><Maximize2 aria-hidden="true" /></button>
+          </div>
         </div>}
       </div>
       {board && <aside className="studio-canvas-inspector" aria-label="画板与图层属性">
@@ -442,13 +528,6 @@ export default function StudioCanvas({document, onChange, selection, onSelection
         </fieldset>
         <fieldset className="studio-canvas-properties studio-canvas-layer-panel" disabled={disabled}>
           <legend>图层</legend>
-          <div className="studio-canvas-layer-tools" role="group" aria-label="添加图层">
-            {(Object.keys(KIND_LABELS) as StudioLayer['kind'][]).map(kind => {
-              const Icon = KIND_ICONS[kind];
-              return <button type="button" title={'添加' + KIND_LABELS[kind]} aria-label={'添加' + KIND_LABELS[kind]}
-                key={kind} disabled={board.layers.length >= 40} onClick={() => addLayer(kind)}><Icon aria-hidden="true" /></button>;
-            })}
-          </div>
           {board.layers.length ? <ul className="studio-canvas-layer-list">
             {[...board.layers].reverse().map(item => {
               const Icon = KIND_ICONS[item.kind];

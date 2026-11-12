@@ -4,3 +4,24 @@
 
 .material-panel{display:flex;flex-direction:column;flex:1;min-height:0;overflow:hidden}.material-panel[hidden]{display:none}.material-generation{display:flex;flex-direction:column;flex:1;min-height:0;gap:16px}.material-generation-heading{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}.material-generation-heading>label{width:180px;margin:0}.material-panel>.digital-human-workspace{flex:1;min-height:0}.material-form :disabled{cursor:default}
 @media(max-width:760px){.material-panel,.material-generation{overflow:visible;flex:none}.material-generation-heading{align-items:flex-end}.material-generation-heading>label{width:min(180px,100%)}.material-generation-heading>button{flex-shrink:0}}
+
+.material-workspace,.material-connection{
+ --surface:var(--cds-surface-1,#fff);
+ --surface-secondary:var(--cds-surface-0,#f3f4f6);
+ --text:var(--cds-text-primary,#25272a);
+ --text-secondary:var(--cds-text-secondary,#61666e);
+ --hover:var(--cds-fill-ghost-hover,#eceff2);
+ --selected:var(--cds-fill-ghost-selected,#e4e7eb);
+ --border:var(--cds-border,#e1e4e8);
+ --border-strong:var(--cds-border-strong,#c8cdd4);
+ --primary:var(--brand,#25272a);
+ --on-primary:var(--cds-surface-1,#fff);
+ --danger:var(--cds-fill-danger,#bf3545)
+}
+.material-workspace-header{justify-content:space-between;gap:12px}
+.material-workspace-header .material-tabs{display:inline-flex;flex-wrap:nowrap;gap:3px;padding:4px;border:1px solid var(--border,#e1e4e8);border-radius:13px;background:var(--hover,#f3f4f6)}
+.material-workspace-header .material-tabs button{display:inline-flex;align-items:center;justify-content:center;gap:7px;border:0;border-radius:9px;background:transparent;white-space:nowrap}
+.material-workspace-header .material-tabs button[aria-selected=true]{background:var(--primary,#25272a);color:var(--on-primary,var(--surface,#fff))}
+.material-workspace-header .material-tabs button:not([aria-selected=true]):hover{background:var(--surface,#fff)}
+@media(max-width:760px){.material-workspace-header .material-tabs{width:100%}.material-workspace-header .material-tabs button{flex:1 1 auto;padding-inline:7px;font-size:13px}}
+@media(max-width:360px){.material-workspace-header .material-tabs button svg{display:none}}

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, type CSSProperties } from 'react';
+import { useId, useState, type CSSProperties } from 'react';
 import { ArrowUpRight, Layers3, Share2, Trash2 } from 'lucide-react';
 import { BUILTIN_STUDIO_TEMPLATES } from '../lib/creative-studio-templates';
 import { STUDIO_KINDS, STUDIO_KIND_LABELS, type StudioBoard, type StudioKind, type StudioTemplate } from '../lib/creative-studio-types';
@@ -18,45 +18,54 @@ interface StudioMarketProps {
   onRetry: () => void;
 }
 
-function BoardPreview({ board }: { board?: StudioBoard }) {
+function BoardPreview({ board, kind }: { board?: StudioBoard; kind: StudioKind }) {
   if (!board) return <span className="studio-market-preview" aria-hidden="true"><Layers3 size={26} /></span>;
 
-  return <span className="studio-market-preview" aria-hidden="true">
-    <span className="studio-market-artboard" style={{
-      aspectRatio: board.width / board.height,
-      backgroundColor: board.background,
-      '--studio-market-board-ratio': board.width / board.height,
-    } as CSSProperties}>
-      {board.layers.filter(layer => layer.kind !== 'image').map(layer => (
-        <span
-          className={`studio-market-layer studio-market-layer-${layer.kind}`}
-          key={layer.id}
-          style={{
-            left: `${layer.x}%`,
-            top: `${layer.y}%`,
-            width: `${layer.width}%`,
-            height: `${layer.height}%`,
-            backgroundColor: layer.fill,
-            color: layer.color,
-            fontSize: `${100 * layer.fontSize / board.width}cqw`,
-            borderRadius: `${100 * layer.radius / board.width}cqw`,
-            fontWeight: layer.weight,
-            textAlign: layer.align,
-          }}
-        >{layer.kind !== 'shape' && layer.text}</span>
-      ))}
+  return <span className={`studio-market-preview studio-market-preview-${kind}`} aria-hidden="true" style={{
+    '--studio-market-board-ratio': board.width / board.height,
+    '--studio-market-board-color': board.background,
+  } as CSSProperties}>
+    <span className="studio-market-frame">
+      {kind === 'web' && <span className="studio-market-browser"><i /><i /><i /></span>}
+      <span className="studio-market-artboard" style={{ backgroundColor: board.background }}>
+        {board.layers.filter(layer => layer.kind !== 'image').map(layer => (
+          <span
+            className={`studio-market-layer studio-market-layer-${layer.kind}`}
+            key={layer.id}
+            style={{
+              left: `${layer.x}%`,
+              top: `${layer.y}%`,
+              width: `${layer.width}%`,
+              height: `${layer.height}%`,
+              backgroundColor: layer.fill,
+              color: layer.color,
+              fontSize: `${100 * layer.fontSize / board.width}cqw`,
+              borderRadius: `${100 * layer.radius / board.width}cqw`,
+              fontWeight: layer.weight,
+              textAlign: layer.align,
+            }}
+          >{layer.kind !== 'shape' && layer.text}</span>
+        ))}
+      </span>
     </span>
   </span>;
 }
 
 function TemplateCard({ template, busy, onChoose, onRemove }: Pick<StudioMarketProps, 'busy' | 'onChoose' | 'onRemove'> & { template: StudioTemplate }) {
+  const details = useId();
+  const board = template.boards[0];
   return <li className="studio-market-card">
-    <button type="button" className="studio-market-pick" disabled={busy} onClick={() => onChoose(template)} aria-label={`使用模板 ${template.title}`}>
-      <BoardPreview board={template.boards[0]} />
+    <button type="button" className="studio-market-pick" disabled={busy} onClick={() => onChoose(template)}
+      aria-label={`使用模板 ${template.title}`} aria-describedby={details}>
+      <BoardPreview board={board} kind={template.kind} />
       <span className="studio-market-card-copy">
-        <span className="studio-market-category">{STUDIO_KIND_LABELS[template.kind]}{template.boards.length > 1 && ` · ${template.boards.length} 个画板`}</span>
-        <span className="studio-market-card-title"><strong>{template.title}</strong><ArrowUpRight size={16} aria-hidden="true" /></span>
-        {template.description && <span className="studio-market-description">{template.description}</span>}
+        <span className="studio-market-card-title"><strong>{template.title}</strong><ArrowUpRight size={17} aria-hidden="true" /></span>
+        <span id={details} className="studio-market-card-details">
+          <span className="studio-market-category">{STUDIO_KIND_LABELS[template.kind]}
+            {template.boards.length > 1 ? ` · ${template.boards.length} 个画板` : board ? ` · ${board.width} × ${board.height}` : ''}
+          </span>
+          {template.description && <span className="studio-market-description">{template.description}</span>}
+        </span>
       </span>
     </button>
     {template.source === 'workspace' && template.canRemove && (

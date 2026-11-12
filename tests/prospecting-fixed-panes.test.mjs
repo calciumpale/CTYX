@@ -76,8 +76,12 @@ for (const viewport of [{width:1440,height:900},{width:1280,height:560},{width:3
     assert.ok(independent.top>0); assert.ok(independent.bottom<=viewport.height);
    }
    await page.locator('.prospect-chat-composer textarea').fill('');
-   await page.getByRole('link',{name:'新建任务',exact:true}).first().click();
+   await page.getByRole('link',{name:'获客任务',exact:true}).first().click();
+   await page.getByRole('button',{name:'新建任务',exact:true}).click();
    await page.locator('.prospect-create').waitFor();
+   assert.equal(await page.evaluate(() => document.activeElement.textContent), '新建获客任务');
+   await page.getByText('筛选与发送设置', { exact: true }).click();
+   await page.getByText('连接你的抖音账号', { exact: true }).click();
    const form=await page.locator('.prospect-content').evaluate(el=>{el.scrollTop=el.scrollHeight;return {top:el.scrollTop,bottom:el.getBoundingClientRect().bottom,body:document.documentElement.scrollHeight}});
    assert.ok(form.top>0,'long task form scrolls inside main pane'); assert.ok(form.bottom<=viewport.height); assert.ok(form.body<=viewport.height+1);
   } finally {await browser?.close();await server.close();await rm(cacheDir,{recursive:true,force:true});}

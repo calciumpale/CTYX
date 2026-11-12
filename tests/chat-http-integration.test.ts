@@ -1,0 +1,258 @@
+import assert from 'node:assert/strict';
+import { createServer } from 'node:http';
+import test from 'node:test';
+import type { GenerationInput } from '../app/lib/domain.ts';
+import {
+  prepareKnowledgeContext, type KnowledgeAgentCandidate, type KnowledgeAgentRequest,
+  type KnowledgePreparedContext,
+} from '../app/lib/knowledge-agent.ts';
+import { executeMemberAction } from '../app/lib/member-policy.ts';
+import { requestModelText, type ModelMessage } from '../app/lib/model-client.ts';
+import { buildModelMessages } from '../app/lib/model-messages.ts';
+import { createSeed } from '../app/lib/seed.ts';
+import type { Run } from '../app/lib/types.ts';
+
+const now = '2026-11-12T12:49:28.000Z';
+const company = '北岸合成测试客户';
+const demandQuestion = '调研下客户是否有租房需求';
+const policyQuestion = '我们内部的差旅报销制度是什么？';
+const oldAnswer = '历史回合专用标记：差旅报销须送旧仓库。';
+const oldCitation = { id: 'previous-turn-only', title: '历史回合资料', excerpt: oldAnswer };
+const background = {
+  id: 'directory-only', title: `${company} 企业名录`, content: `${company}从事餐饮经营。`,
+};
+const otherCustomer = {
+  id: 'different-company', title: '南岸合成测试客户跟进', content: '南岸合成测试客户确认需要在园区租赁商铺。',
+};
+const demandSource = {
+  id: 'current-demand', title: `${company}本轮跟进`, content: `${company}明确表示计划租用商铺开店。`,
+};
+const policySource = {
+  id: 'current-policy', title: '本轮差旅报销制度', content: '员工须在出差结束后五个工作日内提交差旅报销申请。',
+};
+
+type Phase = 'route' | 'evidence' | 'answer' | 'insight';
+type Call = { phase: Phase; messages: ModelMessage[] };
+type Scenario = {
+  question: string;
+  useDeal?: boolean;
+  candidates: KnowledgeAgentCandidate[];
+  replies: Partial<Record<Phase, string>>;
+};
+
+const selection = (...sources: KnowledgeAgentCandidate[]) => JSON.stringify({
+  evidence: sources.map(source => ({ id: source.id, quote: source.content })), conflictEvidenceIds: [],
+});
+const demandAnswer = (status: 'recorded' | 'unconfirmed', factIds: string[]) => JSON.stringify({
+  status, factIds, questions: ['是否有开店计划？'], nextSteps: ['向该客户的拓展负责人确认租赁计划。'],
+});
+
+async function runChat(scenario: Scenario) {
+  const state = createSeed(now);
+  const deal = state.deals[0];
+  deal.name = company;
+  deal.dataOrigin = 'research';
+  deal.needs = [];
+  deal.notes = [];
+  delete deal.customerProfile;
+  const prior: Run = {
+    id: 'synthetic-prior-turn', query: '合成旧任务：仓库搬迁流程', answer: oldAnswer, agentIds: ['insight'],
+    steps: [], citations: [oldCitation], mode: 'live', createdAt: now, duration: 1,
+    ...(scenario.useDeal ? { dealId: deal.id } : {}),
+  };
+  state.runs = [prior];
+  const calls: Call[] = [];
+  const requests: KnowledgeAgentRequest[] = [];
+  const queries: string[] = [];
+  const prepared: KnowledgePreparedContext[] = [];
+  const fixtureErrors: unknown[] = [];
+  const sentPhases: Phase[] = [];
+  const model = { url: '', key: 'local-fixture-key', name: 'local-fixture-model' };
+  const fixture = createServer(async (request, response) => {
+    try {
+      const body = await Array.fromAsync(request.setEncoding('utf8'));
+      const payload = JSON.parse(body.join('')) as { model: string; messages: ModelMessage[] };
+      assert.equal(request.method, 'POST');
+      assert.equal(request.url, '/v1/chat/completions');
+      assert.equal(request.headers.authorization, `Bearer ${model.key}`);
+      assert.equal(payload.model, model.name);
+      const phase = sentPhases[calls.length];
+      const reply = scenario.replies[phase];
+      calls.push({ phase, messages: payload.messages });
+      assert.equal(typeof reply, 'string', `unexpected model phase: ${phase}`);
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: reply } }] }));
+    } catch (error) {
+      fixtureErrors.push(error);
+      response.writeHead(500);
+      response.end();
+    }
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    fixture.once('error', reject);
+    fixture.listen(0, '127.0.0.1', resolve);
+  });
+  try {
+    const address = fixture.address();
+    assert.ok(address && typeof address === 'object');
+    model.url = `http://127.0.0.1:${address.port}/v1/chat/completions`;
+    const requestModel = (phase: Phase, messages: ModelMessage[]) => {
+      sentPhases.push(phase);
+      return requestModelText(model, messages, { timeoutMs: 3000 });
+    };
+    const generate = (phase: 'answer' | 'insight') => async (input: GenerationInput) => ({
+      answer: await requestModel(phase, buildModelMessages(input)), mode: 'live' as const,
+    });
+    const result = await executeMemberAction(state, 'manager', 'chat', {
+      query: scenario.question,
+      ...(scenario.useDeal ? { dealId: deal.id } : {}),
+      conversationRunIds: [prior.id],
+    }, {
+      now, generate: generate('answer'), generateInsight: generate('insight'),
+      prepareKnowledge: async request => {
+        requests.push(request);
+        const context = await prepareKnowledgeContext(request, {
+          retrieve: async query => { queries.push(query); return scenario.candidates; },
+          generate: (messages, options) => {
+            const phase = options?.phase;
+            assert.ok(phase === 'route' || phase === 'evidence');
+            return requestModel(phase, messages);
+          },
+        });
+        prepared.push(context);
+        return context;
+      },
+    });
+    assert.deepEqual(fixtureErrors, []);
+    assert.deepEqual(calls.map(call => call.phase), sentPhases, 'every callback reached the loopback provider');
+    assert.ok(result.run);
+    assert.ok(result.state.runs.some(run => run.id === result.run?.id));
+    assert.equal(result.run.mode, 'live');
+    assert.doesNotMatch(JSON.stringify(result.run), /历史回合专用标记|previous-turn-only|合成旧任务/);
+    assert.doesNotMatch(JSON.stringify(calls), /历史回合专用标记|previous-turn-only|合成旧任务/);
+    return { run: result.run, calls, requests, queries, prepared };
+  } finally {
+    await new Promise<void>((resolve, reject) => fixture.close(error => error ? reject(error) : resolve()));
+  }
+}
+
+const userPayload = (call: Call) => call.messages.filter(message => message.role === 'user').at(-1)?.content ?? '';
+
+test('customer demand research reaches the insight model without borrowing a company directory or another customer', async () => {
+  const result = await runChat({
+    question: demandQuestion, useDeal: true, candidates: [background, otherCustomer],
+    replies: { evidence: selection(), insight: demandAnswer('unconfirmed', []) },
+  });
+  assert.deepEqual(result.calls.map(call => call.phase), ['evidence', 'insight']);
+  assert.equal(result.requests[0].audience, 'workspace');
+  assert.equal(result.requests[0].intent, 'business');
+  assert.equal(result.requests[0].subject, company);
+  assert.deepEqual(result.queries, [`${demandQuestion}\n${company}`]);
+  assert.equal(result.prepared[0].route, 'no_evidence');
+  assert.match(userPayload(result.calls[0]), /directory-only/);
+  assert.doesNotMatch(userPayload(result.calls[0]), /different-company/);
+  assert.doesNotMatch(userPayload(result.calls[1]), /directory-only|different-company|从事餐饮经营/);
+  assert.deepEqual(result.run.agentIds, ['insight']);
+  assert.deepEqual(result.run.citations, []);
+  assert.match(result.run.answer, /现有资料无法确认/);
+  assert.match(result.run.answer, /向该客户的拓展负责人确认租赁计划/);
+  assert.match(result.run.steps.map(step => step.detail).join('\n'), /服务端外部模型返回/);
+});
+
+test('customer demand research cites only the confirmed source selected for the current customer', async () => {
+  const result = await runChat({
+    question: demandQuestion, useDeal: true, candidates: [background, otherCustomer, demandSource],
+    replies: { evidence: selection(demandSource), insight: demandAnswer('recorded', [demandSource.id]) },
+  });
+  assert.deepEqual(result.calls.map(call => call.phase), ['evidence', 'insight']);
+  assert.equal(result.prepared[0].route, 'retrieved');
+  assert.deepEqual(result.prepared[0].evidenceIds, [demandSource.id]);
+  assert.match(userPayload(result.calls[1]), /current-demand/);
+  assert.doesNotMatch(userPayload(result.calls[1]), /directory-only|different-company/);
+  assert.ok(result.run.answer.includes(demandSource.content));
+  assert.deepEqual(result.run.citations.map(citation => citation.id), [demandSource.id]);
+});
+
+test('customer demand research without a selected customer asks for the project before retrieving', async () => {
+  const clarification = '请提供客户名称或选择需要调研的项目。';
+  const result = await runChat({
+    question: demandQuestion, candidates: [background, otherCustomer, demandSource],
+    replies: { answer: clarification },
+  });
+  assert.deepEqual(result.calls.map(call => call.phase), ['answer']);
+  assert.deepEqual(result.queries, []);
+  assert.deepEqual(result.requests, []);
+  assert.equal(result.run.dealId, undefined);
+  assert.ok(result.run.answer.includes(clarification));
+  assert.doesNotMatch(userPayload(result.calls[0]), /北岸合成测试客户|南岸合成测试客户/);
+  assert.deepEqual(result.run.citations, []);
+});
+
+test('a workplace policy answer cites only its current selected evidence', async () => {
+  const obsoleteText = '旧制度的差旅报销表统一交蓝盒仓库。';
+  const mixedPolicySource = { ...policySource, content: `${obsoleteText}\n${policySource.content}` };
+  const result = await runChat({
+    question: policyQuestion, candidates: [background, mixedPolicySource],
+    replies: { evidence: selection(policySource), answer: policySource.content },
+  });
+  assert.deepEqual(result.calls.map(call => call.phase), ['evidence', 'answer']);
+  assert.deepEqual(result.queries, [policyQuestion]);
+  assert.equal(result.prepared[0].route, 'retrieved');
+  assert.deepEqual(result.prepared[0].evidenceIds, [policySource.id]);
+  assert.match(userPayload(result.calls[0]), /蓝盒仓库/);
+  assert.match(userPayload(result.calls[1]), /current-policy/);
+  assert.doesNotMatch(userPayload(result.calls[1]), /directory-only|蓝盒仓库/);
+  assert.ok(result.run.answer.includes(policySource.content));
+  assert.deepEqual(result.run.citations, [{ id: policySource.id, title: policySource.title, excerpt: policySource.content }]);
+});
+
+test('a workplace policy question without current evidence gets a bounded model answer and no citations', async () => {
+  const result = await runChat({
+    question: policyQuestion, candidates: [background],
+    replies: { evidence: selection(), answer: '建议先确认适用的报销流程。' },
+  });
+  assert.deepEqual(result.calls.map(call => call.phase), ['evidence', 'answer']);
+  assert.deepEqual(result.queries, [policyQuestion]);
+  assert.equal(result.prepared[0].route, 'no_evidence');
+  assert.doesNotMatch(userPayload(result.calls[1]), /directory-only|从事餐饮经营/);
+  assert.match(result.run.answer, /资料不足/);
+  assert.match(result.run.answer, /建议先确认适用的报销流程/);
+  assert.deepEqual(result.run.citations, []);
+});
+
+test('conflicting current policy records reach the final model without either disputed claim', async () => {
+  const records = [5, 3].map(days => ({
+    id: `policy-${days}-days`, title: policySource.title,
+    content: `员工出差结束后的差旅报销申请期限为${days}个工作日。`,
+  }));
+  const result = await runChat({
+    question: policyQuestion, candidates: records,
+    replies: {
+      evidence: JSON.stringify({
+        evidence: records.map(record => ({ id: record.id, quote: record.content })),
+        conflictEvidenceIds: records.map(record => record.id),
+      }),
+      answer: '请核对财务部门发布的现行报销要求。',
+    },
+  });
+  assert.deepEqual(result.calls.map(call => call.phase), ['evidence', 'answer']);
+  assert.equal(result.prepared[0].route, 'conflict');
+  assert.deepEqual(result.prepared[0].evidenceIds, records.map(record => record.id));
+  assert.doesNotMatch(userPayload(result.calls[1]), /policy-[35]-days|[35]个工作日/);
+  assert.match(result.run.answer, /资料存在冲突/);
+  assert.match(result.run.answer, /请核对财务部门发布的现行报销要求/);
+  assert.deepEqual(result.run.citations, []);
+});
+
+test('an independent writing request reaches route and answer without reading knowledge', async () => {
+  const result = await runChat({
+    question: '请写一句得体的邮件问候语', candidates: [background],
+    replies: { route: JSON.stringify({ action: 'direct' }), answer: '您好，希望您一切顺利。' },
+  });
+  assert.deepEqual(result.calls.map(call => call.phase), ['route', 'answer']);
+  assert.deepEqual(result.queries, []);
+  assert.equal(result.prepared[0].route, 'direct');
+  assert.match(result.run.answer, /您好，希望您一切顺利/);
+  assert.deepEqual(result.run.citations, []);
+});

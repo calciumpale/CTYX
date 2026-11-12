@@ -180,7 +180,7 @@ test('an explicit preference recall uses memory when there is no matching shared
   assert.equal(modelCalls, 1);
   const price = await executeAction(state, 'sales', 'chat', { query: '你记得客户的月租报价吗？' }, context);
   assert.equal(price.run?.mode, 'demo');
-  assert.equal(modelCalls, 1);
+  assert.equal(modelCalls, 2);
 });
 
 function scopedInsightFixture() {
@@ -301,7 +301,11 @@ test('scoped insight follows up for the same deal while explicit price questions
   const context={
     now,
     prepareKnowledge:async()=>({route:'no_evidence' as const,knowledge:[],evidenceIds:[]}),
-    generate:async()=>{assert.fail('缺少价格依据时不能生成业务答案');},
+    generate:async(input:GenerationInput)=>{
+      assert.match(input.query,/月租/);
+      assert.deepEqual(input.knowledge,[]);
+      return {answer:'请核对当前商铺的月租报价。',mode:'live' as const};
+    },
     generateInsight:async(input:GenerationInput)=>{
       modelInputs.push(input);
       return {answer:JSON.stringify({factIds:['fact-1'],insights:['可以先梳理现有使用场景。'],questions:['目前哪个环节最耗时？'],nextSteps:['请使用部门讲解一次典型流程。']}),mode:'live' as const};
@@ -316,6 +320,8 @@ test('scoped insight follows up for the same deal while explicit price questions
   const result=await executeAction(detail.state,'sales','chat',{query:'这个项目的商铺月租多少？',dealId:deal.id,agentId:'insight',conversationRunIds:[first.run!.id,detail.run!.id]},context);
   assert.equal(modelInputs.length,2);
   assert.match(result.run!.answer,/资料不足/);
+  assert.match(result.run!.answer,/请核对当前商铺的月租报价/);
+  assert.equal(result.run?.mode,'live');
 });
 
 test('ordinary chat does not send unrelated customer records or references to the model',async()=>{
@@ -601,7 +607,14 @@ function previousAssessment(version:number):SalesIntelligence {
 test('chat strips an assessment invalidated by automatic company enrichment before model generation',async()=>{
   const state=createSeed(now),deal=state.deals[0];deal.dataOrigin='manual';deal.intelligence=previousAssessment(deal.version);
   let context='';
-  const result=await executeAction(state,'manager','chat',{dealId:deal.id,agentId:'insight',query:'分析当前项目需求'},{now,enrichCompany:async()=>({companyName:deal.name,summary:'检索暂无可确认的外部资料',facts:[],sources:[],provider:'web',status:'partial',warnings:[],updatedAt:now,modelUsed:false}),generate:async input=>{context=buildModelMessages(input).at(-1)!.content;return {answer:'按客户记录回答',mode:'live'};}});
+  const result=await executeAction(state,'manager','chat',{dealId:deal.id,agentId:'insight',query:'了解这家企业的主营业务'},{
+    now,
+    enrichCompany:async()=>({companyName:deal.name,summary:'检索暂无可确认的外部资料',facts:[],sources:[],provider:'web',status:'partial',warnings:[],updatedAt:now,modelUsed:false}),
+    generateInsight:async input=>{
+      context=buildModelMessages(input).at(-1)!.content;
+      return {answer:JSON.stringify({factIds:[],insights:['现有信息不足以确定。'],questions:['实际经营主体是哪家？'],nextSteps:['核对企业登记信息。']}),mode:'live'};
+    },
+  });
   assert.equal(result.state.deals[0].version,deal.version+1);
   assert.ok(context.includes(deal.summary));
   assert.doesNotMatch(context,/过时评估不得进入模型|过时预测不得进入模型/);

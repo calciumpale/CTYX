@@ -130,7 +130,9 @@ test('an empty research retry cannot replace an earlier sourced company profile'
 test('customer insight retries an earlier partial profile that has no public sources',async()=>{
   const created=await manual();
   const empty=await executeAction(created.state,'sales','deal_enrich',{dealId:created.dealId,version:1},{now,enrichCompany:async()=>({...publicProfile(),status:'partial',summary:'暂无可核验资料',sources:[],facts:[],warnings:['公开检索暂时不可用']})});
-  const result=await executeAction(empty.state,'sales','chat',{dealId:created.dealId,agentId:'insight',query:'重新补全企业并分析需求'},{now,enrichCompany:async()=>publicProfile(),generate:async()=>({answer:'根据已核验来源分析',mode:'live'})});
+  const result=await executeAction(empty.state,'sales','chat',{dealId:created.dealId,agentId:'insight',query:'重新补全企业并分析需求'},{now,enrichCompany:async()=>publicProfile(),generateInsight:async()=>({
+    answer:JSON.stringify({factIds:['fact-1'],insights:['根据已核验来源分析。'],questions:['有实际采购需求吗？'],nextSteps:['核对需求。']}),mode:'live',
+  })});
   assert.equal(result.state.deals[0].companyProfile?.status,'ready');assert.equal(result.state.deals[0].companyProfile?.sources[0].url,'https://example.com/about');
   assert.ok(result.run?.citations.some(citation=>citation.excerpt.includes('https://example.com/about')));
 });
@@ -138,16 +140,22 @@ test('customer insight retries an earlier partial profile that has no public sou
 test('customer insight enriches a new manual project once and keeps source citations on later runs',async()=>{
   const created=await manual();let requests=0;let received:Deal|undefined;
   const enrichCompany=async()=>{requests++;return publicProfile();};
-  const generate=async(input:{deal?:Deal})=>{received=input.deal;return {answer:'根据已核验来源分析需求。',mode:'live' as const};};
-  const first=await executeAction(created.state,'sales','chat',{dealId:created.dealId,agentId:'insight',query:'补全企业画像并分析客户需求'},{now,enrichCompany,generate});
+  const generateInsight=async(input:{deal?:Deal})=>{
+    received=input.deal;
+    return {answer:JSON.stringify({factIds:['fact-1'],insights:['根据已核验来源分析需求。'],questions:['下一步由谁确认？'],nextSteps:['核对需求。']}),mode:'live' as const};
+  };
+  const first=await executeAction(created.state,'sales','chat',{dealId:created.dealId,agentId:'insight',query:'补全企业画像并分析客户需求'},{now,enrichCompany,generateInsight});
   assert.equal(requests,1);assert.ok(received?.companyProfile);assert.ok(first.run?.citations.some(citation=>citation.excerpt.includes('https://example.com/about')));
-  const second=await executeAction(first.state,'sales','chat',{dealId:created.dealId,agentId:'insight',query:'再分析一次'},{now,enrichCompany,generate});
+  const second=await executeAction(first.state,'sales','chat',{dealId:created.dealId,agentId:'insight',query:'再分析一次'},{now,enrichCompany,generateInsight});
   assert.equal(requests,1);assert.ok(second.run?.citations.some(citation=>citation.excerpt.includes('https://example.com/about')));
 });
 
 test('automatic research failure adds a warning while answering from manual facts',async()=>{
   const created=await manual();let received:Deal|undefined;
-  const result=await executeAction(created.state,'sales','chat',{dealId:created.dealId,agentId:'insight',query:'分析客户需求'},{now,enrichCompany:async()=>{throw new Error('provider unreachable');},generate:async(input)=>{received=input.deal;return {answer:'仅根据用户记录，预算未知。',mode:'live'};}});
+  const result=await executeAction(created.state,'sales','chat',{dealId:created.dealId,agentId:'insight',query:'分析客户需求'},{now,enrichCompany:async()=>{throw new Error('provider unreachable');},generateInsight:async(input)=>{
+    received=input.deal;
+    return {answer:JSON.stringify({factIds:[],insights:['仅根据用户记录，预算未知。'],questions:['预算由谁确认？'],nextSteps:['补充项目资料。']}),mode:'live'};
+  }});
   assert.equal(received?.companyProfile,undefined);assert.match(result.run!.answer,/预算未知/);
   assert.ok(result.run?.steps.some(step=>step.status==='warning'&&/未完成|失败|暂时/.test(step.detail)));
   assert.ok(!result.run?.citations.some(citation=>citation.excerpt.includes('example.com')));
@@ -165,5 +173,7 @@ test('model context distinguishes manual projects, samples and sourced public fa
   const messages=buildModelMessages({query:'根据企业画像分析',agentId:'insight',deal,deals:[],knowledge:[],purpose:'chat'});
   assert.doesNotMatch(messages[0].content,/资料全部为合成示例/);
   assert.match(messages[0].content,/人工|用户输入/);assert.match(messages[0].content,/外部|公开/);
-  assert.match(messages[0].content,/未知|待核实/);assert.match(messages.at(-1)!.content,/https:\/\/example.com\/about/);
+  assert.match(messages[0].content,/未知|待核实/);
+  assert.doesNotMatch(messages.at(-1)!.content,/https:\/\/example.com\/about/);
+  assert.match(messages.at(-1)!.content,/当前授权客户/);
 });

@@ -17,7 +17,7 @@ import { defaultTrainingProfile, validateTrainingProfile } from './training-prof
 import { demoTrainingGenerate } from './training-dialogue.ts';
 import type { TrainingGenerationInput } from './training-dialogue.ts';
 import type { AgentMemoryContext } from './agent-memory-types.ts';
-import { CUSTOMER_INSIGHT_INSTRUCTION, CUSTOMER_RECORD_INSTRUCTION, customerInsightEvidence, formatCustomerInsight, formatCustomerRecordAnswer, isCustomerInsightQuestion, isCustomerRecordFollowup, isCustomerRecordQuestion, type CustomerInsightEvidence } from './customer-insight.ts';
+import { CUSTOMER_DEMAND_INSTRUCTION, CUSTOMER_INSIGHT_INSTRUCTION, CUSTOMER_RECORD_INSTRUCTION, customerDemandEvidence, customerInsightEvidence, formatCustomerDemand, formatCustomerInsightResult, formatCustomerRecordAnswer, isCustomerDemandFollowup, isCustomerDemandQuestion, isCustomerInsightQuestion, isCustomerRecordFollowup, isCustomerRecordQuestion, type CustomerInsightEvidence } from './customer-insight.ts';
 import { isPropertyQuestion, parsePropertyPageRequest } from './property-query.ts';
 import { isCompletedChatRun } from './chat-request.ts';
 
@@ -29,8 +29,9 @@ export class DomainError extends Error {
 interface WorkflowFrame {knowledgeIds:string[];answerIds:string[];targets?:string[];knowledgeRoute?:KnowledgePreparedContext['route'];}
 interface WorkflowCheckpoint {workflow:Workflow;role:Role;deal?:Deal;deals:Deal[];knowledge:Record<string,Knowledge>;answers:Record<string,string>;frames:Record<string,WorkflowFrame>;order:string[];cursor:number;}
 type StoredState=WorkbenchState & {_access?:Record<string,string>;_workflowRuns?:Record<string,WorkflowCheckpoint>};
-export interface GenerationInput {salesScope?:SalesScope;query:string;agentId:AgentId;projectApprovals?:ProjectApprovalContext[];deal?:Deal;deals:Deal[];knowledge:Knowledge[];instruction?:string;previous?:string;history?:{query:string;answer:string}[];contractReviews?:{title:string;reviewedAt?:string;analysis:ContractAnalysis}[];purpose?:'chat'|'workflow';customerInsightEvidence?:CustomerInsightEvidence[];agentMemory?:AgentMemoryContext;}
-export interface GenerationOutput {answer:string;mode:'demo'|'live';groundingRejected?:boolean;}
+type GenerationKnowledge=Knowledge & {applicability?:string[]};
+export interface GenerationInput {salesScope?:SalesScope;query:string;agentId:AgentId;projectApprovals?:ProjectApprovalContext[];deal?:Deal;deals:Deal[];knowledge:GenerationKnowledge[];instruction?:string;previous?:string;history?:{query:string;answer:string}[];contractReviews?:{title:string;reviewedAt?:string;analysis:ContractAnalysis}[];purpose?:'chat'|'workflow';customerInsightEvidence?:CustomerInsightEvidence[];agentMemory?:AgentMemoryContext;}
+export interface GenerationOutput {answer:string;mode:'demo'|'live';groundingRejected?:boolean;evidenceIds?:string[];}
 export interface ActionContext {salesScope?:SalesScope;salesOwners?:SalesOwner[];prepareKnowledge?:(request:KnowledgeAgentRequest,scope?:{knowledgeIds:string[];knowledge:Knowledge[]})=>Promise<KnowledgePreparedContext>;actorName?:string;extractIntake?:(text:string)=>Promise<IntakeExtraction>;now?:string;generate?:(input:GenerationInput)=>Promise<GenerationOutput>;generateInsight?:(input:GenerationInput)=>Promise<GenerationOutput>;trainingGenerate?:(input:TrainingGenerationInput)=>Promise<GenerationOutput>;enrichCompany?:(deal:Deal)=>Promise<CompanyProfile>;trustedRecording?:FollowupRecording;reviewContract?:(document:ContractDocument,deal:Deal)=>Promise<ContractAnalysis>;contractModelName?:string;approveTalkTrack?:(track:TalkTrack)=>Promise<void>;retrieveTalkTracks?:(query:string)=>Promise<TalkTrack[]>;retrieveManagedKnowledge?:(query:string)=>Promise<Knowledge[]>;recallAgentMemory?:(query:string,projectId?:string)=>Promise<AgentMemoryContext|undefined>;}
 const agentIds=new Set(AGENTS.map(item=>item.id));
 const nodeTypes=new Set(['start','intent','knowledge','agent','review','output']);
@@ -398,53 +399,91 @@ function customerFactSupported(clause:string,input:GenerationInput):boolean {
     )));
   });
 }
+const normalizedClaim=(value:string)=>value.normalize('NFKC').replace(/[。！!？?；;\s]/g,'');
+
+function includesSourceSentence(answer:string,knowledge:Knowledge):boolean {
+  const sentences=new Set(outputSentences(answer).map(normalizedClaim));
+  return outputSentences(knowledge.content).some(sentence=>normalizedClaim(sentence).length>=4&&sentences.has(normalizedClaim(sentence)));
+}
+
+const applicabilityStatements=(content:string)=>outputSentences(content).filter(part=>/仅|适用|前提|须|必须|条件|如果|限于/.test(part));
+
 function groundedSpecialist(answer:string,input:GenerationInput,strictBusiness:boolean):boolean {
   const factual=/租金|月租|价格|单价|库存|空铺|房源|地址|营业|开门|政策|制度|审批|收费|转让费|支持|预约成功|保证|已(?:预约|确认|安排)|(?:有|剩|可租).{0,8}(?:商铺|房|铺)|报价|折扣|优惠|押金|免租|现货|有货|都有|随时有|可用库存|每月|预算.{0,12}(?:元|万|千|百|块)|\d/;
-  const normalized=(s:string)=>s.replace(/[。！!？?；;\s]/g,'');
   return outputSentences(answer).every(sentence=>{
     if(/^(?:已核对|资料不足|尚待核实|请补充资料|需要人工确认)[。！!]*$/.test(sentence))return true;
-    const sources=input.knowledge.filter(k=>outputSentences(k.content).some(part=>normalized(part)===normalized(sentence)));
+    const sources=input.knowledge.filter(item=>outputSentences(item.content).some(part=>normalizedClaim(part)===normalizedClaim(sentence)));
     // A price sentence cannot be detached from its source's applicability clauses.
-    if(sources.some(k=>outputSentences(k.content).filter(part=>/仅|适用|前提|须|必须|条件|如果|限于/.test(part)).every(part=>answer.includes(part))))return true;
-    if(strictBusiness){
-      const sectionLabel=/^(?:结论|依据|适用条件|建议|下一步|待核实)[：:]?$/;
-      const advisory=/^(?:建议先|可以先|请先|请核对|请补充)/;
-      return sectionLabel.test(sentence)||advisory.test(sentence)&&!factual.test(sentence);
-    }
+    if(sources.some(item=>[...applicabilityStatements(item.content),...(item.applicability??[])].every(part=>answer.includes(part))))return true;
+    if(input.knowledge.some(item=>item.applicability?.some(part=>normalizedClaim(part)===normalizedClaim(sentence))
+      && includesSourceSentence(answer,item)))return true;
+    const sectionLabel=/^(?:结论|依据|适用条件|建议|下一步|待核实)[：:]?$/;
+    const verification=/^(?:建议先|可以先|请先|请)?(?:联系|询问|确认|核实|核对|查看|查阅|提供|补充|了解)[^，,。；;：:\d]{1,70}[。？?]?$/;
+    const commitment=/已有|已(?:经|确认|获批|通过|安排|预约)|保证|肯定|必然|可直接享受|[零〇一二两三四五六七八九十百千万亿]+\s*(?:元|折|间|套|平米)/;
+    if(sectionLabel.test(sentence)||verification.test(sentence)&&!commitment.test(sentence))return true;
+    if(strictBusiness)return false;
     // Check every clause so an owned budget cannot launder a following inventory/price claim.
     return sentence.split(/[，,]/).filter(Boolean).every(clause=>!factual.test(clause)||customerFactSupported(clause,input));
   });
 }
 async function boundedSpecialist(input:GenerationInput,context:ActionContext,route?:KnowledgePreparedContext['route'],directAnswer?:string):Promise<GenerationOutput>{
-  if(!route)return context.generate?context.generate(input):demoGenerate(input);
+  const generate=context.generate??(async (request:GenerationInput)=>demoGenerate(request));
+  if(!route)return generate(input);
   if(route==='direct'){
     if(directAnswer)return {answer:directAnswer,mode:'demo'};
-    return context.generate?context.generate(input):demoGenerate(input);
+    return generate(input);
   }
   const boundary=knowledgeBoundary(route);
   const advisory=customerAdvice(input.query,input.deals);
-  if(route==='conflict'||route!=='retrieved'&&!advisory)return {answer:boundary,mode:'demo'};
-  const request={...input,instruction:[input.instruction,boundary,'回答当前问题。工作空间事实请引用本轮资料完整原句，并保留全部适用条件。可单独组织结论和通用下一步建议。客户预算只代表客户需求，不能作为报价、库存、制度或执行结果的依据。'].filter(Boolean).join('\n')};
-  const output=context.generate?await context.generate(request):demoGenerate(request);
+  if((input.purpose!=='chat'||!context.generate)&&(route==='conflict'||route!=='retrieved'&&!advisory))return {answer:boundary,mode:'demo'};
+  const hasEvidence=route==='retrieved';
+  const guidance=hasEvidence
+    ? '回答当前问题。涉及业务的可核实事实请引用本轮资料的完整原句并保留适用条件。可单独组织结论和通用下一步建议。'
+    : '资料状态已由系统说明。针对本轮问题给出一两项可以执行的核实动作，或直接说明需要补充哪个关键信息。建议单独成句，以“建议先确认”“请核对”或“请提供”开头。不要猜测业务结果，也不要重复资料状态。';
+  const request={...input,knowledge:hasEvidence?input.knowledge:[],instruction:[input.instruction,boundary,guidance,'客户预算只代表客户需求，不能作为报价、库存、制度或执行结果的依据。'].filter(Boolean).join('\n')};
+  const output=await generate(request);
   if(output.mode==='demo'&&input.purpose==='chat')return demoGenerate(request);
-  return groundedSpecialist(output.answer,input,!advisory)?output:{
-    answer:route==='retrieved'?'回答中的业务事实缺少完整资料依据，请核实后回复。':boundary,
-    mode:'demo',groundingRejected:output.mode==='live',
-  };
+  if(groundedSpecialist(output.answer,request,!advisory)){
+    return {...output,answer:hasEvidence?output.answer:`${boundary}\n\n${output.answer}`,
+      evidenceIds:request.knowledge.filter(item=>includesSourceSentence(output.answer,item)).map(item=>item.id)};
+  }
+  return {answer:hasEvidence?'回答中的业务事实缺少完整资料依据，请核实后回复。':boundary,mode:'demo',groundingRejected:output.mode==='live'};
 }
-const asKnowledge=(item:KnowledgeAgentEvidence):Knowledge=>({...item,category:'共享知识库',source:'已授权知识库',status:'published',updatedAt:''});
-async function generateCustomerInsight(input: GenerationInput, deal: Deal, generate: NonNullable<ActionContext['generateInsight']>, checkRecords: boolean): Promise<GenerationOutput> {
-  const evidence = checkRecords ? [] : customerInsightEvidence(deal);
-  const instruction = checkRecords ? CUSTOMER_RECORD_INSTRUCTION : CUSTOMER_INSIGHT_INSTRUCTION;
-  const result = await generate({ ...input, knowledge: [], previous: '', instruction, customerInsightEvidence: evidence,
-    ...(checkRecords ? { salesScope: undefined } : {}) });
-  if (result.mode !== 'live') fail('客户洞察需要大模型。请在设置的「服务连接」中配置并启用大模型后重试。', 503);
-  const answer = checkRecords ? formatCustomerRecordAnswer(result.answer) : formatCustomerInsight(result.answer, evidence);
-  if (!answer) fail('大模型未返回符合要求的客户洞察，请重试。', 502);
-  return { answer, mode: 'live' };
+const asKnowledge=(item:KnowledgeAgentEvidence):GenerationKnowledge=>{
+  const content=item.excerpt??item.content;
+  const applicability=item.excerpt?applicabilityStatements(item.content).filter(part=>!content.includes(part)):[];
+  return {id:item.id,title:item.title,content,category:'共享知识库',source:'已授权知识库',status:'published',updatedAt:'',
+    ...(applicability.length?{applicability:applicability.slice(0,8)}:{})};
+};
+
+type CustomerInsightKind='profile'|'records'|'demand';
+async function generateCustomerInsight(input:GenerationInput,deal:Deal,generate:NonNullable<ActionContext['generateInsight']>,kind:CustomerInsightKind,demandEvidenceQuery:string,demandConflict:boolean):Promise<GenerationOutput> {
+  const evidence=kind==='records'||demandConflict?[]:kind==='demand'?[
+    ...customerDemandEvidence(deal),
+    ...input.knowledge.filter(item=>item.category==='共享知识库').map(item=>({
+      id:item.id,label:'已授权知识库摘录',value:item.content,source:item.title,sourceIds:[item.id],
+    })),
+  ]:customerInsightEvidence(deal);
+  const instruction=kind==='records'?CUSTOMER_RECORD_INSTRUCTION:kind==='demand'
+    ? CUSTOMER_DEMAND_INSTRUCTION+(demandConflict?'\n本轮有适用条件相同但结论冲突的资料，status 必须为 unconfirmed，请给出核实办法。':'')
+    : CUSTOMER_INSIGHT_INSTRUCTION;
+  const result=await generate({...input,knowledge:[],previous:'',instruction,customerInsightEvidence:evidence,
+    ...(kind==='records'?{salesScope:undefined}:{})});
+  if(result.mode!=='live')fail('客户洞察需要大模型。请在设置的「服务连接」中配置并启用大模型后重试。',503);
+  if(kind==='records'){
+    const answer=formatCustomerRecordAnswer(result.answer);
+    if(!answer)fail('大模型未返回符合要求的客户记录核验建议，请重试。',502);
+    return {answer,mode:'live'};
+  }
+  const formatted=kind==='demand'?formatCustomerDemand(result.answer,evidence,demandEvidenceQuery):formatCustomerInsightResult(result.answer,evidence);
+  if(!formatted)fail('大模型未返回符合要求的客户洞察，请重试。',502);
+  const selected=new Set(formatted.factIds);
+  const evidenceIds=evidence.filter(item=>selected.has(item.id)).flatMap(item=>
+    (item.sourceIds??[]).map(id=>kind==='profile'?`company-${deal.id}-${id}`:id));
+  return {answer:formatted.answer,mode:'live',evidenceIds};
 }
 async function buildRun(state:StoredState,role:Role,query:string,context:ActionContext,now:string,options:{agentId?:unknown;dealId?:unknown;conversationRunIds?:unknown;talkTrackIds?:unknown}={}):Promise<Run> {
-  const started=Date.now();const steps:TraceStep[]=[];const citations:Run['citations']=[];const usedAgents:AgentId[]=[];let mode:Run['mode']='demo';const answers:string[]=[];
+  const started=Date.now();const steps:TraceStep[]=[];const citations:Run['citations']=[];const usedAgents:AgentId[]=[];let mode:Run['mode']='demo';let groundingRejected=false;const answers:string[]=[];
   const priorRuns=conversationRuns(state,role,options.conversationRunIds);
   const latest=priorRuns.at(-1);
   const directDeal=chooseDeal(state,role,query,options.dealId);
@@ -454,36 +493,45 @@ async function buildRun(state:StoredState,role:Role,query:string,context:ActionC
     !run.agentIds.includes('insight') || !isCustomerRecordFollowup(run.query)) : undefined;
   const recordTopic = priorTopic?.agentIds.includes('insight') && isCustomerRecordQuestion(priorTopic.query) ? priorTopic : undefined;
   const revision=sameContext&&isDraftRevision(query);
-  const propertyContinuation=sameContext&&!revision&&latest?.answerSource==='property-records'&&isPropertyFollowup(query);
-  const explicitPropertyQuestion=!revision&&isPropertyQuestion(query);
+  const demandAnchor=thread.findLast(run=>!isCustomerDemandFollowup(run.query));
+  const demandDeal=directDeal??(sameContext&&latest?.dealId&&(isFollowup(query)||isCustomerDemandFollowup(query))
+    ?chooseDeal(state,role,query,latest.dealId):undefined);
+  const demandContinuation=Boolean(demandDeal&&demandAnchor&&isCustomerDemandFollowup(query)&&isCustomerDemandQuestion(demandAnchor.query,demandDeal.name));
+  const demandQuestion=!revision&&Boolean(demandDeal&&(demandContinuation||isCustomerDemandQuestion(query,demandDeal.name)));
+  const missingDemandSubject=!revision&&!demandDeal&&isCustomerDemandQuestion(query);
+  const demandEvidenceQuery=demandContinuation?`${query}\n${demandAnchor!.query}`:query;
+  const propertyContinuation=sameContext&&!revision&&!demandQuestion&&latest?.answerSource==='property-records'&&isPropertyFollowup(query);
+  const explicitPropertyQuestion=!revision&&!demandQuestion&&!missingDemandSubject&&isPropertyQuestion(query);
   const propertyQuestion=explicitPropertyQuestion||propertyContinuation;
-  const followup=sameContext&&(propertyContinuation||!explicitPropertyQuestion&&(isFollowup(query)||!!recordTopic));
+  const followup=sameContext&&(demandContinuation||propertyContinuation||!explicitPropertyQuestion&&(isFollowup(query)||!!recordTopic));
   const deal=directDeal??(followup?chooseDeal(state,role,latest!.query,latest!.dealId):undefined);
   const history=revision?boundedConversation([latest!]):followup?boundedConversation(thread):[];
   if(options.agentId!==undefined&&!agentIds.has(options.agentId as AgentId))fail('请选择五位领域专家之一');
-  const checkRecords = !revision && !propertyQuestion && !!deal && (!options.agentId || options.agentId === 'insight') &&
+  const checkRecords = !revision && !propertyQuestion && !demandQuestion && !!deal && (!options.agentId || options.agentId === 'insight') &&
     (isCustomerRecordQuestion(query) || recordTopic?.dealId === deal.id);
   if (checkRecords && !context.generateInsight) fail('客户洞察需要大模型。请在设置的「服务连接」中配置并启用大模型后重试。', 503);
   const explicitIntent=/培训|练习|带练|扮演|陪练|风险|合同|免租|审批|合规|资质|违约|授权|优先|预测|健康|本周|商机|漏斗|推进|拜访|方案|策略|开场|话术|谈判/.test(query);
   const inheritedRoute=followup&&!explicitIntent?latest!.agentIds.filter(id=>agentIds.has(id)):[];
-  const routed:AgentId[]=checkRecords?['insight']:options.agentId?[options.agentId as AgentId]:inheritedRoute.length?inheritedRoute:routeAgents(query);
+  const routed:AgentId[]=checkRecords||demandQuestion&&deal?['insight']:options.agentId?[options.agentId as AgentId]:inheritedRoute.length?inheritedRoute:routeAgents(query);
   const previousInsight = followup && latest?.dealId === deal?.id && latest?.agentIds.includes('insight')
     ? thread.findLast(run => run.agentIds.includes('insight') && isCustomerInsightQuestion(run.query))
     : undefined;
-  const insightGenerator = !revision && !propertyQuestion && deal && routed.includes('insight') && (checkRecords || isCustomerInsightQuestion(query, previousInsight?.query)) ? context.generateInsight : undefined;
+  const insightKind:CustomerInsightKind=checkRecords?'records':demandQuestion?'demand':'profile';
+  const insightGenerator = !revision && !propertyQuestion && deal && routed.includes('insight') && (checkRecords || demandQuestion || isCustomerInsightQuestion(query, previousInsight?.query)) ? context.generateInsight : undefined;
+  if(demandQuestion&&deal&&!insightGenerator)fail('客户需求调研需要大模型。请在设置的「服务连接」中配置并启用大模型后重试。',503);
   const retrievalQuery=followup&&!propertyQuestion?[...new Set([history[0]?.query,latest!.query,query])].filter(Boolean).join('\n'):query;
-  const agentMemory = revision || checkRecords || propertyQuestion ? undefined : await context.recallAgentMemory?.(retrievalQuery, deal?.id);
+  const agentMemory = revision || checkRecords || demandQuestion || missingDemandSubject || propertyQuestion ? undefined : await context.recallAgentMemory?.(retrievalQuery, deal?.id);
   const preferenceRecall = !!agentMemory?.topics.length &&
     /我(?:平时|通常|惯用|偏好|习惯|的(?:惯例|习惯|偏好|风格|格式))|记忆里.{0,15}(?:偏好|习惯|惯例|格式|风格)/.test(query) &&
     !/报价|价格|租金|库存|政策|制度|合同|折扣|优惠|免租|预算|审批|合规|资质|处罚|违规|违法/.test(query);
-  const needsSharedKnowledge = !revision && (propertyQuestion || !preferenceRecall && (!insightGenerator || routed.some(id => id !== 'insight')));
+  const needsSharedKnowledge = !revision && !missingDemandSubject && (propertyQuestion || demandQuestion || !preferenceRecall && (!insightGenerator || routed.some(id => id !== 'insight')));
   const portfolio=routed.includes('opportunity')&&/商机|漏斗|客户|团队|招商|销售|跟进/.test(retrievalQuery);
   const active=state.deals.filter(item=>!item.archive);const visibleDeals=role==='sales'?active.filter(item=>item.ownerId===scopeFor(state).salesId):active;
   const scopedDeals=deal?[deal]:portfolio?visibleDeals:[];
   const explicitTracks=approvedTracks(state,options.talkTrackIds,role,state._access??{});
   const semanticTracks=!context.prepareKnowledge&&context.retrieveTalkTracks&&!explicitTracks.length&&routed.includes('strategy')?await context.retrieveTalkTracks(retrievalQuery):[];
   const tracks=[...new Map([...explicitTracks,...semanticTracks].map(t=>[t.id,t])).values()].slice(0,5);
-  let knowledge:Knowledge[]=[];
+  let knowledge:GenerationKnowledge[]=[];
   const step=(title:string,detail:string,status:TraceStep['status']='success',agent?:AgentId,duration=0)=>steps.push({id:uid('step'),title,detail,status,agent,duration});
   const generate=async (agentId:AgentId,instruction?:string,previous=answers.join('\n\n'))=> {
     const tick=Date.now();const input:GenerationInput={salesScope:context.salesScope,query,agentId,deal,deals:scopedDeals,knowledge,instruction:[instruction,revision?'只改写上一轮输出的表达或格式，保留原文的适用条件与不确定性，不新增事实、数字、引文或承诺。':undefined,explicitTracks.length?'用户指定采用以下已审核话术的结构和表达方式：'+explicitTracks.map(t=>t.title).join('、')+'。根据当前客户资料改写占位符，不照搬来源项目事实。':undefined].filter(Boolean).join('\n'),previous,history,...(agentId==='risk'&&deal?{contractReviews:(state.contracts??[]).filter(c=>c.dealId===deal.id&&c.analysis).slice(0,5).map(c=>({title:c.title,reviewedAt:c.reviewedAt,analysis:c.analysis!}))}:{}),purpose:'chat'};
@@ -491,16 +539,26 @@ async function buildRun(state:StoredState,role:Role,query:string,context:ActionC
     if(agentMemory) input.agentMemory=agentMemory;
     if(checkRecords)input.history=recordTopic?boundedConversation([recordTopic]):[];
     const output=scopedInsight
-      ? await generateCustomerInsight(input,deal,insightGenerator,checkRecords)
-      : await boundedSpecialist(input,context,prepared?.route,prepared?.answer);
-    if(output.mode==='live')mode='live';usedAgents.push(agentId);answers.push(`${agentName(agentId)}\n${output.answer}`);
-    const references=revision?'按当前要求改写上一轮输出':checkRecords?'按当前问题整理官方核验入口，未查询记录库':scopedInsight?'基于当前项目与企业资料分析':`使用${knowledge.length}条生效资料`;
+      ? await generateCustomerInsight(input,deal,insightGenerator,insightKind,demandEvidenceQuery,insightKind==='demand'&&prepared?.route==='conflict')
+      : await boundedSpecialist(input,context,missingDemandSubject?'no_evidence':prepared?.route,prepared?.answer);
+    if(output.mode==='live')mode='live';
+    groundingRejected ||= Boolean(output.groundingRejected);
+    const usedIds=new Set(output.evidenceIds??(!prepared&&!scopedInsight?knowledge.map(item=>item.id):[]));
+    const usedSentences=outputSentences(output.answer).map(normalizedClaim);
+    const referencesUsed=[...knowledge.map(item=>({
+      id:item.id,title:item.title,
+      excerpt:(outputSentences(item.content).find(sentence=>usedSentences.includes(normalizedClaim(sentence)))??item.content).slice(0,240),
+    })),
+      ...(scopedInsight&&insightKind==='profile'?companyCitations(deal):[])];
+    for(const item of referencesUsed)if(usedIds.has(item.id)&&!citations.some(entry=>entry.id===item.id))citations.push(item);
+    usedAgents.push(agentId);answers.push(`${agentName(agentId)}\n${output.answer}`);
+    const references=revision?'按当前要求改写上一轮输出':checkRecords?'按当前问题整理官方核验入口，未查询记录库':scopedInsight&&insightKind==='demand'?'核对当前项目中的客户需求记录与相关知识库证据':scopedInsight?'基于当前项目与相关企业资料分析':`引用${usedIds.size}条生效资料`;
     step(`${agentName(agentId)}生成`,`${output.groundingRejected?'已调用模型，回复未通过资料核对':output.mode==='demo'?'本地规则演示，未请求外部模型':'服务端外部模型返回'}；${references}${deal?`；客户：${deal.name}`:''}${instruction?`；节点指令：${instruction}`:''}`, 'success',agentId,Date.now()-tick);
     return `${agentName(agentId)}\n${output.answer}`;
   };
     step('主 Agent 识别意图',`${role==='manager'?'销售管理者':'销售'}主 Agent ${options.agentId?'按指定专家':inheritedRoute.length?'沿用当前对话专家':'按问题关键词路由'}至${routed.map(agentName).join('、')}。`);
     if(agentMemory?.index.length) step('读取 Agent 记忆',`加载 ${agentMemory.index.length} 个主题索引，读取 ${agentMemory.topics.length} 条相关经验。`);
-    if(!revision&&!propertyQuestion&&!checkRecords&&deal?.dataOrigin==='manual'&&!deal.companyProfile?.sources.length&&routed.includes('insight')) {
+    if(insightGenerator&&insightKind==='profile'&&deal?.dataOrigin==='manual'&&!deal.companyProfile?.sources.length&&routed.includes('insight')) {
       const tick=Date.now();
       try {
         deal.companyProfile=await enrichDeal(deal,context);deal.version++;
@@ -509,9 +567,9 @@ async function buildRun(state:StoredState,role:Role,query:string,context:ActionC
         step('检索企业公开资料','企业资料补全暂时未完成，本次仅依据已填写的项目资料回答；未核验信息保持未知。','warning','insight',Date.now()-tick);
       }
     }
-    if(deal&&!checkRecords&&!propertyQuestion)citations.push(...companyCitations(deal));
     const prepared=needsSharedKnowledge?await context.prepareKnowledge?.({
       audience:'workspace',question:query,retrievalQuery,
+      ...(demandQuestion&&deal?{subject:deal.name,intent:'business' as const}:{}),
       ...(propertyContinuation&&latest?.propertyQuery?{propertyQuery:latest.propertyQuery}:{}),
       history:history.map(item=>({role:'user' as const,content:item.query})),
     }):undefined;
@@ -528,13 +586,16 @@ async function buildRun(state:StoredState,role:Role,query:string,context:ActionC
       const managed = await context.retrieveManagedKnowledge?.(retrievalQuery) ?? [];
       knowledge = [...managed, ...tracks.map(talkKnowledge), ...retrieveKnowledge(state,retrievalQuery)];
     }
-    for (const item of knowledge) {
-      if (!citations.some(entry => entry.id === item.id)) citations.push({ id:item.id, title:item.title, excerpt:item.content.slice(0,240) });
+    if(needsSharedKnowledge){
+      const detail=prepared?.route==='direct'?'本轮问题可直接由模型回答。'
+        :prepared?.route==='failed'?'知识库暂时无法读取。'
+        :prepared?.route==='conflict'?'找到适用范围一致但内容冲突的资料。'
+        :`筛选出${knowledge.length}条与本轮问题相关的资料。`;
+      step('检索生效知识',detail,prepared?.route==='failed'||prepared?.route==='conflict'?'warning':'success');
     }
-    if(needsSharedKnowledge)step('检索生效知识',prepared?.route==='direct'?'知识库 Agent 判断本次可直接沟通，无需检索。':`检索当前空间的${knowledge.length}条生效资料。`);
-    for(const agentId of routed)await generate(agentId);
+    for(const agentId of routed)await generate(agentId,missingDemandSubject?'本轮没有选定客户或项目。请用户提供要调研的客户或项目名称。':undefined);
     step('核对建议边界','保留待核实事项；健康度为规则分值；未自动承诺商务条件或修改商机。');
-  return {id:uid('run'),query,answer:answers.join('\n\n────────\n\n'),agentIds:[...new Set(usedAgents)],steps,citations,mode,createdAt:now,duration:Date.now()-started,...(deal?{dealId:deal.id}:{})};
+  return {id:uid('run'),query,answer:answers.join('\n\n────────\n\n'),agentIds:[...new Set(usedAgents)],steps,citations,mode,...(mode==='demo'&&groundingRejected?{answerSource:'evidence-boundary' as const}:{}),createdAt:now,duration:Date.now()-started,...(deal?{dealId:deal.id}:{})};
 }
 
 const clip=(value:string,max=3000)=>value.length>max?`${value.slice(0,max)}\n（内容较长，已截取）`:value;

@@ -1,7 +1,7 @@
 import {preparePropertyKnowledge} from './property-knowledge.ts';
 import {canReadLegacyKnowledge} from './knowledge-content-scope.ts';
 import type {KnowledgeDepartmentId} from './knowledge-department-scope.ts';
-import type {KnowledgeAgentEvidence} from './knowledge-agent.ts';
+import type {KnowledgeAgentCandidate} from './knowledge-agent.ts';
 import {prepareKnowledgeContext,runKnowledgeAgent} from './knowledge-agent.ts';
 import type {KnowledgeAgentRequest,KnowledgeAgentTools} from './knowledge-agent.ts';
 import {retrieveKnowledge} from './domain.ts';
@@ -18,14 +18,14 @@ import {CUSTOMER_REPLY_MAX_CHARS} from './prospecting-reply-limit.ts';
 export function createWorkbenchKnowledgeAgent(db:D1Database,ownerId:string,origin:string,options:{departmentId?:KnowledgeDepartmentId|null;libraryIds?:string[];generate?:KnowledgeAgentTools['generate'];includeLegacy?:boolean}={}){
  const libraryIds=options.libraryIds===undefined?undefined:[...options.libraryIds];
  const scoped=options.departmentId!==undefined;
- let prefetched:{query:string;evidence:KnowledgeAgentEvidence[]}|undefined;
+ let prefetched:{query:string;evidence:KnowledgeAgentCandidate[]}|undefined;
  const store=createKnowledgeLibraryStore(db,ownerId,scoped?{departmentId:options.departmentId}:{});
  const retrieve:KnowledgeAgentTools['retrieve']=async query=>{
   if(!ownerId)throw new Error('Knowledge owner required');
   const connection=await effectiveEmbedding(ownerId).catch(()=>null);
   let queryEmbedding:ReturnType<typeof requestEmbeddings>|undefined;
   const embed=async()=>{if(!connection)throw new Error('Embedding unavailable');return queryEmbedding??=requestEmbeddings(connection,[query],{origin,timeoutMs:4500});};
-  const documents=!scoped&&libraryIds?.length===0?[]:(await store.search({query,mode:'hybrid',limit:4,...(!scoped&&libraryIds!==undefined?{libraryIds}:{}),...(connection?{modelKey:knowledgeModelKey(connection),embed:async()=>(await embed()).vectors[0]}:{})})).hits.map(hit=>({id:`knowledge-document:${hit.id}`,title:[hit.title,hit.heading].filter(Boolean).join(' · '),content:hit.context}));
+  const documents=!scoped&&libraryIds?.length===0?[]:(await store.search({query,mode:'hybrid',limit:4,...(!scoped&&libraryIds!==undefined?{libraryIds}:{}),...(connection?{modelKey:knowledgeModelKey(connection),embed:async()=>(await embed()).vectors[0]}:{})})).hits.map(hit=>({id:`knowledge-document:${hit.id}`,title:[hit.title,hit.heading].filter(Boolean).join(' · '),content:hit.context,matchedText:hit.matchedText}));
   if(options.includeLegacy===false)return documents;
   const row=await db.prepare('SELECT state_json FROM workbench_workspaces WHERE user_id=?').bind(ownerId).first<{state_json:string}>();
   if(!row)return documents;
@@ -44,7 +44,7 @@ export function createWorkbenchKnowledgeAgent(db:D1Database,ownerId:string,origi
    return [...documents,...lexical,...semantic.map(talkKnowledge)];
   }catch{return [...documents,...lexical];}
  };
- const prepareProperty=(request:KnowledgeAgentRequest)=>preparePropertyKnowledge(db,ownerId,request,{...(scoped?{departmentId:options.departmentId}:{}),...(!scoped&&libraryIds!==undefined?{libraryIds}:{}),generate:options.generate});
+ const prepareProperty=(request:KnowledgeAgentRequest)=>request.audience==='workspace'&&request.subject?.trim()?Promise.resolve(undefined):preparePropertyKnowledge(db,ownerId,request,{...(scoped?{departmentId:options.departmentId}:{}),...(!scoped&&libraryIds!==undefined?{libraryIds}:{}),generate:options.generate});
  function toolsForTurn():KnowledgeAgentTools {
   const cached=prefetched;
   prefetched=undefined;

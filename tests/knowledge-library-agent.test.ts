@@ -74,7 +74,12 @@ test('normal chat invokes shared preparation, skips retrieval for greeting and k
   for(const query of ['你好','订票前需要什么流程？']){
     let prepared=false;let lookups=0;
     const result=await executeMemberAction(createSeed(),'sales','chat',{query},{
-      prepareKnowledge:async request=>{prepared=true;return prepareKnowledgeContext({...request,intent:query==='你好'?'auto':'business'},{retrieve:async()=>{lookups++;return [policy];}});},
+      prepareKnowledge:async request=>{prepared=true;return prepareKnowledgeContext({...request,intent:query==='你好'?'auto':'business'},{
+        retrieve:async()=>{lookups++;return [policy];},
+        generate:async (_messages, options) => options?.phase === 'route'
+          ? '{"action":"direct"}'
+          : JSON.stringify({evidence:[{id:policy.id,quote:'出差审批须在订票前完成。'}],conflictEvidenceIds:[]}),
+      });},
       retrieveManagedKnowledge:async()=>{throw new Error('shared preparation must own lookup');},
       generate:async input=>({answer:input.knowledge.map(k=>k.content).join('')||'您好。',mode:'live'}),
     });
@@ -92,11 +97,18 @@ test('explicit workflow knowledge prepares within bound published IDs only',asyn
  assert.ok(called);assert.ok(result.run?.citations.some(c=>c.id===legacy.id));
 });
 
-test('shared preparation gates common chat and failed business answers without a specialist call',async()=>{
+test('unavailable business evidence still reaches the answer model and blocks unsupported claims',async()=>{
  for(const route of ['direct','conflict','failed','no_evidence'] as const){
   let generated=0;
   const result=await executeMemberAction(createSeed(),'sales','chat',{query:route==='direct'?'你好':'商铺月租多少？'},{prepareKnowledge:async()=>({route,knowledge:[],evidenceIds:[],...(route==='direct'?{answer:'您好，有什么想了解的？'}:{})}),generate:async()=>{generated++;return {answer:'月租8000元。',mode:'live'};}});
-  assert.equal(generated,0);assert.ok(!result.run?.answer.includes('8000'));assert.match(result.run!.answer,route==='conflict'?/冲突/:route==='failed'?/暂时/:route==='no_evidence'?/资料/:/您好/);
+  assert.equal(generated,route==='direct'?0:1);
+  assert.doesNotMatch(result.run!.answer,/8000/);
+  assert.match(result.run!.answer,route==='conflict'?/冲突/:route==='failed'?/暂时/:route==='no_evidence'?/资料/:/您好/);
+  if(route!=='direct'){
+   assert.equal(result.run!.answerSource,'evidence-boundary');
+   assert.ok(result.run!.steps.some(step=>/已调用模型/.test(step.detail)));
+  }
+  assert.deepEqual(result.run!.citations,[]);
  }
 });
 
@@ -180,5 +192,30 @@ test('grounded answers can organize current evidence and offer a next step', asy
   assert.equal(result.run?.mode, 'live');
   assert.match(result.run!.answer, /出差审批须在订票前完成。/);
   assert.match(result.run!.answer, /建议先确认负责受理的人。/);
+  assert.deepEqual(result.run!.citations.map(item => item.id), [policy.id]);
+});
+
+test('a conflicted lookup still produces targeted verification steps with no unsupported sources', async () => {
+  const answer = '建议先确认哪一份报销制度适用于本次差旅。';
+  const result = await executeMemberAction(createSeed(), 'sales', 'chat', { query: '内部差旅报销制度按哪一版执行？' }, {
+    prepareKnowledge: async () => ({ route: 'conflict', knowledge: [policy], evidenceIds: [policy.id] }),
+    generate: async input => {
+      assert.deepEqual(input.knowledge, []);
+      assert.match(input.instruction ?? '', /冲突/);
+      return { answer, mode: 'live' };
+    },
+  });
+  assert.equal(result.run?.mode, 'live');
+  assert.match(result.run!.answer, /报销制度适用于本次差旅/);
+  assert.deepEqual(result.run!.citations, []);
+});
+
+test('sources list only a selected source actually used in a grounded answer', async () => {
+  const unrelated = { ...policy, id: 'travel-meal', title: '差旅餐补', content: '餐补标准以出差地的现行制度为准。' };
+  const result = await executeMemberAction(createSeed(), 'sales', 'chat', { query: '订票前需要做什么？' }, {
+    prepareKnowledge: async () => ({ route: 'retrieved', knowledge: [policy, unrelated], evidenceIds: [policy.id, unrelated.id] }),
+    generate: async () => ({ answer: '出差审批须在订票前完成。', mode: 'live' }),
+  });
+  assert.equal(result.run?.mode, 'live');
   assert.deepEqual(result.run!.citations.map(item => item.id), [policy.id]);
 });

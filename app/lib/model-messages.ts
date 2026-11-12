@@ -19,7 +19,13 @@ export function buildModelMessages(input: GenerationInput): ModelMessage[] {
   if (input.purpose === 'chat') for (const turn of input.history ?? []) {
     messages.push({ role: 'user', content: turn.query }, { role: 'assistant', content: turn.answer });
   }
-  const scopedDeal=(deal:Deal)=>{const scoped=structuredClone(deal);if(input.purpose==='workflow'||!salesIntelligenceIsCurrent(deal))delete scoped.intelligence;return scoped;};
+  const scopedDeal=(deal:Deal)=>{
+    const scoped=structuredClone(deal);
+    if(input.purpose==='workflow'||!salesIntelligenceIsCurrent(deal))delete scoped.intelligence;
+    // Customer insight has a separate, source-bound evidence input.
+    if(input.purpose==='chat')delete scoped.companyProfile;
+    return scoped;
+  };
   const context = {
     ...(memory ? { Agent记忆: memory } : {}),
     ...(input.salesScope?{当前销售身份:{salesId:input.salesScope.salesId,displayName:input.salesScope.displayName}}:{}),

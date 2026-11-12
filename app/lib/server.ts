@@ -91,7 +91,10 @@ export async function refreshSalesProject(userId:string,dealId:string,siteOrigin
 }
 
 async function generate(input:GenerationInput,model:{key:string;url:string;name:string}|null):Promise<GenerationOutput> {
-  if(!model)return demoGenerate(input);
+  if(!model){
+    if(input.purpose==='chat')throw new DomainError('大模型当前不可用。请在设置的「服务连接」核对配置后重试。',503);
+    return demoGenerate(input);
+  }
   return {answer:await requestModelText(model,buildModelMessages(input)),mode:'live'};
 }
 async function generateTraining(input:TrainingGenerationInput,model:{key:string;url:string;name:string}|null):Promise<GenerationOutput> {

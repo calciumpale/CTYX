@@ -11,6 +11,7 @@ const run = (overrides: Partial<Run> = {}): Run => ({
 
 test('labels original property records separately from model answers and local generation', () => {
   assert.equal(runGenerationLabel(run({ answerSource: 'property-records', mode: 'demo' })), '知识库房源筛选');
+  assert.equal(runGenerationLabel(run({ answerSource: 'evidence-boundary', mode: 'demo' })), '模型已调用 · 资料校验');
   assert.equal(runGenerationLabel(run({ mode: 'live' })), '模型生成');
   assert.equal(runGenerationLabel(run({ mode: 'demo' })), '本地生成');
 });

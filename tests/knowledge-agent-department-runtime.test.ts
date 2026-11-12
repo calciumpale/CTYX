@@ -51,6 +51,27 @@ test('production retrieval ignores empty or tampered selection and isolates docu
  const otherAgent=createWorkbenchKnowledgeAgent(f.db,'bob','https://example.test',{departmentId:'zs'});const other=await otherAgent.preflight('预约');assert.deepEqual(other.libraryIds,[foreign.id]);
 });
 
+test('named workspace demand bypasses inventory lookup even when the question includes 商铺',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());
+ const records=await f.store.createLibrary('客户跟进','zs');
+ const inventory=await f.store.createLibrary('空置房源','zs');
+ const subject='甲辰科技有限公司',quote='甲辰科技有限公司已明确本季度有租商铺需求。';
+ await f.store.addDocument({libraryId:records.id,title:subject+'跟进记录',fileName:'followup.md',strategy:'flat',chunks:[flat(quote)]});
+ await f.store.upload({libraryId:inventory.id,title:'空置房源',fileName:'空置房源.xlsx',text:'## 工作表：空置房源表\n第1行：A1=铺号；B1=面积（㎡）；C1=位置\n第2行：A2=3号铺；B2=80；C2=绮园',requestId:crypto.randomUUID(),strategy:'flat'});
+ const phases:string[]=[];
+ const agent=createWorkbenchKnowledgeAgent(f.db,'alice','https://example.test',{departmentId:'zs',generate:async(messages,options)=>{
+  phases.push(options?.phase??'');
+  const input=JSON.parse(messages.at(-1)!.content) as {subject:string;sources:{id:string;excerpt:string}[]};
+  assert.equal(input.subject,subject);assert.equal(input.sources.length,1);
+  return JSON.stringify({evidence:[{id:input.sources[0].id,quote}]});
+ }});
+ const prepared=await agent.prepare({question:'客户是否有租商铺需求？',subject,audience:'workspace'});
+ assert.equal(prepared.route,'retrieved');
+ assert.equal(prepared.recordLookup,undefined);
+ assert.deepEqual(prepared.knowledge.map(source=>source.content),[quote]);
+ assert.deepEqual(phases,['evidence']);
+});
+
 test('property lookup enumerates all authorized original rows before generic top-k and numeric conflict rules',async t=>{
  const f=fixture();t.after(()=>f.sqlite.close());
  for(const [department,title] of [['zs','空置房源'],['zs','在租房源'],['yy','空置房源']] as const){

@@ -5,7 +5,9 @@ export type RunSource = 'all' | 'chat' | 'workflow';
 export interface RunFilters { search: string; status: 'all' | RunStatus; source: RunSource; }
 
 export function runGenerationLabel(run: Pick<Run, 'mode' | 'answerSource'>): string {
-  return run.answerSource === 'property-records' ? '知识库房源筛选' : run.mode === 'live' ? '模型生成' : '本地生成';
+  if(run.answerSource==='property-records')return '知识库房源筛选';
+  if(run.answerSource==='evidence-boundary')return '模型已调用 · 资料校验';
+  return run.mode==='live'?'模型生成':'本地生成';
 }
 
 export function runStatus(run: Run): RunStatus {

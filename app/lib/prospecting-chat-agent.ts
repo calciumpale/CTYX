@@ -112,6 +112,9 @@ const needQuestions:Record<NeedKey,string>={
 };
 const contactDeclined=/(?:先不|暂时不|暂不|不想|不愿|不方便|不用|不要|拒绝|别|不)(?:再|现在)?(?:给|提供|留|加|发|说|透露).{0,8}(?:联系方式|电话|手机|微信|邮箱|号码)|(?:电话|手机|微信|邮箱|联系方式).{0,4}(?:不留|不给|不提供|不方便)|(?:不要|不想|不用|别)(?:再)?打电话/;
 const asksContact=/(?:可联系到您的方式)|(?:留|给|提供|发|加|告知|方便).{0,12}(?:联系方式|电话|手机|微信|邮箱|号码)|(?:联系方式|电话|手机|微信|邮箱|号码).{0,8}(?:多少|是什么|发我|给我|留一下|方便)/;
+const newTopic=/(?:^|[\n，。！？；,!?;])\s*(?:换(?:一?个)?话题|重新(?:开始|问|查)|不考虑之前|另外(?:还)?(?:想)?问|新(?:的)?问题|(?:这次|现在)单独问)/;
+const correctionClause=/^\s*(?:(?:预算|区域|地点|位置|面积|业态|入驻时间)\s*(?:改成|改为|换到|换成|调整为)|(?:不看|换到)\S)/;
+const priorReference=/^(?:那(?:么|边|里|附近|这|个|还有|要|样|间|套)|这(?:个|处|款|套|家|里|边|几|些)|刚才|上面|前面|上述|接着|继续|(?:按|照)(?:我|刚才|之前|上面|原来)|改成|改为|换成|只要|只看|排除|不看|还有(?:别的|其他|更多|没有|吗|么)|有合适的(?:吗|么)|(?:具体)?(?:地址|位置|面积|租金|价格|费用)(?:具体|大概)?(?:在|是|为)?(?:哪里|哪儿|多少|什么))/;
 const directContactRequest=/(?:联系我|打给我|给我(?:打电话|回电话)|怎么联系|如何联系|想留(?:电话|联系方式)|我要留(?:电话|联系方式))/;
 const budgetClarification='您说的预算使用什么单位和计费周期？';
 const budgetCurrencyQuestion='您说的预算金额使用什么货币单位？';
@@ -178,6 +181,12 @@ function needsFactualAnswer(value:string):boolean {
   });
 }
 
+function recallsCustomerNeed(inbound:string):boolean {
+  const question=inbound.split(/[\n，。！？；,!?;]/).map(part=>part.trim()).filter(Boolean).at(-1)??'';
+  return /(?:我|本人|您).{0,10}(?:之前|以前|刚才)(?:说|提)|^之前说(?:过|的)/.test(question)||
+    /^我的(?:面积|预算|区域|业态|需求)(?:是什么|是多少|是哪里)?$/.test(question);
+}
+
 function summarize(memory:ProspectChatMemory):string {
   return redact([
     ...needOrder.filter(key=>memory.needs[key]).map(key=>`${needLabels[key]}：${memory.needs[key]}`),
@@ -199,6 +208,7 @@ export async function chooseProspectChatAction(input:ProspectChatAgentInput,tool
   const taskMessages=[...input.messages,...pending.filter(p=>!input.messages.some(m=>m.id===p.id)).map(p=>({id:p.id,text:p.text,contentType:p.contentType,conversationId:'current',direction:'inbound' as const,actor:'customer' as const,status:'received' as const,createdAt:now}))];
   const taskState=taskView?await understandTaskMemory(taskView.state,taskMessages,{now},tools.understandMemory):undefined;
   const memory=taskState?projectTaskMemory(taskState,now):normalizeChatMemory(input.conversation.memory);
+  const confirmedTaskNeeds=taskState?{...memory.needs}:undefined;
   const tentativeBudget=taskState?.facts.findLast(f=>f.key==='budget'&&f.status==='tentative');
   if(tentativeBudget){const value=tentativeBudget.value;memory.needs.budget=value+(/[元块]/.test(value)?'（周期待确认）':/[月年]/.test(value)?'（单位待确认）':'（单位和周期待确认）');}
 
@@ -257,15 +267,38 @@ export async function chooseProspectChatAction(input:ProspectChatAgentInput,tool
   };
   if(handoff.test(inbound))return transfer(handoffTopics.find(([pattern])=>pattern.test(inbound))?.[1]??modelHandoffReasons.human_confirmation);
   if(continuation===null)return transfer('未找到已提交的上一页房源，请核实后回复。');
+  const currentText=redact(inbound).trim();
+  const reset=newTopic.test(currentText);
+  const clauses=currentText.split(/[\n，；,;]/);
+  const corrections=clauses.some(clause=>correctionClause.test(clause));
+  const questionCore=currentText.replace(/^(?:(?:您好|你好|请问|想请问|我想问一下)[，、,:：\s]*)+/, '');
+  const usePrior=propertyPage||!reset&&(corrections||priorReference.test(questionCore)||Boolean(requested&&!businessQuestion));
+  const lookupText=usePrior&&taskState&&corrections
+    ?clauses.filter(clause=>!correctionClause.test(clause)).join('，').trim()||currentText
+    :currentText;
+  const priorLookup:string[]=[];
+  if(usePrior){
+    if(taskState&&confirmedTaskNeeds){
+      for(const key of needOrder){
+        const value=confirmedTaskNeeds[key];
+        if(value)priorLookup.push(needLabels[key]+'：'+redact(value));
+      }
+      priorLookup.push(...taskState.facts.filter(fact=>fact.status==='confirmed'&&fact.key==='constraint').map(fact=>redact(fact.value)));
+    }else{
+      priorLookup.push(...previousInbound.slice(-2).map(message=>redact(message.text).slice(0,500)));
+    }
+  }
+  // The mandatory preflight may supply the same evidence to the answer step.
+  const query=[lookupText.slice(-1500),...priorLookup].filter(Boolean).join('\n').slice(0,1500);
   if(tools.preflightKnowledge){
-    try{knowledgeLookup=await tools.preflightKnowledge([redact(inbound),...previousInbound.slice(-2).map(m=>redact(m.text))].join('\n').slice(-1500)||'客户图片咨询');}
+    try{knowledgeLookup=await tools.preflightKnowledge(query||'客户图片咨询');}
     catch{knowledgeLookup={department:null,libraryIds:[],sourceIds:[],status:'failed'};}
     if(knowledgeLookup.status!=='ok')return finish({action:'wait',reason:'所属部门资料检索未完成，请人工核实后回复',...base});
   }
   if(pending.at(-1)?.contentType==='image')return finish({action:'reply',reply:'收到图片了，请用文字说一下您想了解的问题。',evidenceIds:[],answeredMessageIds:[],route:'direct',...base});
   if(taskState&&lead)taskState.contact.captured=true;
   if(lead)return finish({action:'reply',reply:'收到，我们会尽快与您联系。',evidenceIds:[],...base});
-  if(taskState&&/(?:我|本人|您).{0,10}(?:之前|以前|刚才|说过|提过)|之前说|我的(?:面积|预算|区域|业态|需求)/.test(inbound)){
+  if(taskState&&!reset&&recallsCustomerNeed(inbound)){
     const key=needOrder.find(k=>inbound.includes(needLabels[k]));
     const fact=taskState.facts.findLast(f=>f.status==='confirmed'&&(!key||f.key===key));
     if(fact){
@@ -295,7 +328,9 @@ export async function chooseProspectChatAction(input:ProspectChatAgentInput,tool
   const taskContext=taskState?taskMemoryContext(taskState,taskMessages,inbound,now):undefined;
   if(taskContext?.overflow)return finish({action:'wait',reason:'任务记忆超出可用上下文，需人工核实'});
   if(!tools.generate&&!tools.answerKnowledge)return fallback();
-  const query=taskState?JSON.stringify({question:redact(inbound).replace(/(?:预算|不看|换到|区域)[^，。？！,?!]*(?:[，,]|$)/g,''),needs:projectTaskMemory(taskState,now).needs,constraints:taskState.facts.filter(f=>f.status==='confirmed'&&f.key==='constraint').map(f=>f.value)}).slice(0,1600):[redact(inbound).slice(-800),...previousInbound.slice(-2).map(message=>redact(message.text))].join('\n').slice(0,900);
+  const supportedFacts=usePrior?taskContext?.facts.filter(fact=>fact.status==='confirmed'):undefined;
+  const modelHistory=usePrior?(taskContext?.recent??previous).filter(message=>!pendingIds.has(message.id)):[];
+  const modelMemory=usePrior?memory:{...memory,needs:extractNeeds(inbound),summary:''};
   let evidence:ProspectChatEvidence[]=[];
   try{evidence=(tools.answerKnowledge?[]:await tools.retrieve?.(query)??[]).slice(0,7).map(item=>({...item,title:redact(item.title),content:evidenceSnippet(item.content)})).filter(item=>item.content);}catch{return fallback();}
   try{
@@ -304,8 +339,8 @@ export async function chooseProspectChatAction(input:ProspectChatAgentInput,tool
       shared=await tools.answerKnowledge({
         question:redact(pageText??inbound),intent:businessQuestion?'business':'auto',audience:'customer',
         ...(continuation?{propertyPage:continuation}:{}),
-        context:taskContext?.facts.filter(f=>f.status==='confirmed').map(f=>({id:f.id,text:`${needLabels[f.key as NeedKey]??'条件'}：${f.value}`,kind:'customer_fact' as const})),
-        history:(taskContext?taskContext.recent:previous).filter(m=>!pendingIds.has(m.id)).map(m=>({role:m.direction==='inbound'?'user' as const:'assistant' as const,content:redact(m.text)})),
+        context:supportedFacts?.map(f=>({id:f.id,text:`${needLabels[f.key as NeedKey]??'条件'}：${f.value}`,kind:'customer_fact' as const})),
+        history:modelHistory.map(m=>({role:m.direction==='inbound'?'user' as const:'assistant' as const,content:redact(m.text)})),
         retrievalQuery:query,maxAnswerChars:CUSTOMER_REPLY_MAX_CHARS,instructions:agentPrompt+`\n当前可邀请留资：${mayAskContact}。已留资：${memory.contactCaptured}。当前任务：${redact(input.campaign.name)}。`,
       });
       if(shared.route==='conflict')return transfer(modelHandoffReasons.conflicting_knowledge);
@@ -332,10 +367,10 @@ export async function chooseProspectChatAction(input:ProspectChatAgentInput,tool
       {role:'system',content:`${agentPrompt}\n${AI_REPLY_STYLE}`},
       {role:'user',content:JSON.stringify({
         campaign:{name:redact(input.campaign.name),requirements:redact(input.campaign.requirements)},
-        history:(taskContext?taskContext.recent.filter(m=>!pendingIds.has(m.id)):previous).map(message=>({direction:message.direction,actor:message.actor,at:message.postedAt??message.createdAt,text:redact(message.text).slice(0,600)})),
+        history:modelHistory.map(message=>({direction:message.direction,actor:message.actor,at:message.postedAt??message.createdAt,text:redact(message.text).slice(0,600)})),
         inbound:redact(inbound).slice(-1200),
-        memory:normalizeChatMemory(memory),
-        ...(taskContext?{taskContext}:{}),
+        memory:normalizeChatMemory(modelMemory),
+        ...(usePrior&&taskContext?{taskContext}:{}),
         contactReceived:memory.contactCaptured,
         mayAskContact,
         evidence,
@@ -351,7 +386,7 @@ export async function chooseProspectChatAction(input:ProspectChatAgentInput,tool
     const reply=typeof value.reply==='string'?value.reply.trim():'';
     const evidenceIds=Array.isArray(value.evidenceIds)?[...new Set<unknown>(value.evidenceIds)]:[];
     const sources=evidence.filter(item=>evidenceIds.includes(item.id));
-    const contextIds=shared?.route==='direct'?(taskContext?.facts.filter(f=>evidenceIds.includes(f.id)).map(f=>f.id)??[]):[];
+    const contextIds=shared?.route==='direct'?(supportedFacts?.filter(f=>evidenceIds.includes(f.id)).map(f=>f.id)??[]):[];
     const invalidAnswer=shared?sharedFallback:fallback;
     if(value.action!=='reply'||evidenceIds.length!==sources.length+contextIds.length||!validReplyText(reply,mayAskContact))return invalidAnswer();
     const supported=new Set(sources.flatMap(source=>factualSentences(source.content)));

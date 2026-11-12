@@ -656,3 +656,76 @@ test('contextual refusal of submitted neutral invitation persists across later t
  const refused=await chooseProspectChatAction(request,{});assert.notEqual(refused.close,true);assert.equal(refused.taskMemoryState?.contact.declined,true);
  const follow=input('还有别的条件吗？');follow.now=now;follow.conversation.taskMemory={...request.conversation.taskMemory,state:refused.taskMemoryState!};const next=await chooseProspectChatAction(follow,{});assert.doesNotMatch(next.reply??'',/可联系到您的方式|留.*联系方式/);assert.equal(next.taskMemoryState?.contact.declined,true);
 });
+
+test('a new standalone question cannot be displaced by long earlier text during mandatory lookup',async()=>{
+ const request=input('请问门店几点开门？');
+ request.messages=['旧仓库说明'.repeat(220),'旧厂房位置'.repeat(220)].map((text,index)=>({
+  id:'old-'+index,conversationId:'c',direction:'inbound' as const,actor:'customer' as const,status:'received' as const,text,createdAt:'2026-11-11T01:00:00Z',
+ }));
+ let checked='';
+ let lookedUp:KnowledgeAgentRequest|undefined;
+ await chooseProspectChatAction(request,{
+  preflightKnowledge:async query=>{checked=query;return {department:null,libraryIds:[],sourceIds:[],status:'ok'};},
+  answerKnowledge:async query=>{lookedUp=query;return {action:'unavailable',route:'no_evidence',knowledge:[],evidenceIds:[]};},
+ });
+ assert.equal(checked,request.inbound.text);
+ assert.equal(lookedUp?.retrievalQuery,request.inbound.text);
+ assert.deepEqual(lookedUp?.history??[],[]);
+});
+
+test('a standalone business question does not inherit earlier customer facts or erase its own query terms',async()=>{
+ const {emptyTaskMemory,advanceTaskMemory}=await import('../app/lib/prospecting-memory.ts');
+ const now='2026-11-08T08:00:00Z';
+ const request=input('区域仓库的营业时间是什么时候，我只想确认开放时段？');request.now=now;
+ const old={id:'earlier',conversationId:'c',direction:'inbound' as const,actor:'customer' as const,status:'received' as const,text:'预算5000元/月，区域在滨江',createdAt:now};
+ request.messages=[old];
+ request.conversation.taskMemory={sessionId:'s',campaignId:'c',activeCampaignId:'c',isActive:true,ready:true,sessionVersion:1,bindingVersion:1,state:advanceTaskMemory(emptyTaskMemory(),[old],{now})};
+ let lookedUp:KnowledgeAgentRequest|undefined;
+ const result=await chooseProspectChatAction(request,{answerKnowledge:async query=>{
+  lookedUp=query;return {action:'unavailable',route:'no_evidence',knowledge:[],evidenceIds:[]};
+ }});
+ assert.equal(lookedUp?.retrievalQuery,request.inbound.text);
+ assert.deepEqual(lookedUp?.context??[],[]);
+ assert.deepEqual(lookedUp?.history??[],[]);
+ assert.equal(result.memory?.needs.budget,'5000元/月');
+ assert.equal(result.action,'handoff');
+});
+
+test('an explicit new business question after a reference to prior needs is not a memory recap',async()=>{
+ const {emptyTaskMemory,advanceTaskMemory}=await import('../app/lib/prospecting-memory.ts');
+ const now='2026-11-08T08:00:00Z';
+ const request=input('我之前说过预算，另外问一下门店几点开门？');request.now=now;
+ request.conversation.taskMemory={sessionId:'s',campaignId:'c',activeCampaignId:'c',isActive:true,ready:true,sessionVersion:1,bindingVersion:1,state:advanceTaskMemory(emptyTaskMemory(),[{id:'old',conversationId:'c',direction:'inbound',actor:'customer',status:'received',text:'预算5000元/月',createdAt:now}],{now})};
+ let query='';
+ await chooseProspectChatAction(request,{answerKnowledge:async input=>{
+  query=input.retrievalQuery??'';return {action:'unavailable',route:'no_evidence',knowledge:[],evidenceIds:[]};
+ }});
+ assert.match(query,/门店几点开门/);
+ assert.doesNotMatch(query,/5000/);
+});
+
+test('an elliptical continuation keeps prior relevant property constraints and user turn history',async()=>{
+ const request=input('请问，那附近还有合适的吗？');
+ const previous='滨江有80到100平的空置商铺吗？';
+ request.messages=[{id:'old',conversationId:'c',direction:'inbound',actor:'customer',status:'received',text:previous,createdAt:'2026-11-11T01:00:00Z'}];
+ let checked='';
+ let lookedUp:KnowledgeAgentRequest|undefined;
+ await chooseProspectChatAction(request,{
+  preflightKnowledge:async query=>{checked=query;return {department:null,libraryIds:[],sourceIds:[],status:'ok'};},
+  answerKnowledge:async query=>{lookedUp=query;return {action:'unavailable',route:'no_evidence',knowledge:[],evidenceIds:[]};},
+ });
+ assert.match(checked,/^请问，那附近还有合适的吗/);
+ assert.match(checked,/滨江/);
+ assert.deepEqual(lookedUp?.history,[{role:'user',content:previous}]);
+});
+
+test('verified pagination forwards the submitted property filters even without text history',async()=>{
+ const request=input('下一页');
+ request.propertyPage={query:{status:'vacant',groups:[],minArea:80,maxArea:100,page:1,pageSize:10},evidenceIds:['property-record:prior'],hasNext:true};
+ let received:KnowledgeAgentRequest|undefined;
+ const result=await chooseProspectChatAction(request,{answerKnowledge:async query=>{received=query;return inventoryAnswer;}});
+ assert.equal(received?.question,'下一页');
+ assert.equal(received?.intent,'business');
+ assert.deepEqual(received?.propertyPage,request.propertyPage);
+ assert.equal(result.reply,inventoryAnswer.answer);
+});

@@ -18,6 +18,20 @@ function fixture(){
 import {createWorkbenchKnowledgeAgent} from '../app/lib/knowledge-agent-runtime.ts';
 import {chooseProspectChatAction} from '../app/lib/prospecting-chat-agent.ts';
 import {createSeed} from '../app/lib/seed.ts';
+test('preflight evidence is reused only for its own retrieval query',async t=>{
+ const f=fixture();t.after(()=>f.sqlite.close());
+ const library=await f.store.createLibrary('招商资料','zs');
+ for(const keyword of ['Aquamarine','Ultraviolet']){
+  await f.store.addDocument({libraryId:library.id,title:keyword,fileName:keyword+'.txt',strategy:'flat',chunks:[flat(keyword+' public information')]});
+ }
+ const agent=createWorkbenchKnowledgeAgent(f.db,'alice','https://example.test',{departmentId:'zs'});
+ const first=await agent.preflight('Aquamarine');
+ assert.equal(first.sourceIds.length,1);
+ const second=await agent.prepare({question:'Ultraviolet',intent:'business'});
+ assert.deepEqual(second.knowledge.map(item=>item.title),['Ultraviolet']);
+ assert.ok(second.knowledge.every(item=>!first.sourceIds.includes(item.id)));
+});
+
 test('production retrieval ignores empty or tampered selection and isolates documents, legacy and lexical tracks',async t=>{
  const f=fixture();t.after(()=>f.sqlite.close());
  const ids:Record<string,string>={};

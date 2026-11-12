@@ -150,3 +150,35 @@ test('customer profile and needs facts are admitted with their field and source 
  const result=await executeMemberAction(state,'sales','chat',{query:'请根据客户需求给推进建议',dealId:deal.id,agentId:'strategy'},{prepareKnowledge:async()=>({route:'failed',knowledge:[],evidenceIds:[]}),generate:async()=>({answer,mode:'live'})});
  assert.ok(result.run!.answer.includes(answer));
 });
+
+test('ordinary workspace questions on the direct route reach the configured model', async () => {
+  const query = '解释一下 HTTPS 和 HTTP 有什么区别';
+  let called = false;
+  const result = await executeMemberAction(createSeed(), 'sales', 'chat', { query }, {
+    prepareKnowledge: async () => ({ route: 'direct', knowledge: [], evidenceIds: [] }),
+    generate: async input => {
+      called = true;
+      assert.equal(input.query, query);
+      assert.deepEqual(input.knowledge, []);
+      return { answer: 'HTTPS 使用 TLS 保护传输。', mode: 'live' };
+    },
+  });
+  assert.equal(called, true);
+  assert.equal(result.run?.mode, 'live');
+  assert.match(result.run!.answer, /HTTPS 使用 TLS/);
+  assert.doesNotMatch(result.run!.answer, /有什么想了解的/);
+});
+
+test('grounded answers can organize current evidence and offer a next step', async () => {
+  const result = await executeMemberAction(createSeed(), 'sales', 'chat', { query: '订票前要完成哪一步？' }, {
+    prepareKnowledge: async () => ({ route: 'retrieved', knowledge: [policy], evidenceIds: [] }),
+    generate: async input => {
+      assert.deepEqual(input.knowledge.map(item => item.id), [policy.id]);
+      return { answer: '## 结论\n出差审批须在订票前完成。\n建议先确认负责受理的人。', mode: 'live' };
+    },
+  });
+  assert.equal(result.run?.mode, 'live');
+  assert.match(result.run!.answer, /出差审批须在订票前完成。/);
+  assert.match(result.run!.answer, /建议先确认负责受理的人。/);
+  assert.deepEqual(result.run!.citations.map(item => item.id), [policy.id]);
+});

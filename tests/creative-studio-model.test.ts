@@ -105,3 +105,21 @@ test('private assets accept only existing same-origin result syntax and validate
   }
   assert.throws(() => parseStudioDocument({ ...document, kind: 'html' }), { status: 400 });
 });
+
+test('a fresh design uses the current brief without reusing claims from an old copy', async () => {
+  const updated = {
+    ...document,
+    brief: '推广春季茶饮，售价29元。',
+    copy: { ...emptyStudioCopy(), title: '上一款冷萃', caption: '原优惠19元。' },
+  };
+  const directions = (headline: string) => JSON.stringify({
+    boards: [board, { ...board, id: 'alternate' }].map(item => ({ ...item, layers: [{ ...text, text: headline }] })),
+  });
+  await assert.rejects(generateStudio('design', updated, {}, async () => directions('原优惠19元。')), { status: 502 });
+  const result = await generateStudio('design', updated, {}, async messages => {
+    assert.match(messages[1].content, /售价29元/);
+    assert.doesNotMatch(messages[1].content, /上一款冷萃|19元/);
+    return directions('春季茶饮，售价29元。');
+  });
+  assert.equal(result.boards?.[0].layers[0].text, '春季茶饮，售价29元。');
+});

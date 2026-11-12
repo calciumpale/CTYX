@@ -1,5 +1,6 @@
 'use client';
 
+import { isMatchingChatRun } from '../lib/chat-request';
 import { publicSourceLabel, salesReportEligible } from '../lib/sales-project-eligibility';
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type FormEvent } from 'react';
@@ -206,8 +207,9 @@ export function CustomerWorkspace({ state, member, mutate, notify, initialDealId
     setFailures(current => { const next = { ...current }; delete next[request.dealId]; return next; });
     try {
       const result = await mutate('chat', { ...request });
-      if (!result.run || result.run.dealId !== request.dealId || result.run.workflowId || result.run.status === 'failed') throw new Error('本次未返回当前项目的完整回答，原话已保留，请重试。');
-      setReturnedRuns(current => [...current.filter(run => run.id !== result.run!.id), result.run!]);
+      const run = result.run;
+      if (!isMatchingChatRun(run, request)) throw new Error('本次未返回当前项目的完整回答，原话已保留，请重试。');
+      setReturnedRuns(current => [...current.filter(item => item.id !== run.id), run]);
       setDrafts(current => { const previous = current[request.dealId] || emptyDraft(); return { ...current, [request.dealId]: { ...previous, query: previous.query === request.query ? '' : previous.query } }; });
     } catch (cause) { setFailures(current => ({ ...current, [request.dealId]: { request, error: cause instanceof Error ? cause.message : '生成未完成，请重试。' } })); }
     finally { setPending(null); finish(); }

@@ -83,7 +83,6 @@ export async function generateStudio(
     项目: title, 类型: STUDIO_KIND_LABELS[kind], 需求: brief, 受众: audience, 渠道: channel, 风格: style,
     ...(options.instruction ? { 修改说明: options.instruction } : {}),
     ...(previousCopy ? { 当前稿件: previousCopy } : {}),
-    ...(mode === 'design' ? { 可参考文案: { 标题: document.copy.title, 正文: document.copy.caption } } : {}),
     ...(board ? { 当前画板: { ...board, layers: board.layers.map(item => ({ ...item, assetUrl: '' })) } } : {}),
     ...(layer ? { 选中图层: layer.id } : {}),
   };
@@ -109,7 +108,7 @@ export async function generateStudio(
     if (boards.some(item => !item.layers.length || item.layers.some(item => item.assetUrl))) throw invalidOutput();
     assertGroundedText(
       boards.flatMap(item => [item.name, ...item.layers.flatMap(layer => [layer.name, layer.text])]),
-      [title, brief, document.copy.title, document.copy.caption, ...(board?.layers.map(item => item.text) ?? [])].join('\n'),
+      [title, brief, ...(board?.layers.map(item => item.text) ?? [])].join('\n'),
     );
     return { boards: board ? [reviseBoard(boards[0], board, layer)] : boards.map(item => ({ ...item, id: crypto.randomUUID() })) };
   } catch (error) {

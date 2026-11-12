@@ -18,7 +18,7 @@ import {CUSTOMER_REPLY_MAX_CHARS} from './prospecting-reply-limit.ts';
 export function createWorkbenchKnowledgeAgent(db:D1Database,ownerId:string,origin:string,options:{departmentId?:KnowledgeDepartmentId|null;libraryIds?:string[];generate?:KnowledgeAgentTools['generate'];includeLegacy?:boolean}={}){
  const libraryIds=options.libraryIds===undefined?undefined:[...options.libraryIds];
  const scoped=options.departmentId!==undefined;
- let prefetched:KnowledgeAgentEvidence[]|undefined;
+ let prefetched:{query:string;evidence:KnowledgeAgentEvidence[]}|undefined;
  const store=createKnowledgeLibraryStore(db,ownerId,scoped?{departmentId:options.departmentId}:{});
  const retrieve:KnowledgeAgentTools['retrieve']=async query=>{
   if(!ownerId)throw new Error('Knowledge owner required');
@@ -45,11 +45,24 @@ export function createWorkbenchKnowledgeAgent(db:D1Database,ownerId:string,origi
   }catch{return [...documents,...lexical];}
  };
  const prepareProperty=(request:KnowledgeAgentRequest)=>preparePropertyKnowledge(db,ownerId,request,{...(scoped?{departmentId:options.departmentId}:{}),...(!scoped&&libraryIds!==undefined?{libraryIds}:{}),generate:options.generate});
- const tools={retrieve:async(query:string)=>prefetched??retrieve(query),generate:options.generate};
+ function toolsForTurn():KnowledgeAgentTools {
+  const cached=prefetched;
+  prefetched=undefined;
+  return {retrieve:async query=>cached?.query===query?cached.evidence:retrieve(query),generate:options.generate};
+ }
  return {
-  preflight:async(query:string)=>{const snapshot=await store.snapshot();prefetched=await retrieve(query);return {department:options.departmentId??null,libraryIds:snapshot.libraries.map(l=>l.id).slice(0,100),sourceIds:prefetched.map(e=>e.id).slice(0,20),status:'ok' as const};},
-  prepare:async(request:KnowledgeAgentRequest)=>(await prepareProperty(request))??prepareKnowledgeContext(request,tools),
+  preflight:async(query:string)=>{
+   const snapshot=await store.snapshot();
+   const evidence=await retrieve(query);
+   prefetched={query,evidence};
+   return {department:options.departmentId??null,libraryIds:snapshot.libraries.map(l=>l.id).slice(0,100),sourceIds:evidence.map(e=>e.id).slice(0,20),status:'ok' as const};
+  },
+  async prepare(request:KnowledgeAgentRequest) {
+   const tools=toolsForTurn();
+   return (await prepareProperty(request))??prepareKnowledgeContext(request,tools);
+  },
   async answer(request: KnowledgeAgentRequest) {
+   const tools=toolsForTurn();
    const customerReply = request.audience === 'customer';
    const max = Math.max(1, Math.min(customerReply ? CUSTOMER_REPLY_MAX_CHARS : 12000,
     request.maxAnswerChars ?? (customerReply ? CUSTOMER_REPLY_MAX_CHARS : 2000)));

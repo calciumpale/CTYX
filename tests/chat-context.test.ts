@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DomainError, executeAction } from '../app/lib/domain.ts';
-import type { GenerationInput } from '../app/lib/domain.ts';
+import type { ActionContext, GenerationInput } from '../app/lib/domain.ts';
 import { createSeed } from '../app/lib/seed.ts';
 import type { Run, Workflow } from '../app/lib/types.ts';
 import { buildModelMessages } from '../app/lib/model-messages.ts';
@@ -119,6 +119,30 @@ test('chat persists resolved property filters and only forwards the latest serve
   assert.equal(request.propertyQuery,undefined,'a non-property latest run cannot supply stored filters');
   return {route:'no_evidence',answer:'没有匹配',knowledge:[],evidenceIds:[],recordLookup:{kind:'property',total:0,complete:true}};
  }});
+});
+
+
+test('a new property search starts from its own constraints after an unrelated property lookup', async () => {
+  const state = createSeed(now);
+  const deal = state.deals.find(item => item.ownerId === 'sales-1')!;
+  const oldQuery: PropertyQuery = { status: 'vacant', minArea: 120, groups: [{field: 'location', values: ['甲园']}], page: 3, pageSize: 10 };
+  const first = await executeAction(state, 'sales', 'chat', { query: '找甲园120平以上空置房源', dealId: deal.id }, {
+    now,
+    prepareKnowledge: async () => ({
+      route: 'retrieved', answer: '甲园房源', knowledge: [], evidenceIds: [],
+      recordLookup: { kind: 'property', total: 30, complete: true, query: oldQuery },
+    }),
+  });
+  const nextQuery = '帮我查乙园80平方米的在租房源';
+  await executeAction(first.state, 'sales', 'chat', { query: nextQuery, dealId: deal.id, conversationRunIds: [first.run!.id] }, {
+    now,
+    prepareKnowledge: async request => {
+      assert.equal(request.propertyQuery, undefined);
+      assert.deepEqual(request.history, []);
+      assert.equal(request.retrievalQuery, nextQuery);
+      return { route: 'no_evidence', answer: '乙园没有明确匹配', knowledge: [], evidenceIds: [], recordLookup: { kind: 'property', total: 0, complete: true } };
+    },
+  });
 });
 
 test('chat recalls bounded memory for its resolved project and presents it as reference', async () => {
@@ -360,7 +384,7 @@ test('an explicit topic reset overrides incidental pronouns in a new question',a
   assert.deepEqual(inputs[1].deals,[]);
   assert.equal(inputs[1].agentId,'insight');
   assert.deepEqual(inputs[1].knowledge,[]);
-  assert.deepEqual(inputs[1].history,[{query:first.run!.query,answer:first.run!.answer}]);
+  assert.deepEqual(inputs[1].history,[]);
 });
 
 test('an explicitly named new customer overrides a previous customer in a followup',async()=>{
@@ -378,6 +402,134 @@ test('explicit intent in a followup overrides the previous specialist route',asy
   await executeAction(first.state,'manager','chat',{query:'那他们的拜访方案怎么准备？',conversationRunIds:[first.run!.id]},context);
   assert.deepEqual(inputs.slice(1).map(input=>input.agentId),['insight','strategy']);
   assert.ok(inputs.slice(1).every(input=>input.deal?.name==='澄光咖啡'));
+});
+
+
+test('a fresh question sends only its own evidence and never reuses the previous answer as retrieval context', async () => {
+  const firstQuery = '员工停车可以停哪里？';
+  const nextQuery = '访客怎么预约入园？';
+  const oldAnswer = '员工应停在甲区。';
+  const newAnswer = '访客可以通过前台登记入园。';
+  const requests: Parameters<NonNullable<ActionContext['prepareKnowledge']>>[0][] = [];
+  const inputs: GenerationInput[] = [];
+  const context: ActionContext = {
+    now,
+    prepareKnowledge: async request => {
+      requests.push(request);
+      return {
+        route: 'retrieved', evidenceIds: [], knowledge: [{
+          id: request.question === firstQuery ? 'parking' : 'visitors',
+          title: request.question === firstQuery ? '停车说明' : '来访指引',
+          content: request.question === firstQuery ? oldAnswer : newAnswer,
+        }],
+      };
+    },
+    generate: async input => {
+      inputs.push(input);
+      return { answer: input.knowledge[0].content, mode: 'live' };
+    },
+  };
+  const first = await executeAction(createSeed(now), 'sales', 'chat', { query: firstQuery }, context);
+  const next = await executeAction(first.state, 'sales', 'chat', { query: nextQuery, conversationRunIds: [first.run!.id] }, context);
+  assert.equal(requests[1].audience, 'workspace');
+  assert.equal(requests[1].retrievalQuery, nextQuery);
+  assert.deepEqual(requests[1].history, []);
+  assert.deepEqual(inputs[1].history, []);
+  assert.deepEqual(inputs[1].knowledge.map(item => item.id), ['visitors']);
+  const messages = buildModelMessages(inputs[1]);
+  assert.doesNotMatch(messages.map(message => message.content).join('\n'), /员工应停在甲区|停车说明/);
+  assert.ok(messages.at(-1)?.content.endsWith(nextQuery));
+  assert.match(next.run!.answer, /访客可以通过前台登记入园/);
+  assert.deepEqual(next.run!.citations.map(item => item.id), ['visitors']);
+});
+
+test('a project follow-up retains the immediate topic and refreshes evidence without forwarding old model text to the knowledge router', async () => {
+  const state = createSeed(now);
+  const deal = state.deals.find(item => item.ownerId === 'sales-1')!;
+  const firstQuery = '为此项目准备一次拜访方案';
+  const followup = '再详细一点';
+  const requests: Parameters<NonNullable<ActionContext['prepareKnowledge']>>[0][] = [];
+  const inputs: GenerationInput[] = [];
+  const context: ActionContext = {
+    now,
+    prepareKnowledge: async request => {
+      requests.push(request);
+      return { route: 'retrieved', evidenceIds: [], knowledge: [{ id: 'visit', title: '拜访指南', content: '先确认参会人。' }] };
+    },
+    generate: async input => {
+      inputs.push(input);
+      return { answer: '先确认参会人。', mode: 'live' };
+    },
+  };
+  const first = await executeAction(state, 'sales', 'chat', { query: firstQuery, dealId: deal.id, agentId: 'strategy' }, context);
+  await executeAction(first.state, 'sales', 'chat', { query: followup, dealId: deal.id, conversationRunIds: [first.run!.id] }, context);
+  assert.equal(requests[1].retrievalQuery, `${firstQuery}\n${followup}`);
+  assert.deepEqual(requests[1].history, [{ role: 'user', content: firstQuery }]);
+  assert.equal(inputs[1].query, followup);
+  assert.equal(inputs[1].agentId, 'strategy');
+  assert.equal(inputs[1].deal?.id, deal.id);
+  assert.deepEqual(inputs[1].history, [{ query: firstQuery, answer: first.run!.answer }]);
+});
+
+
+test('a fresh question in a selected project receives its current facts without old generated copy', async () => {
+  const state = createSeed(now);
+  const deal = state.deals.find(item => item.ownerId === 'sales-1')!;
+  const first = await executeAction(state, 'sales', 'chat', {
+    query: '为这个项目写一条活动邀请', dealId: deal.id,
+  }, { now, generate: async () => ({ answer: '旧稿标识-活动邀请', mode: 'live' }) });
+  const update = await executeAction(first.state, 'sales', 'deal_note', {
+    dealId: deal.id, text: '客户刚确认周五上午到访。',
+  }, { now });
+  const { inputs, context } = capture();
+  const nextQuery = '项目的到访安排是什么？';
+  await executeAction(update.state, 'sales', 'chat', {
+    query: nextQuery, dealId: deal.id, conversationRunIds: [first.run!.id],
+  }, context);
+  assert.equal(inputs[0].deal?.id, deal.id);
+  assert.deepEqual(inputs[0].history, []);
+  const messages = buildModelMessages(inputs[0]);
+  assert.match(messages.at(-1)!.content, /客户刚确认周五上午到访/);
+  assert.doesNotMatch(messages.map(message => message.content).join('\n'), /旧稿标识/);
+  assert.ok(messages.at(-1)!.content.endsWith(nextQuery));
+});
+
+test('an explicit rewrite still gets the actual preceding generated draft', async () => {
+  const { inputs, context } = capture();
+  const first = await executeAction(createSeed(now), 'sales', 'chat', { query: '写一条活动邀请' }, context);
+  const revision = '把上一版改得更短';
+  await executeAction(first.state, 'sales', 'chat', { query: revision, conversationRunIds: [first.run!.id] }, context);
+  const messages = buildModelMessages(inputs[1]);
+  assert.ok(messages.some(message => message.role === 'assistant' && message.content === first.run!.answer));
+  assert.ok(messages.at(-1)!.content.endsWith(revision));
+});
+
+
+test('rewriting the previous property answer is an edit, not a new inventory search', async () => {
+  const state = createSeed(now);
+  const deal = state.deals.find(item => item.ownerId === 'sales-1')!;
+  const original = '先前显示的房源结果，实际状态待核实。';
+  const first = await executeAction(state, 'sales', 'chat', { query: '帮我查甲园空置房源', dealId: deal.id }, {
+    now,
+    prepareKnowledge: async () => ({
+      route: 'retrieved', answer: original, knowledge: [], evidenceIds: [],
+      recordLookup: { kind: 'property', total: 1, complete: true },
+    }),
+  });
+  const rewrite = '把上一版房源推荐改得更短';
+  const result = await executeAction(first.state, 'sales', 'chat', {
+    query: rewrite, dealId: deal.id, conversationRunIds: [first.run!.id],
+  }, {
+    now,
+    prepareKnowledge: async () => { assert.fail('format-only revision should not run inventory lookup'); },
+    generate: async input => {
+      assert.equal(input.query, rewrite);
+      assert.deepEqual(input.history, [{query:first.run!.query,answer:original}]);
+      assert.match(input.instruction || '', /只改写/);
+      return { answer: '房源状态待核实。', mode: 'live' };
+    },
+  });
+  assert.equal(result.run?.mode, 'live');
 });
 
 test('chat history rejects malformed, missing, inaccessible, and workflow run references',async()=>{

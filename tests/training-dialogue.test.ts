@@ -129,6 +129,16 @@ test('demo reacts to the proposal and scheduling without repeating already resol
   assert.doesNotMatch(answers.slice(1).join(''),/预算.*多少|总成本.*依据|你们.*方案|还需要了解/);
   assert.equal(new Set(answers).size,3);
 });
+test('demo acknowledges a new unresolved question instead of repeating the opening topic', () => {
+  const input={scenario:'免租期异议',profile:profile()};
+  const opening=demoTrainingGenerate({...input,messages:[]});
+  const result=demoTrainingGenerate({...input,messages:[
+    {role:'assistant',content:opening.answer},
+    {role:'user',content:'您通常几点方便沟通？'},
+  ]});
+  assert.match(result.answer,/还没确认|还不确定|没有确定/);
+  assert.doesNotMatch(result.answer,/装修|租金|开业/);
+});
 
 test('appointment acknowledgements extract the time without echoing the salesperson action or pronouns', async () => {
   const {demoTrainingGenerate}=await import('../app/lib/training-dialogue.ts');

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } fr
 import { ArrowDown, ArrowRight, Bell, BookOpen, BriefcaseBusiness, CalendarDays, Check, ChevronDown, ChevronRight, CircleAlert, ClipboardCheck, Clock3, ExternalLink, GitBranch, Globe2, Home, Loader2, LogOut, Menu, MessageSquare, Moon, PanelLeftClose, Presentation, Search, Settings, ShieldCheck, Sun, Users, Video, Workflow, X } from 'lucide-react';
 import { useWorkbench } from '../lib/api';
 import { useChatScroll } from '../lib/use-chat-scroll';
+import { isCompletedChatRun, isMatchingChatRun } from '../lib/chat-request';
 import { canOpenWorkspaceView, readWorkspaceRoute, workspaceManagementNavigation, workspaceNavigation, workspaceSearch, workspaceSection, workspaceTitle } from '../lib/workspace-navigation';
 import { AGENTS, type AgentId, type Run, type View } from '../lib/types';
 import { runGenerationLabel } from '../lib/run-history';
@@ -144,13 +145,21 @@ export default function Workbench({member,onLogout}:{member:MemberSession;onLogo
     if(approvalBusy.current){notify('审批操作正在保存，请等待完成。');return;}
     if(contractBusy.current){notify('合同初审正在进行，请等待完成。');return;}
     if (sending.current) { notify('当前任务正在生成，请等待完成后继续。'); return; }
-    const proceed=()=>{
-    const conversationRunIds=priorRunIds??conversation.filter(run=>!run.workflowId).slice(-6).map(run=>run.id);
-    setChatOpen(true); setChatError(''); setFailedRequest(null); setPendingQuery(query); setChatBusy(true); sending.current = true;
-    void mutate('chat', { query, conversationRunIds,talkTrackIds:talkTrackIds??selectedTalkIds, ...(agentId ? { agentId } : {}), ...(dealId ? { dealId } : {}) }).then(result => {
-      if (result.run) setConversation(old => [...old, result.run!]);
-      else {setChatError('任务未返回结果，请重试。');setFailedRequest({query,agentId,dealId,conversationRunIds,talkTrackIds:talkTrackIds??selectedTalkIds});}
-    }).catch(cause => {setChatError(cause instanceof Error ? cause.message : '任务暂时未完成，请重试。');setFailedRequest({query,agentId,dealId,conversationRunIds,talkTrackIds:talkTrackIds??selectedTalkIds});}).finally(() => { setChatBusy(false); sending.current = false; setPendingQuery(''); });
+    const proceed = () => {
+      if (sending.current) return;
+      const conversationRunIds = priorRunIds ?? conversation
+        .filter(run => isCompletedChatRun(run) && (dealId === undefined || run.dealId === dealId))
+        .slice(-6).map(run => run.id);
+      const request = { query, agentId, dealId, conversationRunIds, talkTrackIds: talkTrackIds ?? selectedTalkIds };
+      setChatOpen(true); setChatError(''); setFailedRequest(null); setPendingQuery(query); setChatBusy(true); sending.current = true;
+      void mutate('chat', request).then(result => {
+        const run = result.run;
+        if (!isMatchingChatRun(run, request)) throw new Error('本次未返回当前问题的完整回答，请重试。');
+        setConversation(old => old.some(item => item.id === run.id) ? old : [...old, run]);
+      }).catch(cause => {
+        setChatError(cause instanceof Error ? cause.message : '任务暂时未完成，请重试。');
+        setFailedRequest(request);
+      }).finally(() => { setChatBusy(false); sending.current = false; setPendingQuery(''); });
     };
     if(studioGuard.current&&!studioGuard.current(proceed)){setChatOpen(false);return;}
     proceed();

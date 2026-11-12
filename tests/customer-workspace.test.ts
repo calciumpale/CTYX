@@ -9,6 +9,8 @@ const seed = createSeed('2026-11-07T08:00:00.000Z');
 const deal = (id: string, name: string, projectName = id): Deal => ({ ...seed.deals[0], id, name, projectName });
 const run = (id: string, dealId: string | undefined, createdAt: string, extra: Partial<Run> = {}): Run => ({ id, dealId, createdAt, query: id, answer: 'result', agentIds: ['insight'], steps: [], citations: [], mode: 'demo', duration: 1, ...extra });
 
+import { isMatchingChatRun } from '../app/lib/chat-request.ts';
+
 test('directory groups only normalized exact company names and sorts independently of input order', () => {
   const input = [deal('z', '  远山科技  '), deal('a', '远山科技'), deal('b', '远山科技有限公司'), deal('c', 'ACME  Labs'), deal('d', 'ＡＣＭＥ Labs')];
   const companies = companyDirectory(input);
@@ -78,4 +80,17 @@ test('workbench response decoding retains JSON domain errors and accepts a valid
   await assert.rejects(readWorkbenchResponse(Response.json({ error: message }, { status: 503 }), fallback), { message });
   const payload = { state: { revision: seed.revision, role: seed.role } };
   assert.deepEqual(await readWorkbenchResponse(Response.json(payload), fallback), payload);
+});
+
+test('a chat response must match the freshly submitted question and selected project', () => {
+  const run: Run = {
+    id: 'fresh', query: '新的问题', answer: '当前回答', dealId: 'project-a', agentIds: ['insight'],
+    steps: [], citations: [], mode: 'live', duration: 0, createdAt: '',
+  };
+  assert.equal(isMatchingChatRun(run, { query: ' 新的问题 ' }), true);
+  assert.equal(isMatchingChatRun(run, { query: '新的问题', dealId: 'project-a' }), true);
+  assert.equal(isMatchingChatRun(run, { query: '上个问题', dealId: 'project-a' }), false);
+  assert.equal(isMatchingChatRun(run, { query: '新的问题', dealId: 'project-b' }), false);
+  assert.equal(isMatchingChatRun({ ...run, answer: ' ' }, { query: '新的问题' }), false);
+  assert.equal(isMatchingChatRun({ ...run, status: 'failed' }, { query: '新的问题' }), false);
 });

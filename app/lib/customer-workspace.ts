@@ -1,4 +1,5 @@
 import type { AgentId, Deal, Run } from './types.ts';
+import { isCompletedChatRun } from './chat-request.ts';
 
 export interface CustomerCompany { key: string; name: string; projects: Deal[]; }
 export interface CustomerChatRequest { query: string; dealId: string; conversationRunIds: string[]; agentId?: AgentId; }
@@ -35,6 +36,6 @@ export function customerChatHistory(runs: readonly Run[], dealId?: string | null
   return runs.filter(run => run.dealId === dealId && !run.workflowId).sort((a, b) => (Date.parse(a.createdAt) || 0) - (Date.parse(b.createdAt) || 0) || compare(a.id, b.id));
 }
 export function buildCustomerChatRequest({ query, dealId, runs, agentId }: { query: string; dealId: string; runs: readonly Run[]; agentId?: AgentId }): CustomerChatRequest {
-  const history = customerChatHistory(runs, dealId).filter(run => (!run.status || run.status === 'completed') && !run.steps.some(step => step.status === 'error'));
+  const history = customerChatHistory(runs, dealId).filter(isCompletedChatRun);
   return { query, dealId, conversationRunIds: history.slice(-6).map(run => run.id), ...(agentId ? { agentId } : {}) };
 }

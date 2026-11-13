@@ -319,8 +319,8 @@ test('scoped insight follows up for the same deal while explicit price questions
   assert.deepEqual(modelInputs[1].history,[{query,answer:first.run!.answer}]);
   const result=await executeAction(detail.state,'sales','chat',{query:'这个项目的商铺月租多少？',dealId:deal.id,agentId:'insight',conversationRunIds:[first.run!.id,detail.run!.id]},context);
   assert.equal(modelInputs.length,2);
-  assert.match(result.run!.answer,/资料不足/);
-  assert.match(result.run!.answer,/请核对当前商铺的月租报价/);
+  assert.equal(result.run!.answer,'请核对当前商铺的月租报价。');
+  assert.deepEqual(result.run?.citations,[]);
   assert.equal(result.run?.mode,'live');
 });
 

@@ -37,7 +37,8 @@ type Scenario = {
   question: string;
   useDeal?: boolean;
   candidates: KnowledgeAgentCandidate[];
-  replies: Partial<Record<Phase, string>>;
+  replies: Partial<Record<Phase, string | string[]>>;
+  requireNarrative?: boolean;
   projectProfile?: NonNullable<ReturnType<typeof createSeed>['deals'][number]['companyProfile']>;
   searchCompanyExpansion?: ActionContext['searchCompanyExpansion'];
 };
@@ -81,7 +82,8 @@ async function runChat(scenario: Scenario) {
       assert.equal(request.headers.authorization, `Bearer ${model.key}`);
       assert.equal(payload.model, model.name);
       const phase = sentPhases[calls.length];
-      const reply = scenario.replies[phase];
+      const configured = scenario.replies[phase];
+      const reply = Array.isArray(configured) ? configured[calls.filter(call => call.phase === phase).length] : configured;
       calls.push({ phase, messages: payload.messages });
       assert.equal(typeof reply, 'string', `unexpected model phase: ${phase}`);
       response.writeHead(200, { 'Content-Type': 'application/json' });
@@ -114,6 +116,7 @@ async function runChat(scenario: Scenario) {
       conversationRunIds: [prior.id],
     }, {
       now, generate: generate('answer'), generateInsight: generate('insight'),
+      requireNarrative: scenario.requireNarrative,
       searchCompanyExpansion: scenario.searchCompanyExpansion,
       prepareKnowledge: async request => {
         requests.push(request);
@@ -143,6 +146,67 @@ async function runChat(scenario: Scenario) {
 }
 
 const userPayload = (call: Call) => call.messages.filter(message => message.role === 'user').at(-1)?.content ?? '';
+
+test('the screenshot question saves the final model prose without a fixed heading or opening', async () => {
+  const answer = '目前还不能判断这家客户是否需要租赁场地。仅凭餐饮行业背景，我会先把它当成待跟进的线索。\n\n如果你想尽快确认，先问拓展团队近期是否在看新铺，或者已有门店准备续租、搬迁。';
+  const result = await runChat({
+    question: demandQuestion, useDeal: true, candidates: [], requireNarrative: true,
+    replies: { insight: JSON.stringify({ answer, status: 'unconfirmed', factIds: [] }) },
+  });
+  assert.deepEqual(result.calls.map(call => call.phase), ['insight']);
+  assert.equal(result.run.answer, answer);
+  assert.deepEqual(result.run.citations, []);
+});
+
+test('model prose uses a verified customer quote without including unrelated reference IDs', async () => {
+  const answer = '可以继续跟进租赁意向。项目里有这一条原话。\n\n> [[current-demand]]\n\n下一步建议确认目前在看的商圈。';
+  const result = await runChat({
+    question: demandQuestion, useDeal: true, candidates: [background, demandSource], requireNarrative: true,
+    replies: { evidence: selection(demandSource), insight: JSON.stringify({ answer, status: 'recorded', factIds: [demandSource.id, background.id] }) },
+  });
+  assert.equal(result.run.answer, answer.replace('[[current-demand]]', demandSource.content));
+  assert.deepEqual(result.run.citations.map(item => item.id), [demandSource.id]);
+});
+
+test('a template-only response from the provider gets one repair and saves the repaired model prose', async () => {
+  const answer = '租赁需求还需要向客户确认。建议先问近期有没有新增或调整门店的安排。';
+  const result = await runChat({
+    question: demandQuestion, useDeal: true, candidates: [], requireNarrative: true,
+    replies: { insight: [demandAnswer('unconfirmed', []), JSON.stringify({ answer, status: 'unconfirmed' })] },
+  });
+  assert.deepEqual(result.calls.map(call => call.phase), ['insight', 'insight']);
+  assert.match(result.calls[1].messages[0].content, /重新写出简明的 answer 正文/);
+  assert.equal(result.run.answer, answer);
+});
+
+test('official-record help retains model wording and resolves only an approved verification link', async () => {
+  const opening = '这个问题需要按企业全称核对，手上的资料不能确认有没有行政处罚。';
+  const result = await runChat({
+    question: '这家公司的行政处罚记录怎么查？', useDeal: true, candidates: [], requireNarrative: true,
+    replies: { route: '{"action":"retrieve"}', insight: JSON.stringify({ answer: `${opening}\n\n> [[registry]]` }) },
+  });
+  assert.ok(result.run.answer.startsWith(`${opening}\n\n`));
+  assert.match(result.run.answer, /国家企业信用信息公示系统.*https:\/\/www\.gsxt\.gov\.cn/);
+  assert.deepEqual(result.run.citations, []);
+});
+
+test('explicit rental research sends just the company name to search and lets the model state the result', async () => {
+  const answer = '暂时没有足够的信息确认租赁需求。建议先核实拓展团队是否在寻找新店场地。';
+  let searched = false;
+  const result = await runChat({
+    question: demandQuestion, useDeal: true, candidates: [], requireNarrative: true,
+    searchCompanyExpansion: async input => {
+      searched = true;
+      assert.deepEqual(input, { name: company });
+      return { companyName: company, summary: '', status: 'partial', provider: 'web', modelUsed: false, warnings: [], updatedAt: now,
+        facts: [], sources: [] };
+    },
+    replies: { insight: JSON.stringify({ status: 'unconfirmed', answer }) },
+  });
+  assert.equal(searched, true);
+  assert.match(result.calls[0].messages[0].content, /公开检索未找到/);
+  assert.equal(result.run.answer, answer);
+});
 
 test('customer demand research reaches the insight model without borrowing a company directory or another customer', async () => {
   const result = await runChat({
@@ -214,7 +278,7 @@ test('when a public search fails, the final model still offers useful conditiona
     searchCompanyExpansion: async () => { throw new Error('search provider timeout'); },
     replies: { insight: demandAnswer('unconfirmed', []) },
   });
-  assert.match(result.run.answer, /公开检索暂时未完成/);
+  assert.match(result.run.steps.map(step => step.detail).join('\n'), /公开检索暂时未完成/);
   assert.match(result.run.answer, /向该客户的拓展负责人确认租赁计划/);
   assert.deepEqual(result.run.citations, []);
 });
@@ -267,16 +331,16 @@ test('a workplace policy answer cites only its current selected evidence', async
 });
 
 test('a workplace policy question without current evidence gets a bounded model answer and no citations', async () => {
+  const answer = '我手上没有适用于你的差旅制度，无法确认公司的提交期限。\n\n差旅报销通常包括整理凭证、提交申请和财务审核。\n\n建议先确认适用的报销流程。';
   const result = await runChat({
     question: policyQuestion, candidates: [background],
-    replies: { evidence: selection(), answer: '建议先确认适用的报销流程。' },
+    replies: { evidence: selection(), answer },
   });
   assert.deepEqual(result.calls.map(call => call.phase), ['evidence', 'answer']);
   assert.deepEqual(result.queries, [policyQuestion]);
   assert.equal(result.prepared[0].route, 'no_evidence');
   assert.doesNotMatch(userPayload(result.calls[1]), /directory-only|从事餐饮经营/);
-  assert.match(result.run.answer, /资料不足/);
-  assert.match(result.run.answer, /建议先确认适用的报销流程/);
+  assert.equal(result.run.answer, answer);
   assert.deepEqual(result.run.citations, []);
 });
 
@@ -310,7 +374,7 @@ test('conflicting current policy records reach the final model without either di
   assert.equal(result.prepared[0].route, 'conflict');
   assert.deepEqual(result.prepared[0].evidenceIds, records.map(record => record.id));
   assert.doesNotMatch(userPayload(result.calls[1]), /policy-[35]-days|[35]个工作日/);
-  assert.match(result.run.answer, /资料存在冲突/);
+  assert.match(result.run.steps.map(step => step.detail).join('\n'), /内容冲突的资料/);
   assert.match(result.run.answer, /请核对财务部门发布的现行报销要求/);
   assert.deepEqual(result.run.citations, []);
 });

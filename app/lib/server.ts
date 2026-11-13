@@ -135,7 +135,10 @@ export async function mutateWorkbench(userId:string,role:Role,action:string,payl
     let qcc:Awaited<ReturnType<typeof readEffectiveCompanyConnection>>=null;
     let jinghai:Awaited<ReturnType<typeof readEffectiveJinghaiConnection>>=null;
     const issues:string[]=[];
-    try{jinghai=await readEffectiveJinghaiConnection(userId);}catch{issues.push('鲸海数据配置暂时无法读取，请在服务连接中检查凭证。');}
+    try{
+      jinghai=await readEffectiveJinghaiConnection(userId);
+      if(!jinghai)issues.push('鲸海数据未配置或未启用，本轮未调用。');
+    }catch{issues.push('鲸海数据配置暂时无法读取，请在服务连接中检查凭证。');}
     try{qcc=await readEffectiveCompanyConnection(userId);}catch{issues.push('企查查配置暂时无法读取，请在服务连接中检查凭证。');}
     const profile=await researchCompany(deal,{qcc,jinghai,model});
     profile.warnings.unshift(...issues);

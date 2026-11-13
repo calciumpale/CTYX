@@ -61,6 +61,13 @@ export function isCustomerProfileRequest(query: string): boolean {
   }));
 }
 
+export function isCustomerProfileRefreshRequest(query: string): boolean {
+  const keepExisting = /(?:仅|只)(?:用|查|看|检索)(?:现有|当前|本项目|已有|内部|知识库)|(?:不要|不用|别|无需)(?:联网|上网|搜公开|查公开|刷新|更新|补全)/;
+  if (keepExisting.test(query)) return false;
+  return query.split(/[。！？!?，,；;\n]/).some(part =>
+    isCustomerProfileRequest(part) && /补全|完善|更新|刷新|重新(?:查|搜|核对|整理)|(?:查|核对)(?:一下|下)?最新/.test(part));
+}
+
 export function isCustomerInsightQuestion(query: string, previousQuery?: string): boolean {
   if (/租金|月租|报价|库存|房源|空铺|转让费|折扣|优惠|押金|免租|政策|制度|合同/.test(query)) return false;
   const assessment = /洞察|画像|对接|切入点|梳理|了解|看看|看一下|介绍|分析|怎么样|怎么评价|怎么看|(?:公司|企业)(?:背景|简介)|主营|营收|营业额|经营范围|法定代表人|注册资本|成立时间/;

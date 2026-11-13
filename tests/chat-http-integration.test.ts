@@ -142,7 +142,7 @@ async function runChat(scenario: Scenario) {
     assert.equal(result.run.mode, scenario.expectedMode ?? 'live');
     assert.doesNotMatch(JSON.stringify(result.run), /历史回合专用标记|previous-turn-only|合成旧任务/);
     assert.doesNotMatch(JSON.stringify(calls), /历史回合专用标记|previous-turn-only|合成旧任务/);
-    return { run: result.run, calls, requests, queries, prepared };
+    return { run: result.run, calls, requests, queries, prepared, deal: result.state.deals.find(item => item.id === deal.id) };
   } finally {
     await new Promise<void>((resolve, reject) => fixture.close(error => error ? reject(error) : resolve()));
   }
@@ -173,6 +173,42 @@ test('a compound insight keeps verified profile and safe prose when part of the 
   assert.match(result.run.answer, /尚未确认|无法确认/);
   assert.doesNotMatch(result.run.answer, /已决定|invented-source/);
   assert.deepEqual(result.run.citations.map(item => item.title), ['合成企业登记资料']);
+});
+
+test('explicit profile completion refreshes a sourced public lead before composing the compound answer', async () => {
+  const result = await runChat({
+    question: compoundQuestion, useDeal: true, candidates: [], requireNarrative: true, projectProfile: registryProfile,
+    enrichCompany: async () => ({ ...registryProfile, provider: 'jinghai',
+      facts: [{ label: '经营状态', value: '存续', sourceIds: ['jinghai-company'] }],
+      sources: [{ ...registryProfile.sources[0], id: 'jinghai-company', provider: 'jinghai', title: '鲸海工商资料' }],
+    }),
+    replies: { insight: JSON.stringify({ status: 'unconfirmed', answer: '先看本轮取得的企业资料。\n\n> [[fact-1]]\n\n目前无法确认其是否有扩店需求。' }) },
+  });
+  assert.match(userPayload(result.calls[0]), /鲸海工商资料/);
+  assert.match(result.run.answer, /存续/);
+  assert.deepEqual(result.run.citations.map(item => item.title), ['鲸海工商资料']);
+  assert.ok(result.run.steps.some(step => /鲸海数据接口/.test(step.detail)));
+});
+
+test('a profile refresh keeps the saved sources when research falls back to public search', async () => {
+  const result = await runChat({
+    question: '更新工商登记信息', useDeal: true, candidates: [], requireNarrative: true, projectProfile: registryProfile,
+    enrichCompany: async () => ({ ...registryProfile, provider: 'web', status: 'partial', facts: [], sources: [], warnings: ['鲸海数据暂未返回匹配资料'] }),
+    replies: { route: '{"action":"retrieve"}', insight: JSON.stringify({ answer: '我先列出目前有出处的企业资料。\n\n> [[fact-1]]' }) },
+  });
+  assert.deepEqual(result.deal?.companyProfile, registryProfile);
+  assert.deepEqual(result.run.citations.map(item => item.title), ['合成企业登记资料']);
+  assert.ok(result.run.steps.some(step => /保留已保存的画像.*鲸海数据/.test(step.detail)));
+});
+
+test('reading the saved profile does not spend another company lookup', async () => {
+  const result = await runChat({
+    question: '看看已有企业画像', useDeal: true, candidates: [], requireNarrative: true, projectProfile: registryProfile,
+    enrichCompany: async () => { assert.fail('reading a saved profile must not call company research'); },
+    replies: { route: '{"action":"retrieve"}', insight: JSON.stringify({ answer: '这是项目里保存的企业资料。\n\n> [[fact-1]]' }) },
+  });
+  assert.deepEqual(result.run.citations.map(item => item.title), ['合成企业登记资料']);
+  assert.ok(!result.run.steps.some(step => step.title === '检索企业公开资料'));
 });
 
 test('a compound insight still returns its verified profile after two unusable model outputs', async () => {

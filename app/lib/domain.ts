@@ -17,7 +17,7 @@ import { defaultTrainingProfile, validateTrainingProfile } from './training-prof
 import { demoTrainingGenerate } from './training-dialogue.ts';
 import type { TrainingGenerationInput } from './training-dialogue.ts';
 import type { AgentMemoryContext } from './agent-memory-types.ts';
-import { CUSTOMER_DEMAND_INSTRUCTION, CUSTOMER_INSIGHT_INSTRUCTION, CUSTOMER_RECORD_INSTRUCTION, customerDemandEvidence, customerInsightEvidence, formatCustomerDemand, formatCustomerEvidenceQuote, formatCustomerInsightResult, formatCustomerRecordResult, isCustomerDemandFollowup, isCustomerDemandQuestion, isCustomerInsightQuestion, isCustomerProfileRequest, isCustomerRecordFollowup, isCustomerRecordQuestion, supportsDemand, type CustomerInsightEvidence } from './customer-insight.ts';
+import { CUSTOMER_DEMAND_INSTRUCTION, CUSTOMER_INSIGHT_INSTRUCTION, CUSTOMER_RECORD_INSTRUCTION, customerDemandEvidence, customerInsightEvidence, formatCustomerDemand, formatCustomerEvidenceQuote, formatCustomerInsightResult, formatCustomerRecordResult, isCustomerDemandFollowup, isCustomerDemandQuestion, isCustomerInsightQuestion, isCustomerProfileRefreshRequest, isCustomerProfileRequest, isCustomerRecordFollowup, isCustomerRecordQuestion, supportsDemand, type CustomerInsightEvidence } from './customer-insight.ts';
 import { isPropertyQuestion, parsePropertyPageRequest } from './property-query.ts';
 import { isCompletedChatRun } from './chat-request.ts';
 
@@ -586,6 +586,7 @@ async function buildRun(state:StoredState,role:Role,query:string,context:ActionC
   const explicitPropertyQuestion=!revision&&!demandQuestion&&!missingDemandSubject&&isPropertyQuestion(query);
   const propertyQuestion=explicitPropertyQuestion||propertyContinuation;
   const profileAndDemand=demandQuestion&&isCustomerProfileRequest(query);
+  const refreshProfile=!revision&&!propertyQuestion&&isCustomerProfileRefreshRequest(query);
   const followup=sameContext&&(demandContinuation||propertyContinuation||!explicitPropertyQuestion&&(!demandQuestion||!directDeal)&&(isFollowup(query)||!!recordTopic));
   const deal=directDeal??(followup?chooseDeal(state,role,latest!.query,latest!.dealId):undefined);
   const history=revision?boundedConversation([latest!]):followup?boundedConversation(thread):[];
@@ -595,12 +596,12 @@ async function buildRun(state:StoredState,role:Role,query:string,context:ActionC
   if (checkRecords && !context.generateInsight) fail('客户洞察需要大模型。请在设置的「服务连接」中配置并启用大模型后重试。', 503);
   const explicitIntent=/培训|练习|带练|扮演|陪练|风险|合同|免租|审批|合规|资质|违约|授权|优先|预测|健康|本周|商机|漏斗|推进|拜访|方案|策略|开场|话术|谈判/.test(query);
   const inheritedRoute=followup&&!explicitIntent?latest!.agentIds.filter(id=>agentIds.has(id)):[];
-  const routed:AgentId[]=checkRecords||demandQuestion&&deal?['insight']:options.agentId?[options.agentId as AgentId]:inheritedRoute.length?inheritedRoute:routeAgents(query);
+  const routed:AgentId[]=checkRecords||deal&&(demandQuestion||refreshProfile)?['insight']:options.agentId?[options.agentId as AgentId]:inheritedRoute.length?inheritedRoute:routeAgents(query);
   const previousInsight = followup && latest?.dealId === deal?.id && latest?.agentIds.includes('insight')
     ? thread.findLast(run => run.agentIds.includes('insight') && isCustomerInsightQuestion(run.query))
     : undefined;
   const insightKind:CustomerInsightKind=checkRecords?'records':demandQuestion?'demand':'profile';
-  const insightGenerator = !revision && !propertyQuestion && deal && routed.includes('insight') && (checkRecords || demandQuestion || isCustomerInsightQuestion(query, previousInsight?.query)) ? context.generateInsight : undefined;
+  const insightGenerator = !revision && !propertyQuestion && deal && routed.includes('insight') && (checkRecords || demandQuestion || refreshProfile || isCustomerInsightQuestion(query, previousInsight?.query)) ? context.generateInsight : undefined;
   if(demandQuestion&&deal&&!insightGenerator)fail('客户需求调研需要大模型。请在设置的「服务连接」中配置并启用大模型后重试。',503);
   const retrievalQuery=followup&&!propertyQuestion?[...new Set([history[0]?.query,latest!.query,query])].filter(Boolean).join('\n'):query;
   const agentMemory = revision || checkRecords || demandQuestion || missingDemandSubject || propertyQuestion ? undefined : await context.recallAgentMemory?.(retrievalQuery, deal?.id);
@@ -645,13 +646,19 @@ async function buildRun(state:StoredState,role:Role,query:string,context:ActionC
   };
     step('主 Agent 识别意图',`${role==='manager'?'销售管理者':'销售'}主 Agent ${options.agentId?'按指定专家':inheritedRoute.length?'沿用当前对话专家':'按问题关键词路由'}至${routed.map(agentName).join('、')}。`);
     if(agentMemory?.index.length) step('读取 Agent 记忆',`加载 ${agentMemory.index.length} 个主题索引，读取 ${agentMemory.topics.length} 条相关经验。`);
-    if(insightGenerator&&deal&&!deal.companyProfile?.sources.length&&((insightKind==='profile'&&deal.dataOrigin==='manual')||(profileAndDemand&&(deal.dataOrigin==='manual'||deal.dataOrigin==='research')))) {
+    const shouldEnrich=deal&&(deal.dataOrigin==='manual'||deal.dataOrigin==='research')&&
+      (refreshProfile||!deal.companyProfile?.sources.length&&(profileAndDemand||insightKind==='profile'&&deal.dataOrigin==='manual'));
+    if(insightGenerator&&deal&&shouldEnrich) {
       const tick=Date.now();
+      const previousProfile=deal.companyProfile;
       try {
-        deal.companyProfile=await enrichDeal(deal,context);deal.version++;
-        step('检索企业公开资料',`${deal.companyProfile.provider==='qcc'?'企查查接口':deal.companyProfile.provider==='jinghai'?'鲸海数据接口':'公开网络检索'}；取得${deal.companyProfile.sources.length}个来源。${deal.companyProfile.warnings.join('；')}`,deal.companyProfile.status==='partial'?'warning':'success','insight',Date.now()-tick);
+        const profile=await enrichDeal(deal,context);
+        const preserve=!!previousProfile?.sources.length&&(!profile.facts.length||!profile.sources.length||profile.provider==='web');
+        if(!preserve){deal.companyProfile=profile;deal.version++;}
+        const provider=profile.provider==='qcc'?'企查查接口':profile.provider==='jinghai'?'鲸海数据接口':'公开网络检索';
+        step('检索企业公开资料',`${provider}；取得 ${profile.sources.length} 个来源、${profile.facts.length} 项资料。${preserve?'保留已保存的画像。':''}${profile.warnings.join('；')}`,preserve||profile.status==='partial'?'warning':'success','insight',Date.now()-tick);
       }catch {
-        step('检索企业公开资料','企业资料补全暂时未完成，本次仅依据已填写的项目资料回答；未核验信息保持未知。','warning','insight',Date.now()-tick);
+        step('检索企业公开资料',`企业资料补全暂时未完成。${previousProfile?.sources.length?'保留已保存的画像。':'本轮使用项目中的现有资料。'}`,'warning','insight',Date.now()-tick);
       }
     }
     const prepared=needsSharedKnowledge?await context.prepareKnowledge?.({

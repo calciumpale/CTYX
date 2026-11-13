@@ -553,7 +553,10 @@ async function generateCustomerInsight(input:GenerationInput,deal:Deal,generate:
   if(formatted)return {...formatted,modelName:result.modelName};
   if(requireNarrative){
     try{
-      const retry=await generate({...request,instruction:`${instruction}\n请重新写出简明的 answer 正文。先用自然语言回答资料能够支持的部分，无法核实的企业事实请省略。直接展示原文时，只用已提供的来源标记。`});
+      const retryInstruction=kind==='records'
+        ?'请只写两句普通中文正文：一句直接说明资料范围或待核实的问题，一句给出下一步。涉及具体记录时另起一行写 > [[证据ID]]，勿复述具体事实。'
+        :'请重新写出简明的 answer 正文。先用自然语言回答资料能够支持的部分，无法核实的企业事实请省略。直接展示原文时，只用已提供的来源标记。';
+      const retry=await generate({...request,instruction:`${instruction}\n${retryInstruction}`});
       const repaired=retry.mode==='live'?format(retry.answer):undefined;
       if(repaired)return {...repaired,modelName:retry.modelName};
     }catch(error){if(!(error instanceof DomainError))throw error;}

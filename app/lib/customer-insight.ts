@@ -92,18 +92,20 @@ const recordChecks = {
 
 const narrativeInstruction = '在 answer 中用自然的 Markdown 直接回答当前问题，按需要说明不确定性并给具体核实建议。不要套用固定标题或段落。需要展示证据原文时单独起一行写 > [[证据ID]]，只填本轮确实使用的 ID。服务器会替换标记，不要自己转述事实、编写引文或添加链接。';
 
-export const CUSTOMER_RECORD_INSTRUCTION = `根据本轮知识库和公开检索结果直接回答用户当前问题。只返回 JSON 对象 {"answer":"你的回答"}。${narrativeInstruction} 有相关资料时，先用自己的话概括本轮能确认的范围，再用本轮证据标记展示支持回答的记录。具体主体、时间、金额和处理结果从证据原文展示。公开搜索摘要只作为待核实线索。门店、分支或关联主体的记录不能归给公司本级。未找到匹配资料时，说明这次查了什么、能确认什么，继续给出适用的核实办法；检索未命中不能推断企业没有记录。根据本轮查询状态回答，不能声称查过未访问的官方记录库。确有需要时可用标记补充核验入口：registry（行政处罚、经营异常和严重违法失信）；penalties（已公示行政处罚）；enforcement（司法执行、失信被执行人）；food（食品安全抽检）。`;
+export const CUSTOMER_RECORD_INSTRUCTION = '直接用自然语言回答当前问题，输出普通 Markdown 正文。先用一两句说明现有资料支持到哪一层，再用单独一行 > [[证据ID]] 展示每条相关证据。服务器会替换标记和添加链接，正文不要转写金额、日期、案件数量、处罚结论或地址。只有门店资料时，可以说「目前能看到的是门店层面的公开线索。公司本级是否有处罚记录还不能确认。」根据证据和用户问法调整。公开搜索摘要只是待核实线索，门店和关联主体的记录要标明范围。缺少资料时仍要直接回答，说明哪项无法确认，并给针对性的核实办法。不要把检索未命中写成没有记录，也不要声称查过官方数据库。需要时可另用 > [[registry]]（企业登记、经营异常）、> [[penalties]]（行政处罚）、> [[enforcement]]（司法执行）或 > [[food]]（食品抽检）提供相应核验入口。不要输出 JSON、代码围栏或固定模板。';
 
 export function formatCustomerRecordAnswer(raw: string, requireNarrative = false): string | undefined {
   return formatCustomerRecordResult(raw, requireNarrative)?.answer;
 }
 
 export function formatCustomerRecordResult(raw: string, requireNarrative = false, evidence: CustomerInsightEvidence[] = []): CustomerInsightResult | undefined {
-  const output = insightObject(raw);
+  const text = raw.trim().replace(/^```(?:markdown|md|text|json)?[ \t]*\r?\n([\s\S]+?)\r?\n```$/i, '$1');
+  const output = insightObject(text);
   if (requireNarrative || evidence.length || output && Object.hasOwn(output, 'answer')) {
     const quotes = evidenceQuotes(evidence, true);
     for (const [id, link] of Object.entries(recordChecks)) quotes.set(id, link);
-    return renderNarrative(narrativeText(raw, output), quotes, 'records');
+    const looseAnswer = /^\{\s*"answer"\s*:\s*"([\s\S]+)"\s*\}$/.exec(text)?.[1];
+    return renderNarrative(narrativeText(text, output) ?? looseAnswer, quotes, 'records');
   }
   if (!Array.isArray(output?.checks)) return undefined;
   const checks = [...new Set(output.checks)].flatMap(id => typeof id === 'string' && Object.hasOwn(recordChecks, id)

@@ -338,6 +338,16 @@ test('a company-level penalty is answered using the structured record when publi
   assert.deepEqual(result.run.citations.map(item => item.id), ['record-jinghai-1']);
 });
 
+test('a records answer survives a Markdown wrapper or literal newlines from the model', async () => {
+  const prose = '公司本级是否有处罚记录还不能确认。';
+  for(const reply of ['```markdown\n'+prose+'\n\n> [[registry]]\n```', '{"answer":"'+prose+'\n\n> [[registry]]"}']){
+    const result=await runChat({question:'他有没有违规记录',useDeal:true,candidates:[],requireNarrative:true,replies:{insight:reply}});
+    assert.equal(result.calls.filter(call=>call.phase==='insight').length,1);
+    assert.ok(result.run.answer.startsWith(prose));
+    assert.match(result.run.answer,/https:\/\/www\.gsxt\.gov\.cn/);
+  }
+});
+
 test('explicit rental research sends just the company name to search and lets the model state the result', async () => {
   const answer = '暂时没有足够的信息确认租赁需求。建议先核实拓展团队是否在寻找新店场地。';
   let searched = false;

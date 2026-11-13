@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   customerDemandEvidence, customerInsightEvidence, formatCustomerDemand, formatCustomerInsightResult,
-  isCustomerDemandFollowup, isCustomerDemandQuestion,
+  isCustomerDemandFollowup, isCustomerDemandQuestion, isCustomerProfileRequest,
 } from '../app/lib/customer-insight.ts';
 import { createSeed } from '../app/lib/seed.ts';
 import type { Deal } from '../app/lib/types.ts';
@@ -58,6 +58,19 @@ test('leaves inventory requests, offered terms, policy and official records on t
   ]) assert.equal(isCustomerDemandQuestion(query, company), false, query);
 });
 
+test('detects explicit company profile requests alongside demand questions', () => {
+  for (const query of [
+    '这家公司的画像完善一下，搜一下对方有没有扩张的需求',
+    '先整理一下企业画像，再调研客户有没有租房需求', '公司背景和当前租赁计划都看看',
+    '主营业务是什么？另外核实下这家客户的选址需求', '调研一下客户的基本情况和租房需求',
+    '查一下公司工商登记及近期的扩店计划', '做个企业画像，顺便问下场地需求',
+    '根据公开企业资料梳理公司画像，再核实客户有没有扩店需求',
+  ]) assert.equal(isCustomerProfileRequest(query), true, query);
+  for (const query of [leaseQuestion, '根据已有企业画像判断客户是否有租房需求', '用已知的公司背景核实租赁意向', '不要展示企业画像，只核实租房需求']) {
+    assert.equal(isCustomerProfileRequest(query), false, query);
+  }
+});
+
 test('excludes synthetic and public-background information from project demand evidence', () => {
   const publicLead = dealFixture();
   assert.deepEqual(customerDemandEvidence(publicLead), []);
@@ -87,6 +100,52 @@ test('renders public-only demand assessment as unconfirmed, even if the model re
   assert.match(output?.answer ?? '', /现有资料无法确认/);
   assert.match(output?.answer ?? '', /近期是否有新增经营场地的安排/);
   assert.deepEqual(output?.factIds, []);
+});
+
+test('keeps conditional analysis while removing unsupported conclusions and embedded facts', () => {
+  const output = formatCustomerDemand(JSON.stringify({
+    status: 'unconfirmed', factIds: [],
+    insights: [
+      '如果客户确有新店计划，可优先核实目标商圈和开业时间。',
+      '若是现有门店续租，先确认租约到期时间。',
+      '如果客户拓店，那么这家公司肯定会在杭州承租商铺。',
+      '如果客户有拓店计划，可优先核实预算，客户已决定在杭州开店。',
+      '如果客户有拓店计划，可先核实商圈，他们计划本周租店。',
+      '如果客户有拓店计划，可先核实商圈。他们会在杭州租房。',
+      '这家企业很可能正在找新的经营场地。',
+      '如果需要新店，按该客户已有的十万元租金预算筛选。',
+    ],
+    questions: ['请问当前项目由哪个部门负责？'],
+    nextSteps: ['先向现有对接人核实。'],
+  }), [], leaseQuestion);
+  assert.match(output?.answer ?? '', /条件分析/);
+  assert.match(output?.answer ?? '', /优先核实目标商圈和开业时间/);
+  assert.match(output?.answer ?? '', /确认租约到期时间/);
+  assert.doesNotMatch(output?.answer ?? '', /肯定|已决定|计划本周租店|会在杭州租房|很可能正在找|十万元/);
+  assert.match(output?.answer ?? '', /现有资料无法确认/);
+});
+
+test('separates explicitly requested public profile facts from customer demand evidence', () => {
+  const deal = dealFixture();
+  deal.summary = '仅内部项目备注';
+  const temptingProfileFact = { id: 'fact-2', label: '需求', value: '客户正在租用商铺。', source: '企业宣传页', sourceIds: ['brochure'] };
+  const output = formatCustomerDemand(JSON.stringify({
+    status: 'recorded', factIds: ['fact-1', 'fact-2'], profileFactIds: ['fact-1', 'fact-1', 'record-1', 'invented'],
+    insights: ['如果客户有选址计划，可先核实商圈和面积。'], questions: [], nextSteps: [],
+  }), [temptingProfileFact], leaseQuestion, [...customerInsightEvidence(deal), temptingProfileFact]);
+  assert.match(output?.answer ?? '', /公开企业资料[\s\S]*餐饮品牌方[\s\S]*餐饮企业名录/);
+  assert.match(output?.answer ?? '', /现有资料无法确认/);
+  assert.doesNotMatch(output?.answer ?? '', /现有项目资料有相关记录|仅内部项目备注/);
+  assert.deepEqual(output?.factIds, []);
+  assert.deepEqual(output?.profileFactIds, ['fact-1']);
+});
+
+test('does not render unsolicited profile information in a demand-only answer', () => {
+  const output = formatCustomerDemand(JSON.stringify({
+    status: 'unconfirmed', factIds: [], profileFactIds: ['fact-1'], questions: [], nextSteps: [],
+  }), [], leaseQuestion);
+  assert.doesNotMatch(output?.answer ?? '', /公开企业资料/);
+  assert.deepEqual(output?.profileFactIds, []);
 });
 
 test('quotes exact positive or negative customer evidence, with only the IDs displayed', () => {

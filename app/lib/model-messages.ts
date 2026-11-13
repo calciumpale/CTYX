@@ -31,7 +31,7 @@ export function buildModelMessages(input: GenerationInput): ModelMessage[] {
     ...(input.salesScope?{当前销售身份:{salesId:input.salesScope.salesId,displayName:input.salesScope.displayName}}:{}),
     ...(input.purpose==='workflow'?{资料时效:'流程启动时的历史快照，并非当前项目状态；不得据此陈述实时意向评分或最新成交预测。'}:{}),
     ...(!insight && input.instruction ? { 节点配置指令: input.instruction } : {}),
-    ...(insight ? { 当前授权客户: { 公司: input.deal?.name, 项目: input.deal?.projectName }, 客户洞察可用证据: insight }
+    ...(insight ? { 当前授权客户: { 公司: input.deal?.name, 项目: input.deal?.projectName }, 客户洞察可用证据: insight, ...(input.publicCompanyEvidence ? { 公开企业资料: input.publicCompanyEvidence } : {}) }
       : input.deal ? { 当前授权客户: scopedDeal(input.deal) } : input.deals.length ? { 当前授权客户范围: input.deals.map(scopedDeal) } : {}),
     ...(input.projectApprovals?.length?{当前项目人工审批记录:input.projectApprovals}:{}),
     ...(input.contractReviews?.length?{当前项目合同初审记录:input.contractReviews}:{}),

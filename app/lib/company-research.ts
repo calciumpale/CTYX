@@ -138,16 +138,62 @@ function xmlField(item:string,field:'title'|'link'|'description'):string {
   const match=new RegExp(`<${field}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${field}\\s*>`,'i').exec(item);
   return match?clean(decodeEntities(match[1].replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g,'$1').replace(/<[^>]*>/g,'')).replace(/\s+/g,' '),field==='description'?1600:2048):'';
 }
-function rssMaterial(xml:string,companyName:string,now:string):Material {
+function rssMaterial(xml:string,companyName:string,now:string,selection?:{accept:(title:string,snippet:string)=>boolean;limit:number;prefix:string}):Material {
   if(/<!\s*(?:DOCTYPE|ENTITY)\b/i.test(xml)||!/<rss\b/i.test(xml))throw new Error('Unsupported search feed');
   const sources:ResearchSource[]=[];const seen=new Set<string>();
   for(const match of xml.matchAll(/<item(?:\s[^>]*)?>([\s\S]*?)<\/item\s*>/gi)){
     const title=xmlField(match[1],'title');const url=publicUrl(xmlField(match[1],'link'));const snippet=xmlField(match[1],'description');
-    if(!title||!url||!snippet||seen.has(url))continue;seen.add(url);
-    sources.push({id:`web-${sources.length+1}`,title:title.slice(0,240),url,provider:'web',retrievedAt:now,snippet});
-    if(sources.length>=10)break;
+    if(!title||!url||!snippet||seen.has(url)||selection&&!selection.accept(title,snippet))continue;
+    seen.add(url);
+    sources.push({id:`${selection?.prefix??'web'}-${sources.length+1}`,title:title.slice(0,240),url,provider:'web',retrievedAt:now,snippet});
+    if(sources.length>=(selection?.limit??10))break;
   }
   return {companyName,facts:[],sources,provider:'web'};
+}
+
+async function searchBing(query:string,request:typeof fetch,parse:(xml:string)=>Material):Promise<Material> {
+  // Some regions redirect www to cn. Retry only the fixed endpoint, never the provider's Location.
+  for(const host of ['www.bing.com','cn.bing.com']){
+    try {
+      const search=new URL(`https://${host}/search`);
+      search.searchParams.set('format','rss');
+      search.searchParams.set('q',query);
+      const {text}=await boundedResponse(search.href,{method:'GET',headers:{Accept:'application/rss+xml, application/xml, text/xml','Accept-Language':'zh-CN,zh;q=0.9'}},request);
+      return parse(text);
+    }catch(error){if(error instanceof ResearchTimeout)break;}
+  }
+  throw new Error('Public search unavailable');
+}
+
+const expansionSignal=/扩店|拓店|开(?:设|出|业).{0,8}(?:新店|门店|分店|分公司)|增开.{0,6}(?:门店|分店|网点)|新(?:店|门店|网点)|(?:门店|办公|仓库|厂房|园区|总部)(?:扩张|选址|搬迁|迁址)|(?:选址|迁址|搬迁)(?:计划|公告|项目|需求)|扩租|承租|(?:租赁|租用|租房)(?:计划|公告|需求)|\b(?:new (?:store|branch|office|location)|site selection|relocat\w*|store expansion)\b/i;
+const searchText=(value:string)=>value.normalize('NFKC').replace(/\s+/g,' ').toLowerCase();
+function companyMention(companyName:string):RegExp {
+  const escaped=searchText(companyName).replace(/[.*+?^$${}()|[\]\\]/g,'\\$&');
+  // Full names embedded inside a longer company name are not identity matches.
+  return new RegExp(`(?:^|[^\\p{L}\\p{N}]|近日|日前|据悉|有关|关于|来自|消息称|公告称|根据|由|据)${escaped}(?![a-z0-9]|(?:控股|集团|旗下|所属)|[^。！？；，、\\s]{0,8}(?:分公司|分部|子公司))`,'u');
+}
+
+/** Public search excerpts are unverified leads. Only the company name leaves the workspace. */
+export async function searchCompanyExpansion(deal:Pick<Deal,'name'>,request:typeof fetch=fetch):Promise<CompanyProfile> {
+  const companyName=clean(deal.name,200).replace(/\s+/g,' ');
+  if(!companyName||/["“”\u0000-\u001f\u007f]/.test(companyName))throw new Error('Company name is invalid');
+  const now=new Date().toISOString();
+  const identity=companyMention(companyName);
+  const material=await searchBing(`"${companyName}" (开店 OR 扩店 OR 选址 OR 搬迁 OR 扩租 OR 租赁需求)`,request,xml=>{
+    if(!/<rss\b[^>]*>[\s\S]*<\/rss\s*>\s*$/i.test(xml)||!/<channel\b[^>]*>[\s\S]*<\/channel\s*>/i.test(xml))throw new Error('Unsupported search feed');
+    const markup=xml.replace(/<!\[CDATA\[[\s\S]*?\]\]>|<!--[\s\S]*?-->/g,'');
+    if([...markup.matchAll(/<item\b/gi)].length!==[...markup.matchAll(/<\/item\s*>/gi)].length)throw new Error('Incomplete search feed');
+    return rssMaterial(xml,companyName,now,{
+      accept:(title,snippet)=>[title,snippet].some(text=>searchText(text).split(/[。！？；!?;]|\.\s/).some(passage=>identity.test(passage.trim())&&expansionSignal.test(passage))),
+      limit:5,
+      prefix:'expansion-web',
+    });
+  });
+  return {
+    companyName,provider:'web',status:'partial',modelUsed:false,updatedAt:now,facts:[],sources:material.sources,
+    summary:material.sources.length?'找到与该企业名称匹配的公开选址或扩张线索。':'本次公开搜索未找到与该企业名称匹配的选址或扩张线索。',
+    warnings:material.sources.length?['公开搜索摘要待核实。请打开来源核对企业身份、发布时间与当前需求。']:[],
+  };
 }
 
 function groundedModelFacts(value:unknown,sources:ResearchSource[]):Fact[] {
@@ -195,14 +241,7 @@ export async function researchCompany(deal:Deal,options:{qcc:QccCredentials|null
   if(!material){
     try {
       const website=publicUrl(deal.website);const domain=website?new URL(website).hostname:'';
-      // Some regions redirect www to cn. Never follow a provider Location; retry only this fixed endpoint.
-      for(const host of ['www.bing.com','cn.bing.com']){
-        try {
-          const search=new URL(`https://${host}/search`);search.searchParams.set('format','rss');search.searchParams.set('q',`"${companyName}"${domain?` ${domain}`:''} 企业 官网`);
-          const {text}=await boundedResponse(search.href,{method:'GET',headers:{Accept:'application/rss+xml, application/xml, text/xml','Accept-Language':'zh-CN,zh;q=0.9'}},request);
-          material=rssMaterial(text,companyName,now);break;
-        }catch(error){if(error instanceof ResearchTimeout||host==='cn.bing.com')throw new Error('Public search unavailable');}
-      }
+      material=await searchBing(`"${companyName}"${domain?` ${domain}`:''} 企业 官网`,request,xml=>rssMaterial(xml,companyName,now));
     }catch{warnings.push('公开网络检索暂时不可用，请稍后重试或手动补充企业资料。');}
   }
   material??={companyName,facts:[],sources:[],provider:'web'};

@@ -406,7 +406,8 @@ test('explicit intent in a followup overrides the previous specialist route',asy
   const {inputs,context}=capture();
   const first=await executeAction(createSeed(now),'manager','chat',{query:'检查澄光咖啡的合同风险'},context);
   await executeAction(first.state,'manager','chat',{query:'那他们的拜访方案怎么准备？',conversationRunIds:[first.run!.id]},context);
-  assert.deepEqual(inputs.slice(1).map(input=>input.agentId),['insight','strategy']);
+  assert.deepEqual(inputs.slice(1).map(input=>input.agentId),['strategy']);
+  assert.match(inputs[1].instruction??'',/客户洞察/);
   assert.ok(inputs.slice(1).every(input=>input.deal?.name==='澄光咖啡'));
 });
 

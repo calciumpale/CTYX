@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
-import {researchCompany,QCC_ENDPOINT} from '../app/lib/company-research.ts';
+import {researchCompany,searchCompanyExpansion,QCC_ENDPOINT} from '../app/lib/company-research.ts';
 import type {Deal} from '../app/lib/types.ts';
 
 const now='2026-10-24T03:00:00.000Z';
@@ -104,4 +104,69 @@ test('Workers-compatible fetch policy retrieves public sources without enabling 
   assert.equal(init?.redirect,'manual');return new Response(rss);
  }});
  assert.equal(result.sources.length,2);assert.equal(result.provider,'web');
+});
+
+const expansionItem=(title:string,description:string,url:string)=>`<item><title><![CDATA[${title}]]></title><link>${url}</link><description><![CDATA[${description}]]></description></item>`;
+const expansionFeed=(...items:string[])=>`<?xml version="1.0"?><rss version="2.0"><channel>${items.join('')}</channel></rss>`;
+
+test('expansion search sends only the company name and fixed topic to Bing and preserves a bounded set of source leads',async()=>{
+ const title='示远科技有限公司宣布开设新店';
+ const snippet='示远科技有限公司在本地发布了新店选址公告。';
+ const items=Array.from({length:12},(_,i)=>expansionItem(title,snippet,`https://news.example.cn/notice/${i}?src=official`));
+ const requests:string[]=[];
+ const result=await searchCompanyExpansion(deal,async(input,init)=>{
+  requests.push(String(input));const url=new URL(String(input));
+  assert.equal(url.origin,'https://www.bing.com');
+  assert.equal(url.pathname,'/search');assert.equal(url.searchParams.get('format'),'rss');
+  assert.match(url.searchParams.get('q')!,/^"示远科技有限公司" /);
+  assert.match(url.searchParams.get('q')!,/开店|扩店|选址/);
+  assert.equal(init?.method,'GET');assert.equal(init?.redirect,'manual');
+  assert.equal(init?.body,undefined);
+  return new Response(expansionFeed(...items));
+ });
+ assert.equal(requests.length,1);
+ for(const value of ['PRIVATE_CONTACT','PRIVATE_NOTES','PRIVATE_FOLLOWUP','99887766','PRIVATE_TOKEN','shiyuan.example.cn'])assert.ok(!requests[0].includes(value));
+ assert.equal(result.status,'partial');assert.equal(result.provider,'web');assert.equal(result.modelUsed,false);
+ assert.deepEqual(result.facts,[]);
+ assert.equal(result.sources.length,5);
+ assert.deepEqual(result.sources.map(source=>source.id),['expansion-web-1','expansion-web-2','expansion-web-3','expansion-web-4','expansion-web-5']);
+ assert.equal(result.sources[0].url,'https://news.example.cn/notice/0?src=official');
+ assert.equal(result.sources[0].title,title);assert.equal(result.sources[0].snippet,snippet);
+ assert.match(result.warnings.join(''),/待核实/);
+});
+
+test('expansion search ignores directory-only hits, partial or prefixed names, duplicate and invalid URLs',async()=>{
+ const items=[
+  expansionItem('示远科技有限公司 - 企业名录','注册地址为某市某区。','https://directory.example.cn/company'),
+  expansionItem('示远科技集团扩店','示远科技集团公开新店选址。','https://news.example.cn/other'),
+  expansionItem('北京示远科技有限公司开设新店','北京示远科技有限公司选址。','https://news.example.cn/prefix'),
+  expansionItem('行业动态','近日示远科技有限公司宣布拓店。','https://news.example.cn/same'),
+  expansionItem('示远科技有限公司 - 门店动态','新店选址启动。','https://news.example.cn/same'),
+  expansionItem('示远科技有限公司 - 新店选址','示远科技有限公司开始扩店。','http://127.0.0.1/invalid'),
+  expansionItem('企业动态','示远科技有限公司发布年报。远宁商贸有限公司开设新店。','https://news.example.cn/unrelated-sentence'),
+  expansionItem('示远科技有限公司','其他企业：远宁商贸有限公司开设新店。','https://news.example.cn/unrelated-company'),
+ ];
+ const result=await searchCompanyExpansion(deal,async()=>new Response(expansionFeed(...items)));
+ assert.deepEqual(result.sources.map(source=>source.url),['https://news.example.cn/same']);
+ const empty=await searchCompanyExpansion(deal,async()=>new Response(expansionFeed(...items.slice(0,3))));
+ assert.deepEqual(empty.sources,[]);assert.deepEqual(empty.facts,[]);
+ assert.match(empty.summary,/未找到/);
+});
+
+test('malformed feeds and provider outages fail with a generic message after only fixed-host retries',async()=>{
+ for(const response of [
+  ()=>new Response('<html>PRIVATE_PROVIDER_BODY</html>'),
+  ()=>new Response('<rss><channel><item>truncated'),
+  ()=>new Response('<rss><channel><item>truncated</channel></rss>'),
+  ()=>new Response('PRIVATE_PROVIDER_BODY',{status:503}),
+  ()=>new Response('',{status:302,headers:{location:'http://127.0.0.1/private'}}),
+ ]){
+  const requests:string[]=[];
+  await assert.rejects(searchCompanyExpansion(deal,async(input,init)=>{
+   requests.push(new URL(String(input)).hostname);
+   assert.equal(init?.redirect,'manual');
+   return response();
+  }),{message:'Public search unavailable'});
+  assert.deepEqual(requests,['www.bing.com','cn.bing.com']);
+ }
 });

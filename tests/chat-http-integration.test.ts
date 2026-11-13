@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import test from 'node:test';
-import type { GenerationInput } from '../app/lib/domain.ts';
+import type { ActionContext, GenerationInput } from '../app/lib/domain.ts';
 import {
   prepareKnowledgeContext, type KnowledgeAgentCandidate, type KnowledgeAgentRequest,
   type KnowledgePreparedContext,
@@ -38,6 +38,8 @@ type Scenario = {
   useDeal?: boolean;
   candidates: KnowledgeAgentCandidate[];
   replies: Partial<Record<Phase, string>>;
+  projectProfile?: NonNullable<ReturnType<typeof createSeed>['deals'][number]['companyProfile']>;
+  searchCompanyExpansion?: ActionContext['searchCompanyExpansion'];
 };
 
 const selection = (...sources: KnowledgeAgentCandidate[]) => JSON.stringify({
@@ -53,8 +55,10 @@ async function runChat(scenario: Scenario) {
   deal.name = company;
   deal.dataOrigin = 'research';
   deal.needs = [];
+  deal.summary = '';
   deal.notes = [];
   delete deal.customerProfile;
+  deal.companyProfile = scenario.projectProfile;
   const prior: Run = {
     id: 'synthetic-prior-turn', query: '合成旧任务：仓库搬迁流程', answer: oldAnswer, agentIds: ['insight'],
     steps: [], citations: [oldCitation], mode: 'live', createdAt: now, duration: 1,
@@ -110,6 +114,7 @@ async function runChat(scenario: Scenario) {
       conversationRunIds: [prior.id],
     }, {
       now, generate: generate('answer'), generateInsight: generate('insight'),
+      searchCompanyExpansion: scenario.searchCompanyExpansion,
       prepareKnowledge: async request => {
         requests.push(request);
         const context = await prepareKnowledgeContext(request, {
@@ -158,6 +163,60 @@ test('customer demand research reaches the insight model without borrowing a com
   assert.match(result.run.answer, /现有资料无法确认/);
   assert.match(result.run.answer, /向该客户的拓展负责人确认租赁计划/);
   assert.match(result.run.steps.map(step => step.detail).join('\n'), /服务端外部模型返回/);
+});
+
+test('a combined profile and expansion request keeps supported profile facts and model analysis when demand is unknown', async () => {
+  const result = await runChat({
+    question: '这家公司的画像完善一下，搜一下对方有没有扩张的需求', useDeal: true, candidates: [],
+    projectProfile: {
+      companyName: company, summary: '', status: 'ready', provider: 'qcc', modelUsed: false, warnings: [], updatedAt: now,
+      facts: [{ label: '主营业务', value: '连锁餐饮运营', sourceIds: ['registry'] }],
+      sources: [{ id: 'registry', title: '合成企业登记资料', url: 'https://example.com/company', provider: 'qcc', retrievedAt: now }],
+    },
+    replies: { insight: JSON.stringify({
+      status: 'unconfirmed', factIds: [], profileFactIds: ['fact-1'],
+      insights: ['如果出现新店签约公告，可以先核实目标城市与预计开业时间。'],
+      questions: ['今年是否有新增门店安排？'], nextSteps: ['查询该企业的公开公告。'],
+    }) },
+  });
+  assert.deepEqual(result.calls.map(call => call.phase), ['insight']);
+  assert.equal(result.prepared[0].route, 'no_evidence');
+  assert.match(userPayload(result.calls[0]), /连锁餐饮运营/);
+  assert.match(result.run.answer, /连锁餐饮运营/);
+  assert.match(result.run.answer, /如果出现新店签约公告/);
+  assert.match(result.run.answer, /现有资料无法确认/);
+  assert.deepEqual(result.run.citations.map(citation => citation.title), ['合成企业登记资料']);
+});
+
+test('an explicit search supplies public expansion signals to the model separately from verified demand', async () => {
+  const source = { id: 'expansion-web-1', title: '合成新闻报道', url: 'https://example.com/news', provider: 'web' as const,
+    snippet: `${company}发布新店选址公告。`, retrievedAt: now };
+  const result = await runChat({
+    question: '搜一下对方有没有扩张的需求', useDeal: true, candidates: [],
+    searchCompanyExpansion: async input => {
+      assert.deepEqual(input, { name: company });
+      return { companyName: company, summary: '', status: 'partial', provider: 'web', modelUsed: false, warnings: [], updatedAt: now,
+        facts: [], sources: [source] };
+    },
+    replies: { insight: JSON.stringify({ status: 'recorded', factIds: [source.id], profileFactIds: [source.id],
+      questions: ['选址范围是什么？'], nextSteps: ['向拓展部门核实公告的进度。'] }) },
+  });
+  const payload = userPayload(result.calls[0]);
+  assert.match(payload, /客户洞察可用证据"\s*:\s*\[\],"公开企业资料"/);
+  assert.match(result.run.answer, /现有资料无法确认/);
+  assert.match(result.run.answer, /公开搜索摘要，待核实/);
+  assert.deepEqual(result.run.citations.map(citation => citation.title), [source.title]);
+});
+
+test('when a public search fails, the final model still offers useful conditional advice', async () => {
+  const result = await runChat({
+    question: '搜一下对方有没有扩张的需求', useDeal: true, candidates: [],
+    searchCompanyExpansion: async () => { throw new Error('search provider timeout'); },
+    replies: { insight: demandAnswer('unconfirmed', []) },
+  });
+  assert.match(result.run.answer, /公开检索暂时未完成/);
+  assert.match(result.run.answer, /向该客户的拓展负责人确认租赁计划/);
+  assert.deepEqual(result.run.citations, []);
 });
 
 test('customer demand research cites only the confirmed source selected for the current customer', async () => {
@@ -218,6 +277,17 @@ test('a workplace policy question without current evidence gets a bounded model 
   assert.doesNotMatch(userPayload(result.calls[1]), /directory-only|从事餐饮经营/);
   assert.match(result.run.answer, /资料不足/);
   assert.match(result.run.answer, /建议先确认适用的报销流程/);
+  assert.deepEqual(result.run.citations, []);
+});
+
+test('without internal policy evidence, the answer keeps actionable guidance and drops unsupported requirements', async () => {
+  const result = await runChat({
+    question: policyQuestion, candidates: [],
+    replies: { answer: '公司规定必须在三天内提交报销。\n\n可以先把交通凭证和行程单整理好，再向财务确认提交入口。' },
+  });
+  assert.deepEqual(result.calls.map(call => call.phase), ['answer']);
+  assert.match(result.run.answer, /把交通凭证和行程单整理好/);
+  assert.doesNotMatch(result.run.answer, /三天内/);
   assert.deepEqual(result.run.citations, []);
 });
 

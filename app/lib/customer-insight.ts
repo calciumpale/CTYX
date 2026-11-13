@@ -7,6 +7,7 @@ export interface CustomerInsightEvidence {
   value: string;
   source: string;
   sourceIds?: string[];
+  url?: string;
 }
 
 interface CustomerInsightResult {
@@ -77,10 +78,10 @@ export function isCustomerInsightQuestion(query: string, previousQuery?: string)
 
 export function isCustomerRecordQuestion(query: string): boolean {
   if (/合同|违约|租金|报价|库存|免租|折扣|优惠|培训|带练|扮演|陪练|申诉|复议|处罚标准|处罚依据|怎么管理|如何管理|^(?:什么是|如何定义)|(?:内部|我方).{0,10}(?:审批|制度|规定)/.test(query)) return false;
-  return /(?:违规|违法|合规|处罚|失信|食品安全).{0,4}(?:记录|历史|公示|通报)|行政处罚|经营异常|被执行人|司法执行|严重违法失信|食品安全(?:问题|风险)|(?:有没有|是否|有无|曾经|被).{0,6}(?:违规|违法|处罚|罚款|列入黑名单)/.test(query);
+  return /(?:违规|违法|合规|处罚|失信|食品安全).{0,4}(?:记录|历史|公示|通报|情况)|行政(?:处罚|罚款)|经营异常|被执行人|司法执行|严重违法失信|食品安全(?:问题|风险)|被罚(?:过|了|款)|(?:有没有|是否|有无|有哪些|曾经|被).{0,6}(?:违规|违法|处罚|罚款|列入黑名单)/.test(query);
 }
 
-export const isCustomerRecordFollowup = (query: string) => /^(?:那(?:么)?\s*)?(?:请|帮我)?(?:去哪(?:里|儿)?查|哪(?:里|儿)查|如何查|怎么查|怎么核实|如何核实|查什么|还能查什么|再(?:详细|具体|补充|展开)(?:一点)?)[？?。！!\s]*$/.test(query);
+export const isCustomerRecordFollowup = (query: string) => /^(?:那(?:么)?\s*)?(?:请|帮我)?(?:去哪(?:里|儿)?查|哪(?:里|儿)查|如何查|怎么查|怎么核实|如何核实|查什么|还能查什么|再(?:详细|具体|补充|展开)(?:一点)?|(?:公司本级|总公司|门店|分公司)呢)[？?。！!\s]*$/.test(query);
 
 const recordChecks = {
   registry: '[国家企业信用信息公示系统](https://www.gsxt.gov.cn/index.html) · 核对行政处罚、经营异常和市场监管严重违法失信信息。',
@@ -91,16 +92,18 @@ const recordChecks = {
 
 const narrativeInstruction = '在 answer 中用自然的 Markdown 直接回答当前问题，按需要说明不确定性并给具体核实建议。不要套用固定标题或段落。需要展示证据原文时单独起一行写 > [[证据ID]]，只填本轮确实使用的 ID。服务器会替换标记，不要自己转述事实、编写引文或添加链接。';
 
-export const CUSTOMER_RECORD_INSTRUCTION = `用户想核验当前企业的历史记录。系统本轮未查询官方数据库。只返回 JSON 对象 {"answer":"你的回答"}。${narrativeInstruction} 用自己的话说明目前无法确认，并根据当前问题、企业名称和同一企业的追问语境，用证据标记提供 1 至 3 个适用的核验入口。可用 ID：registry（行政处罚、经营异常和市场监管严重违法失信）；penalties（已公示行政处罚）；enforcement（司法执行、失信被执行人）；food（食品安全抽检）。这些入口用于下一步核实，不能证明有或没有违规。不要声称查询过，也不要补充记录、链接或搜索结果。`;
+export const CUSTOMER_RECORD_INSTRUCTION = `根据本轮知识库和公开检索结果直接回答用户当前问题。只返回 JSON 对象 {"answer":"你的回答"}。${narrativeInstruction} 有相关资料时，先用自己的话概括本轮能确认的范围，再用本轮证据标记展示支持回答的记录。具体主体、时间、金额和处理结果从证据原文展示。公开搜索摘要只作为待核实线索。门店、分支或关联主体的记录不能归给公司本级。未找到匹配资料时，说明这次查了什么、能确认什么，继续给出适用的核实办法；检索未命中不能推断企业没有记录。根据本轮查询状态回答，不能声称查过未访问的官方记录库。确有需要时可用标记补充核验入口：registry（行政处罚、经营异常和严重违法失信）；penalties（已公示行政处罚）；enforcement（司法执行、失信被执行人）；food（食品安全抽检）。`;
 
 export function formatCustomerRecordAnswer(raw: string, requireNarrative = false): string | undefined {
   return formatCustomerRecordResult(raw, requireNarrative)?.answer;
 }
 
-export function formatCustomerRecordResult(raw: string, requireNarrative = false): CustomerInsightResult | undefined {
+export function formatCustomerRecordResult(raw: string, requireNarrative = false, evidence: CustomerInsightEvidence[] = []): CustomerInsightResult | undefined {
   const output = insightObject(raw);
-  if (requireNarrative || output && Object.hasOwn(output, 'answer')) {
-    return renderNarrative(narrativeText(raw, output), new Map(Object.entries(recordChecks)), 'records');
+  if (requireNarrative || evidence.length || output && Object.hasOwn(output, 'answer')) {
+    const quotes = evidenceQuotes(evidence, true);
+    for (const [id, link] of Object.entries(recordChecks)) quotes.set(id, link);
+    return renderNarrative(narrativeText(raw, output), quotes, 'records');
   }
   if (!Array.isArray(output?.checks)) return undefined;
   const checks = [...new Set(output.checks)].flatMap(id => typeof id === 'string' && Object.hasOwn(recordChecks, id)
@@ -204,14 +207,22 @@ const unverifiedProfile = /(?:注册资本|法定代表人|经营范围|主营�
 const unverifiedRecord = /(?:已(?:经)?|我(?:方)?|我们|本次|系统).{0,16}(?:查阅|查到|查过|查了|核实到|检索到|看到(?:了)?[^，。！？；]{0,18}(?:处罚|违规|失信|经营异常|相关记录))|(?:查询|检索|核验|公示)结果(?:显示|表明|为|是)|(?:未发现|未查到|没有查到|查无|无任何|无|没有|不存在|未有|从未|没有任何|未受)(?:相关|任何|公开|已公示|被公示|受到)?(?:行政处罚|违规|违法|失信|被执行|经营异常|不良|处罚)|(?:曾经|已(?:经)?|确实|存在|有|被|遭到|受到).{0,8}(?:行政处罚|违规|违法|失信|被执行|经营异常|不良记录|处罚|罚款)|(?:违规|违法|处罚|失信|经营异常).{0,8}(?:记录)?(?:是|为)(?:零|无|\d)/;
 const decisiveIntent = /(?:客户|对方|他们|她们|企业|公司|负责人).{0,12}(?:表示|明确|确实|的确|透露|打算|想|希望|拟|准备|决定|将会|一定|已经|正在|刚刚|已).{0,14}(?:租|承租|买|采购|选址|迁址|搬迁|扩张|扩店|开店|找.{0,5}(?:铺|房|店)|签下|签约)|(?:已经|正在|刚刚|已)(?:签下|拿下|选定|租下|签约|新增|开(?:设|出|了)?).{0,12}(?:新店|门店|店铺|场地|商铺|门面)|(?:有|无|没有|暂无|并无)(?:明确的?|实际的?|当前的?)?(?:扩店|拓店|扩张|开店|迁址|搬迁|选址|租赁|租房|承租|采购|购房)(?:计划|安排|意向|需求)/;
 const explicitUncertainty = /(?:还不能|尚不能|无法|不能|尚难|目前难以|难以|尚无法|不能据此|不足以|没法|不能仅凭)(?:直接|据此|仅凭[^，。]{1,24})?(?:确认|判断|确定|核实|下结论|证明|认定)|(?:尚不明确|尚不清楚|暂不清楚|看不出|未能证实|还未确认)|(?:没有|缺乏|没有足够的|尚缺).{0,10}(?:证据|资料|信息|记录).{0,6}(?:证明|表明|显示|确认|支持)|(?:未|没有)(?:查询|核对|核验|检索|查阅|查)(?:过)?(?:官方|监管|公开|权威)(?:机构|数据库|记录|公示|信息|平台)/;
+const recordFinding = /责令整改|作出警告|被警告|处以|罚没|没收违法所得|(?:已经|曾|被|受到).{0,10}(?:处罚|罚款|限高|行政警告|列入|责令|认定违法)|(?:被|法院.{0,6}(?:裁定|决定)).{0,16}(?:限制高消费|限高|执行)|(?:信用|合规)(?:记录|状况)(?:良好|正常|很差)|(?:记录|处罚|罚款|经营异常|失信|违规).{0,5}(?:为零|为0|[\d一二三四五六七八九十百千万两]+(?:起|件|次|项|条|元|年))|(?:已|曾|先前|本轮|本次|我们|我|系统).{0,14}(?:查阅|查询|核对|核验|检索|访问).{0,12}(?:官方|监管|法院|数据库|记录库|信用中国|公示系统)|(?:查过|查阅过|查询过|查了|已查|已核验).{0,12}(?:官方|法院|信用中国|公示系统|数据库)|(?:没有|不存在|未发现|未查到|无任何|从未).{0,12}(?:相关记录|异常|受罚|违法|违规|处罚|失信)/;
+const unsupportedRecordOutcome = /(?:处罚|违法|违规)事实(?:清楚|属实|明确|成立)|被(?:调查|立案|约谈|罚)|(?:收到|接到|被下发).{0,10}(?:整改|处罚)通知|(?:记录|信用|合规)(?:正常|良好|干净|无异常|无污点)|(?:从未|没有|未|不曾).{0,5}(?:上过|上了|列入|被列入)黑名单|(?:匹配|找到|命中|检索到|共计).{0,4}[\d一二三四五六七八九十百千万两]+\s*(?:条|项|起|件)/;
 
 function narrativeClaimSupported(prose: string, kind: NarrativeKind): boolean {
   if (unsupportedAssertions.some(pattern => pattern.test(prose))) return false;
   const clauses = prose.split(/[，,]|(?:但是|但|不过|然而|实际上|与此同时|事实上)(?=.{2})/).map(clause => clause.replace(/^\s*(?:[#>*-]+|\d+[.)、])?\s*/, ''));
   return clauses.every((clause, index) => {
-    const assertion = decisiveIntent.test(clause) || unverifiedIntent.test(clause) || unverifiedProfile.test(clause) || unverifiedRecord.test(clause);
+    const unsupported = (text: string) => [decisiveIntent, unverifiedIntent, unverifiedProfile, unverifiedRecord].some(pattern => pattern.test(text)) ||
+      kind === 'records' && (recordFinding.test(text) || unsupportedRecordOutcome.test(text));
+    const assertion = unsupported(clause);
     const uncertainty = explicitUncertainty.exec(clause);
-    if (uncertainty && (!assertion || ![decisiveIntent, unverifiedIntent, unverifiedProfile, unverifiedRecord].some(pattern => pattern.test(clause.slice(0, uncertainty.index))))) return true;
+    if (uncertainty && (!assertion || !unsupported(clause.slice(0, uncertainty.index)))) return true;
+    if (kind === 'records' && uncertainty && /(?:是否|有无|有没有)/.test(clause.slice(0, uncertainty.index))) {
+      const question = clause.slice(0, uncertainty.index).split(/是否|有无|有没有/, 1)[0];
+      if (!unsupported(question) && !unsupported(clause.slice(uncertainty.index + uncertainty[0].length))) return true;
+    }
     if (index === 0 && clauses.length > 1 && /^(?:如果|假如|假设|若|倘若)/.test(clause) ||
       /[？?]$/.test(clause) && /(?:是否|有没有|能否|要不要|想不想|哪(?:家|些|个|里)|怎么|如何|什么|多久|吗|呢)/.test(clause)) return true;
     const verification = /^(?:(?:下一步|目前|还|仍|可以|可|先|建议|最好|请|需要|再|并|也|宜|优先)\s*)*(?:(?:向|与|联系)[^，。！？；]{1,24})?(?:核对|核实|确认|查阅|查询|询问|问|了解|检查|比对|记录)(?:[^，。！？；]{0,22})(?:是否|有没有|是否曾|有无|哪(?:个|家|些)|具体|情况|记录|安排|计划|信息|要求|资料|进展|意向|结果)/.test(clause);
@@ -233,7 +244,9 @@ export function formatCustomerEvidenceQuote(item: CustomerInsightEvidence, inclu
     : item.label === '公开来源摘录' ? `公开来源摘录（${literalQuote(item.source)}） · `
     : /^项目人工记录，\d{4}-\d{2}-\d{2}$/.test(item.source) ? `${item.source} · `
     : includeLabel && item.sourceIds?.length && item.label !== '已授权知识库摘录' ? `${literalQuote(item.label)}：` : '';
-  return `${prefix}${literalQuote(item.value)}`;
+  const source = item.url && /^https?:\/\/[^\s<>\\]+$/i.test(item.url)
+    ? ` · [${item.label.startsWith('鲸海数据')?'查看数据接口说明':'打开来源'}](<${item.url}>)` : '';
+  return `${prefix}${literalQuote(item.value)}${source}`;
 }
 
 function evidenceQuotes(evidence: CustomerInsightEvidence[], includeLabels = false): Map<string, string> {

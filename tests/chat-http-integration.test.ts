@@ -42,6 +42,8 @@ type Scenario = {
   expectedMode?: Run['mode'];
   projectProfile?: NonNullable<ReturnType<typeof createSeed>['deals'][number]['companyProfile']>;
   searchCompanyExpansion?: ActionContext['searchCompanyExpansion'];
+  searchCompanyRecords?: ActionContext['searchCompanyRecords'];
+  searchCompanyPenalties?: ActionContext['searchCompanyPenalties'];
   enrichCompany?: ActionContext['enrichCompany'];
 };
 
@@ -120,6 +122,8 @@ async function runChat(scenario: Scenario) {
       now, generate: generate('answer'), generateInsight: generate('insight'),
       requireNarrative: scenario.requireNarrative,
       searchCompanyExpansion: scenario.searchCompanyExpansion,
+      searchCompanyRecords: scenario.searchCompanyRecords,
+      searchCompanyPenalties: scenario.searchCompanyPenalties,
       enrichCompany: scenario.enrichCompany,
       prepareKnowledge: async request => {
         requests.push(request);
@@ -265,6 +269,73 @@ test('official-record help retains model wording and resolves only an approved v
   assert.ok(result.run.answer.startsWith(`${opening}\n\n`));
   assert.match(result.run.answer, /国家企业信用信息公示系统.*https:\/\/www\.gsxt\.gov\.cn/);
   assert.deepEqual(result.run.citations, []);
+});
+
+test('a violation lookup gives the answer model current evidence and cites a related store with its own scope', async () => {
+  const question = '他有没有违规记录';
+  const branch = `${company}河西店`;
+  const relevant = { id: 'record-kb', title: `${company}市场监管记录`, content: `2024年6月3日，市场监督管理局对${branch}作出行政处罚。` };
+  const unrelated = { id: 'record-other', title: '别家处罚', content: '市场监督管理局对南岸合成测试客户作出行政处罚。' };
+  const excerpt = `2024年6月3日，${branch}因餐具清洗问题被罚款一万元。`;
+  const url = 'https://example.org/decisions/2024/5';
+  const opening = '目前能看到的是门店层面的公开线索。公司本级是否有处罚记录还不能确认。';
+  const result = await runChat({
+    question, useDeal: true, requireNarrative: true, candidates: [relevant, unrelated],
+    searchCompanyRecords: async (deal, lookup) => {
+      assert.deepEqual(deal, { name: company });
+      assert.equal(lookup, question);
+      return { status: 'completed', sources: [{ id: 'records-web-1', title: '公开处罚摘要', excerpt, url,
+        scope: 'related', kind: 'administrative-penalty', retrievedAt: now }] };
+    },
+    replies: {
+      evidence: selection(relevant),
+      insight: JSON.stringify({ answer: `${opening}\n\n> [[records-web-1]]\n\n> [[record-kb]]` }),
+    },
+  });
+  assert.equal(result.requests[0].subject, company);
+  const messages = result.calls.find(call => call.phase === 'insight')!.messages;
+  const context = messages.at(-1)!.content;
+  assert.match(context, /record-kb/);
+  assert.match(context, /records-web-1/);
+  assert.doesNotMatch(context, /record-other|南岸合成/);
+  assert.ok(result.run.answer.startsWith(opening));
+  assert.ok(result.run.answer.includes(excerpt));
+  assert.ok(result.run.answer.includes(url));
+  assert.match(result.run.answer, /公开搜索摘要/);
+  assert.deepEqual(result.run.citations.map(item => item.id).sort(), ['record-kb', 'records-web-1']);
+  assert.ok(result.run.steps.some(step => step.title === '检索企业公开记录' && step.detail.includes('1 条')));
+});
+
+test('an unavailable public search still lets the model give a scoped answer', async () => {
+  const answer = '目前还不能确认这家公司的处罚情况。建议按企业全称核对行政处罚公示。';
+  const result = await runChat({
+    question: '他有没有违规记录', useDeal: true, requireNarrative: true, candidates: [],
+    searchCompanyRecords: async () => ({ status: 'failed', sources: [] }),
+    replies: { route: '{"action":"retrieve"}', insight: JSON.stringify({ answer }) },
+  });
+  assert.match(result.calls.at(-1)!.messages[0].content, /本轮公开检索暂时未完成/);
+  assert.equal(result.run.answer, answer);
+  assert.deepEqual(result.run.citations, []);
+  assert.ok(result.run.steps.some(step => step.title === '检索企业公开记录' && step.status === 'warning'));
+});
+
+test('a company-level penalty is answered using the structured record when public search is empty', async () => {
+  const answer = '这次查到公司本级的处罚资料，具体信息见下方记录。\n\n> [[record-jinghai-1]]';
+  const result = await runChat({
+    question: '这家公司被罚过吗？', useDeal: true, requireNarrative: true, candidates: [],
+    searchCompanyRecords: async () => ({ status: 'completed', sources: [] }),
+    searchCompanyPenalties: async deal => {
+      assert.deepEqual(deal, { name: company });
+      return { status: 'records', source: { title: '鲸海数据 · 行政处罚信息', url: 'https://www.kqdaas.com/market?apiId=10022', provider: 'jinghai' },
+        records: [{ id: 'record-jinghai-1', subject: company, decisionNo: '测试市监处罚〔2024〕12号', kind: 'administrative-penalty',
+          excerpt: '处以罚款人民币一万元。' }] };
+    },
+    replies: { insight: JSON.stringify({ answer }) },
+  });
+  assert.match(result.calls.at(-1)!.messages[0].content, /鲸海数据返回 1 条/);
+  assert.match(result.run.answer, /测试市监处罚〔2024〕12号/);
+  assert.match(result.run.answer, /查看数据接口说明/);
+  assert.deepEqual(result.run.citations.map(item => item.id), ['record-jinghai-1']);
 });
 
 test('explicit rental research sends just the company name to search and lets the model state the result', async () => {

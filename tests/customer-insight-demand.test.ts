@@ -147,6 +147,16 @@ test('official record guidance keeps approved verification entrances and omits u
   assert.deepEqual(output.factIds, ['registry']);
 });
 
+test('record prose preserves scope while removing unsourced findings and database access claims', () => {
+  const opening = '公司本级是否有处罚记录还不能确认。';
+  const claims = ['该公司经营异常两次。', '市监局对该公司作出警告。', '被监管部门责令整改。', '该公司信用记录良好。',
+    '2023年法院裁定该企业限高。', '该公司的行政处罚事实清楚。', '此前因违法经营被调查。', '记录正常。',
+    '这家公司曾因食品卫生问题收到整改通知。', '查过官方系统。', '截至目前记录为零。', '本轮匹配了13项相关记录。'];
+  const result = formatCustomerRecordResult(JSON.stringify({ answer: [opening, ...claims].join('\n') }), true);
+  assert.equal(result?.answer, opening);
+  assert.equal(result?.groundingRejected, true);
+});
+
 test('renders public-only demand assessment as unconfirmed, even if the model reports a record', () => {
   const evidence = customerDemandEvidence(dealFixture());
   const output = formatCustomerDemand(model('recorded', ['listing', 'invented']), evidence, leaseQuestion);

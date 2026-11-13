@@ -2,13 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {researchCompany,searchCompanyExpansion,QCC_ENDPOINT} from '../app/lib/company-research.ts';
+import {groundedWebProfileFacts} from '../app/lib/company-profile-evidence.ts';
 import type {Deal} from '../app/lib/types.ts';
 
 const now='2026-10-24T03:00:00.000Z';
 const deal={id:'company-research-test',name:'示远科技有限公司',website:'https://www.shiyuan.example.cn/about?token=PRIVATE_TOKEN',contact:'PRIVATE_CONTACT',summary:'PRIVATE_NOTES',amount:99887766,notes:[{text:'PRIVATE_FOLLOWUP'}]} as unknown as Deal;
 const qcc={appKey:'synthetic-appkey',secretKey:'synthetic-secret',endpoint:'https://api.qichacha.com/ECIV4/GetBasicDetailsByName'};
 const model={key:'synthetic-model-key',url:'https://model.example.cn/v1/chat/completions',name:'general-chat'};
-const rss=`<?xml version="1.0"?><rss version="2.0"><channel><item><title><![CDATA[示远科技 &amp; 产品介绍]]></title><link>https://www.shiyuan.example.cn/about</link><description><![CDATA[<b>示远科技有限公司</b>提供企业软件服务。]]></description></item><item><title>客户案例</title><link>https://www.shiyuan.example.cn/cases</link><description>服务制造业客户。</description></item></channel></rss>`;
+const rss=`<?xml version="1.0"?><rss version="2.0"><channel><item><title><![CDATA[示远科技 &amp; 产品介绍]]></title><link>https://www.shiyuan.example.cn/about</link><description><![CDATA[<b>示远科技有限公司</b>提供企业软件服务。]]></description></item><item><title>客户案例</title><link>https://www.shiyuan.example.cn/cases</link><description>示远科技有限公司服务制造业客户。</description></item></channel></rss>`;
 const completion=(value:unknown)=>Response.json({choices:[{finish_reason:'stop',message:{role:'assistant',content:JSON.stringify(value)}}]});
 const qccResult={Status:'200',Result:{Name:'示远科技有限公司',KeyNo:'abcdef0123456789abcdef0123456789',CreditCode:'91310110SYNTHETICXX',OperName:'测试法人',StartDate:'2011-01-01',Status:'存续',RegistCapi:'100万元',Scope:'企业软件服务',Address:'某市某区',Area:{Province:'某省',City:'某市'}}};
 
@@ -43,7 +44,7 @@ test('no search results never calls the model or invents facts',async()=>{
 test('model receives only public identity and snippets, and fabricated source IDs are discarded',async()=>{
  let sent='';let calls=0;
  const result=await researchCompany(deal,{qcc:null,model,now,request:async(_input,init)=>{calls++;if(calls===1)return new Response(rss);sent=String(init?.body);return completion({summary:'提供企业软件服务，采购需求待确认。',facts:[{label:'主营业务',value:'企业软件',sourceIds:['web-1']},{label:'虚构财务',value:'999亿元',sourceIds:['invented-source']}]});}});
- assert.equal(calls,2);assert.equal(result.modelUsed,true);assert.equal(result.facts.length,1);assert.equal(result.facts[0].label,'主营业务');assert.deepEqual(result.facts[0].sourceIds,['web-1']);assert.match(result.summary,/待核实/);assert.ok(result.warnings.some(w=>/核实/.test(w)));
+ assert.equal(calls,2);assert.equal(result.modelUsed,true);assert.equal(result.facts.length,1);assert.equal(result.facts[0].label,'主营业务');assert.deepEqual(result.facts[0].sourceIds,['web-1']);assert.match(result.summary,/企业软件/);assert.ok(result.warnings.some(w=>/核实/.test(w)));
  for(const text of ['PRIVATE_CONTACT','PRIVATE_NOTES','PRIVATE_FOLLOWUP','99887766','PRIVATE_TOKEN'])assert.ok(!sent.includes(text));
  assert.match(sent,/不可信|不能.*指令/);
 });
@@ -108,6 +109,66 @@ test('Workers-compatible fetch policy retrieves public sources without enabling 
 
 const expansionItem=(title:string,description:string,url:string)=>`<item><title><![CDATA[${title}]]></title><link>${url}</link><description><![CDATA[${description}]]></description></item>`;
 const expansionFeed=(...items:string[])=>`<?xml version="1.0"?><rss version="2.0"><channel>${items.join('')}</channel></rss>`;
+
+
+test('profile fallback ignores unrelated and similarly named results even on the supplied site',async()=>{
+ const items=[
+  expansionItem('无关商家','远景软件有限公司注册资本999亿元。','https://www.shiyuan.example.cn/unrelated'),
+  expansionItem('北京示远科技有限公司','北京示远科技有限公司提供企业软件。','https://www.shiyuan.example.cn/similar'),
+  expansionItem('示远科技有限公司分公司','分公司企业信息。','https://news.example.cn/branch'),
+ ];
+ let calls=0;
+ const result=await researchCompany(deal,{qcc:null,model,now,request:async()=>{
+  calls++;
+  return calls===1?new Response(expansionFeed(...items)):completion({summary:'虚构概况'});
+ }});
+ assert.equal(calls,1);
+ assert.deepEqual(result.sources,[]);
+ assert.deepEqual(result.facts,[]);
+ assert.equal(result.modelUsed,false);
+});
+
+test('profile fallback retains normalized name matches and drops ungrounded model values and summaries',async()=>{
+ const company={...deal,name:'示远科技（杭州）有限公司'};
+ const raw='据悉示远科技(杭州)有限公司提供企业软件服务，注册资本100万元。';
+ const items=[
+  expansionItem('企业介绍',raw,'https://news.example.cn/about'),
+  expansionItem('示远科技（杭州）有限公司','示远科技（杭州）有限公司服务制造业客户。','https://news.example.cn/customers'),
+ ];
+ let calls=0;
+ const result=await researchCompany(company,{qcc:null,model,now,request:async()=>{
+  if(++calls===1)return new Response(expansionFeed(...items));
+  return completion({summary:'该企业注册资本999亿元，并已确认近期租赁。',
+   facts:[
+    {label:'主营业务',value:'企业软件服务',sourceIds:['web-1','web-2']},
+    {label:'注册资本',value:'999亿元',sourceIds:['web-1']},
+    {label:'注册资本',value:'00万元',sourceIds:['web-1']},
+    {label:'企业规模',value:'企业软件服务',sourceIds:['web-2']},
+   ]});
+ }});
+ assert.equal(calls,2);
+ assert.equal(result.sources[0].snippet,raw);
+ assert.equal(result.sources.length,2);
+ assert.deepEqual(result.facts,[{label:'主营业务',value:'企业软件服务',sourceIds:['web-1']}]);
+ assert.doesNotMatch(result.summary,/999亿元|已确认近期租赁/);
+ assert.match(result.summary,/企业软件服务/);
+});
+
+
+test('stored public facts require a snippet for the same subject and field',()=>{
+ const company=deal.name;
+ const source={id:'old-web',title:company,url:'https://news.example.cn/company',provider:'web' as const,retrievedAt:now,
+  snippet:`${company}提供企业软件服务，注册资本100万元。远景软件有限公司注册资本800万元。`};
+ assert.deepEqual(groundedWebProfileFacts([
+  {label:'主营业务',value:'企业软件服务',sourceIds:[source.id]},
+  {label:'注册资本',value:'100万元',sourceIds:[source.id]},
+  {label:'营收',value:'100万元',sourceIds:[source.id]},
+  {label:'注册资本',value:'800万元',sourceIds:[source.id]},
+ ],[source],company),[
+  {label:'主营业务',value:'企业软件服务',sourceIds:[source.id]},
+  {label:'注册资本',value:'100万元',sourceIds:[source.id]},
+ ]);
+});
 
 test('expansion search sends only the company name and fixed topic to Bing and preserves a bounded set of source leads',async()=>{
  const title='示远科技有限公司宣布开设新店';

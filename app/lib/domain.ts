@@ -17,7 +17,7 @@ import { defaultTrainingProfile, validateTrainingProfile } from './training-prof
 import { demoTrainingGenerate } from './training-dialogue.ts';
 import type { TrainingGenerationInput } from './training-dialogue.ts';
 import type { AgentMemoryContext } from './agent-memory-types.ts';
-import { CUSTOMER_DEMAND_INSTRUCTION, CUSTOMER_INSIGHT_INSTRUCTION, CUSTOMER_RECORD_INSTRUCTION, customerDemandEvidence, customerInsightEvidence, formatCustomerDemand, formatCustomerInsightResult, formatCustomerRecordAnswer, isCustomerDemandFollowup, isCustomerDemandQuestion, isCustomerInsightQuestion, isCustomerProfileRequest, isCustomerRecordFollowup, isCustomerRecordQuestion, type CustomerInsightEvidence } from './customer-insight.ts';
+import { CUSTOMER_DEMAND_INSTRUCTION, CUSTOMER_INSIGHT_INSTRUCTION, CUSTOMER_RECORD_INSTRUCTION, customerDemandEvidence, customerInsightEvidence, formatCustomerDemand, formatCustomerEvidenceQuote, formatCustomerInsightResult, formatCustomerRecordResult, isCustomerDemandFollowup, isCustomerDemandQuestion, isCustomerInsightQuestion, isCustomerProfileRequest, isCustomerRecordFollowup, isCustomerRecordQuestion, supportsDemand, type CustomerInsightEvidence } from './customer-insight.ts';
 import { isPropertyQuestion, parsePropertyPageRequest } from './property-query.ts';
 import { isCompletedChatRun } from './chat-request.ts';
 
@@ -475,12 +475,13 @@ async function boundedSpecialist(input:GenerationInput,context:ActionContext,rou
   const formatted=format(output);
   if(formatted)return formatted;
   if(input.purpose==='chat'&&context.requireNarrative){
-    const retry=await generate({...request,instruction:`${request.instruction}\n请用自己的话重新回答。略去无法核实的事实，直接给出仍可执行的做法或需要用户补充的信息。`});
-    const repaired=retry.mode==='live'?format(retry):undefined;
-    if(repaired)return repaired;
-    fail('大模型已返回内容，但答复未通过资料核对。请重试或缩小问题范围。',502);
+    try{
+      const retry=await generate({...request,instruction:`${request.instruction}\n请用自己的话重新回答。略去无法核实的事实，直接给出仍可执行的做法或需要用户补充的信息。`});
+      const repaired=retry.mode==='live'?format(retry):undefined;
+      if(repaired)return repaired;
+    }catch(error){if(!(error instanceof DomainError))throw error;}
   }
-  return {answer:hasEvidence?'回答中的业务事实缺少完整资料依据，请核实后回复。':boundary,mode:'demo',groundingRejected:output.mode==='live'};
+  return {answer:hasEvidence?'回答中的业务事实缺少完整资料依据，请核实后回复。':boundary,mode:'demo',modelName:output.modelName,groundingRejected:output.mode==='live'};
 }
 const asKnowledge=(item:KnowledgeAgentEvidence):GenerationKnowledge=>{
   const content=item.excerpt??item.content;
@@ -505,30 +506,61 @@ async function generateCustomerInsight(input:GenerationInput,deal:Deal,generate:
   const libraryIds=new Set(libraryEvidence.map(item=>item.id));
   const request={...input,knowledge:[],previous:'',instruction,customerInsightEvidence:evidence,publicCompanyEvidence:publicEvidence,
     ...(kind==='records'?{salesScope:undefined}:{})};
+  const sourceIds=(item:CustomerInsightEvidence,companySource:boolean)=>(item.sourceIds??[]).map(id=>companySource?`company-${deal.id}-${id}`:id);
+  const profiles=(kind==='demand'?publicEvidence??[]:evidence.filter(item=>!libraryIds.has(item.id)))
+    .filter(item=>item.sourceIds?.length&&!item.id.startsWith('expansion-web-'));
+  const profileRequested=kind==='profile'||kind==='demand'&&isCustomerProfileRequest(input.query);
+  const quote=(item:CustomerInsightEvidence)=>`> ${formatCustomerEvidenceQuote(item,true)}`;
+  const unresolvedDemand='现有资料尚未确认客户对这件事的实际需求。';
   const format=(raw:string):GenerationOutput|undefined=>{
     if(kind==='records'){
-      const answer=formatCustomerRecordAnswer(raw,requireNarrative);
-      return answer?{answer,mode:'live'}:undefined;
+      const result=formatCustomerRecordResult(raw,requireNarrative);
+      return result?{answer:result.answer,mode:'live',groundingRejected:result.groundingRejected}:undefined;
     }
     const formatted=kind==='demand'?formatCustomerDemand(raw,evidence,demandEvidenceQuery,publicEvidence,requireNarrative):formatCustomerInsightResult(raw,evidence,requireNarrative);
     if(!formatted)return undefined;
     const selected=new Set(formatted.factIds);
-    const evidenceIds=evidence.filter(item=>selected.has(item.id)).flatMap(item=>
-      (item.sourceIds??[]).map(id=>kind==='profile'&&!libraryIds.has(item.id)?`company-${deal.id}-${id}`:id));
+    const evidenceIds=evidence.filter(item=>selected.has(item.id)).flatMap(item=>sourceIds(item,kind==='profile'&&!libraryIds.has(item.id)));
+    const publicIds=new Set('profileFactIds' in formatted?formatted.profileFactIds as string[]:[]);
     if('profileFactIds' in formatted){
-      const publicIds=new Set(formatted.profileFactIds as string[]);
-      for(const item of publicEvidence??[])if(publicIds.has(item.id))evidenceIds.push(...(item.sourceIds??[]).map(id=>`company-${deal.id}-${id}`));
+      for(const item of publicEvidence??[])if(publicIds.has(item.id))evidenceIds.push(...sourceIds(item,true));
     }
-    return {answer:formatted.answer,mode:'live',evidenceIds};
+    const additions:string[]=[];
+    if(requireNarrative&&profileRequested&&!profiles.some(item=>selected.has(item.id)||publicIds.has(item.id))){
+      const unusedProfile=profiles.slice(0,3);
+      if(unusedProfile.length){
+        additions.push(unusedProfile.map(quote).join('\n\n'));
+        evidenceIds.push(...unusedProfile.flatMap(item=>sourceIds(item,true)));
+      }
+    }
+    if(requireNarrative&&kind==='demand'&&(profileRequested||formatted.groundingRejected)&&!selected.size&&
+      !/(?:尚未确认|无法确认|无法判断|未能确认|还不能确认|还不能判断|没有[^。！？]{0,20}(?:直接|明确)?(?:证据|记录))/.test(formatted.answer))additions.push(unresolvedDemand);
+    return {answer:[formatted.answer,...additions].join('\n\n'),mode:'live',evidenceIds,groundingRejected:formatted.groundingRejected};
   };
   const result=await generate(request);
   if(result.mode!=='live')fail('客户洞察需要大模型。请在设置的「服务连接」中配置并启用大模型后重试。',503);
   const formatted=format(result.answer);
   if(formatted)return {...formatted,modelName:result.modelName};
   if(requireNarrative){
-    const retry=await generate({...request,instruction:`${instruction}\n请重新写出简明的 answer 正文。正文可以直接分析能回答的部分。需要陈述企业事实时，只使用已提供的来源标记；无法核实的事实请省略。`});
-    const repaired=retry.mode==='live'?format(retry.answer):undefined;
-    if(repaired)return {...repaired,modelName:retry.modelName};
+    try{
+      const retry=await generate({...request,instruction:`${instruction}\n请重新写出简明的 answer 正文。先用自然语言回答资料能够支持的部分，无法核实的企业事实请省略。直接展示原文时，只用已提供的来源标记。`});
+      const repaired=retry.mode==='live'?format(retry.answer):undefined;
+      if(repaired)return {...repaired,modelName:retry.modelName};
+    }catch(error){if(!(error instanceof DomainError))throw error;}
+    const companyFacts=profileRequested?profiles.slice(0,3):[];
+    const records=kind==='demand'?evidence.filter(item=>supportsDemand(item,demandEvidenceQuery)).slice(0,2):[];
+    const webClues=(publicEvidence??[]).filter(item=>item.id.startsWith('expansion-web-')).slice(0,2);
+    const answer=[
+      companyFacts.length?'本轮查到的企业资料。':profileRequested?'本轮没有取得可引用的企业画像资料。':'',
+      ...companyFacts.map(quote),
+      kind==='demand'?(records.length?'项目里有以下相关记录，当前情况仍需向客户核实。':unresolvedDemand):'',
+      ...records.map(quote),...webClues.map(quote),
+      kind==='records'?'本轮未查询官方记录库，企业是否有相关记录仍待核实。':'',
+      '模型未能提供可核实的完整分析。',
+    ].filter(Boolean).join('\n\n');
+    return {answer,mode:'demo',modelName:result.modelName,groundingRejected:true,evidenceIds:[
+      ...[...companyFacts,...webClues].flatMap(item=>sourceIds(item,true)),...records.flatMap(item=>sourceIds(item,false)),
+    ]};
   }
   fail('大模型已返回内容，但答复未通过资料核对。请重试或缩小问题范围。',502);
 }
@@ -608,7 +640,7 @@ async function buildRun(state:StoredState,role:Role,query:string,context:ActionC
     for(const item of referencesUsed)if(usedIds.has(item.id)&&!citations.some(entry=>entry.id===item.id))citations.push(item);
     usedAgents.push(agentId);answers.push(output.answer);
     const references=revision?'按当前要求改写上一轮输出':checkRecords?'按当前问题整理官方核验入口，未查询记录库':scopedInsight&&insightKind==='demand'?'核对当前项目中的客户需求记录与相关知识库证据':scopedInsight?'基于当前项目与相关企业资料分析':`引用${usedIds.size}条生效资料`;
-    const generationStatus=output.groundingRejected?`已调用模型，${output.mode==='live'?'已保留通过资料核对的内容':'回复未通过资料核对'}`:output.mode==='demo'?'本地规则演示，未请求外部模型':'服务端外部模型返回';
+    const generationStatus=output.groundingRejected?`已调用模型，${output.mode==='live'?'已保留通过资料核对的内容':'已展示本轮可核对资料及核验状态'}`:output.mode==='demo'?'本地规则演示，未请求外部模型':'服务端外部模型返回';
     step(`${agentName(agentId)}生成`,`${generationStatus}${output.modelName?`（${output.modelName}）`:''}；${references}${deal?`；客户：${deal.name}`:''}${instruction?`；节点指令：${instruction}`:''}`, output.groundingRejected?'warning':'success',agentId,Date.now()-tick);
   };
     step('主 Agent 识别意图',`${role==='manager'?'销售管理者':'销售'}主 Agent ${options.agentId?'按指定专家':inheritedRoute.length?'沿用当前对话专家':'按问题关键词路由'}至${routed.map(agentName).join('、')}。`);
@@ -905,7 +937,7 @@ async function executeActionInternal(original:WorkbenchState,role:Role,action:st
       activity(state,role,'应用已发布',`${workflow.name} · v${workflow.version}`,'workflow',now);message='已发布，销售视角现在可以使用此版本';break;
     }
     case 'chat': {
-      const query=text(payload.query,'问题',6000);run=await buildRun(state,role,query,context,now,{agentId:payload.agentId,dealId:payload.dealId,conversationRunIds:payload.conversationRunIds,talkTrackIds:payload.talkTrackIds});state.runs.unshift(run);for(const trackId of [...new Set(run.citations.filter(c=>state.talkTracks?.some(t=>t.id===c.id)).map(c=>c.id))]){(state.talkTrackUsages??=[]).unshift({trackId,runId:run.id,dealId:run.dealId,usedAt:now});}mark(state,run.id,role);activity(state,role,'专家协作已完成',`${run.agentIds.map(agentName).join('、')} · ${run.answerSource==='property-records'?'知识库房源筛选':run.mode==='demo'?'演示生成':'外部模型生成'}`,'run',now);message=run.answerSource==='property-records'?'已完成知识库房源筛选':run.answerSource==='evidence-boundary'?'已调用模型，当前回复未通过资料核对':run.mode==='demo'?'已完成演示生成，未调用外部模型':'已完成服务端模型生成';break;
+      const query=text(payload.query,'问题',6000);run=await buildRun(state,role,query,context,now,{agentId:payload.agentId,dealId:payload.dealId,conversationRunIds:payload.conversationRunIds,talkTrackIds:payload.talkTrackIds});state.runs.unshift(run);for(const trackId of [...new Set(run.citations.filter(c=>state.talkTracks?.some(t=>t.id===c.id)).map(c=>c.id))]){(state.talkTrackUsages??=[]).unshift({trackId,runId:run.id,dealId:run.dealId,usedAt:now});}mark(state,run.id,role);activity(state,role,'专家协作已完成',`${run.agentIds.map(agentName).join('、')} · ${run.answerSource==='property-records'?'知识库房源筛选':run.answerSource==='evidence-boundary'?'已调用模型 · 资料校验':run.mode==='demo'?'演示生成':'外部模型生成'}`,'run',now);message=run.answerSource==='property-records'?'已完成知识库房源筛选':run.answerSource==='evidence-boundary'?'已调用模型，已展示核对结果':run.mode==='demo'?'已完成演示生成，未调用外部模型':'已完成服务端模型生成';break;
     }
     case 'workflow_run': {
       if(payload.mode!==undefined&&payload.mode!=='draft'&&payload.mode!=='published')fail('运行模式不正确');

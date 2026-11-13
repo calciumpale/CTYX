@@ -39,8 +39,10 @@ type Scenario = {
   candidates: KnowledgeAgentCandidate[];
   replies: Partial<Record<Phase, string | string[]>>;
   requireNarrative?: boolean;
+  expectedMode?: Run['mode'];
   projectProfile?: NonNullable<ReturnType<typeof createSeed>['deals'][number]['companyProfile']>;
   searchCompanyExpansion?: ActionContext['searchCompanyExpansion'];
+  enrichCompany?: ActionContext['enrichCompany'];
 };
 
 const selection = (...sources: KnowledgeAgentCandidate[]) => JSON.stringify({
@@ -118,6 +120,7 @@ async function runChat(scenario: Scenario) {
       now, generate: generate('answer'), generateInsight: generate('insight'),
       requireNarrative: scenario.requireNarrative,
       searchCompanyExpansion: scenario.searchCompanyExpansion,
+      enrichCompany: scenario.enrichCompany,
       prepareKnowledge: async request => {
         requests.push(request);
         const context = await prepareKnowledgeContext(request, {
@@ -136,7 +139,7 @@ async function runChat(scenario: Scenario) {
     assert.deepEqual(calls.map(call => call.phase), sentPhases, 'every callback reached the loopback provider');
     assert.ok(result.run);
     assert.ok(result.state.runs.some(run => run.id === result.run?.id));
-    assert.equal(result.run.mode, 'live');
+    assert.equal(result.run.mode, scenario.expectedMode ?? 'live');
     assert.doesNotMatch(JSON.stringify(result.run), /历史回合专用标记|previous-turn-only|合成旧任务/);
     assert.doesNotMatch(JSON.stringify(calls), /历史回合专用标记|previous-turn-only|合成旧任务/);
     return { run: result.run, calls, requests, queries, prepared };
@@ -146,6 +149,44 @@ async function runChat(scenario: Scenario) {
 }
 
 const userPayload = (call: Call) => call.messages.filter(message => message.role === 'user').at(-1)?.content ?? '';
+
+const compoundQuestion = '补全一下这家公司的画像，同时查一下他是不是有扩店的一些需求';
+const registryProfile = {
+  companyName: company, summary: '企业资料', status: 'ready' as const, provider: 'qcc' as const,
+  modelUsed: false, warnings: [], updatedAt: now,
+  facts: [{ label: '主营业务', value: '连锁餐饮运营', sourceIds: ['registry'] }],
+  sources: [{ id: 'registry', title: '合成企业登记资料', url: 'https://example.com/company', provider: 'qcc' as const, retrievedAt: now }],
+};
+
+test('a compound insight keeps verified profile and safe prose when part of the provider answer is rejected', async () => {
+  const checked: string[] = [];
+  const result = await runChat({
+    question: compoundQuestion, useDeal: true, candidates: [], requireNarrative: true,
+    enrichCompany: async () => { checked.push('profile'); return registryProfile; },
+    searchCompanyExpansion: async () => { checked.push('search'); return { ...registryProfile, facts: [], sources: [], provider: 'web', status: 'partial' }; },
+    replies: { insight: JSON.stringify({ status: 'recorded', answer: '这次先看已有的企业登记资料。\n\n[[fact-1]]\n> [[invented-source]]\n\n该公司已决定下月扩店。\n\n建议先向门店拓展部门确认目标商圈。' }) },
+  });
+  assert.deepEqual(checked, ['profile', 'search']);
+  assert.deepEqual(result.calls.map(call => call.phase), ['insight']);
+  assert.match(result.run.answer, /连锁餐饮运营/);
+  assert.match(result.run.answer, /确认目标商圈/);
+  assert.match(result.run.answer, /尚未确认|无法确认/);
+  assert.doesNotMatch(result.run.answer, /已决定|invented-source/);
+  assert.deepEqual(result.run.citations.map(item => item.title), ['合成企业登记资料']);
+});
+
+test('a compound insight still returns its verified profile after two unusable model outputs', async () => {
+  const result = await runChat({
+    question: compoundQuestion, useDeal: true, candidates: [], requireNarrative: true, projectProfile: registryProfile,
+    expectedMode: 'demo',
+    replies: { insight: ['{"answer":', '{"answer":'] },
+  });
+  assert.deepEqual(result.calls.map(call => call.phase), ['insight', 'insight']);
+  assert.match(result.run.answer, /连锁餐饮运营/);
+  assert.match(result.run.answer, /尚未确认|无法确认/);
+  assert.deepEqual(result.run.citations.map(item => item.title), ['合成企业登记资料']);
+  assert.equal(result.run.answerSource, 'evidence-boundary');
+});
 
 test('the screenshot question saves the final model prose without a fixed heading or opening', async () => {
   const answer = '目前还不能判断这家客户是否需要租赁场地。仅凭餐饮行业背景，我会先把它当成待跟进的线索。\n\n如果你想尽快确认，先问拓展团队近期是否在看新铺，或者已有门店准备续租、搬迁。';

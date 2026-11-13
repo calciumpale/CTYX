@@ -15,7 +15,7 @@ const status=(expected:number)=>(error:unknown)=>error instanceof DomainError&&e
 test('customer insight filters unsupported assertions from model suggestions and keeps uncertain source snippets attributed',()=>{
   const deal=createSeed(now).deals[0];
   deal.companyProfile={companyName:deal.name,summary:'只保存了公开网页片段',provider:'web',status:'partial',facts:[],warnings:[],modelUsed:false,updatedAt:now,
-    sources:[{id:'web-1',title:'企业公开介绍',url:'https://example.com/company',provider:'web',retrievedAt:now,snippet:'公开网页提及该企业从事设备服务。'}]};
+    sources:[{id:'web-1',title:`${deal.name} 企业公开介绍`,url:'https://example.com/company',provider:'web',retrievedAt:now,snippet:'公开网页提及该企业从事设备服务。'}]};
   const evidence=customerInsightEvidence(deal);
   const answer=formatCustomerInsight(JSON.stringify({
     factIds:['source-1'],insights:['建议先核实实际业务线。','每月8000元是本项目报价。','现有三间商铺。'],

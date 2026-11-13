@@ -1,4 +1,5 @@
 import type { Deal } from './types.ts';
+import { groundedWebProfileFacts, webSourceMentionsCompany } from './company-profile-evidence.ts';
 
 export interface CustomerInsightEvidence {
   id: string;
@@ -11,6 +12,7 @@ export interface CustomerInsightEvidence {
 interface CustomerInsightResult {
   answer: string;
   factIds: string[];
+  groundingRejected?: boolean;
 }
 
 interface CustomerDemandResult extends CustomerInsightResult {
@@ -85,18 +87,21 @@ const narrativeInstruction = '在 answer 中用自然的 Markdown 直接回答�
 export const CUSTOMER_RECORD_INSTRUCTION = `用户想核验当前企业的历史记录。系统本轮未查询官方数据库。只返回 JSON 对象 {"answer":"你的回答"}。${narrativeInstruction} 用自己的话说明目前无法确认，并根据当前问题、企业名称和同一企业的追问语境，用证据标记提供 1 至 3 个适用的核验入口。可用 ID：registry（行政处罚、经营异常和市场监管严重违法失信）；penalties（已公示行政处罚）；enforcement（司法执行、失信被执行人）；food（食品安全抽检）。这些入口用于下一步核实，不能证明有或没有违规。不要声称查询过，也不要补充记录、链接或搜索结果。`;
 
 export function formatCustomerRecordAnswer(raw: string, requireNarrative = false): string | undefined {
+  return formatCustomerRecordResult(raw, requireNarrative)?.answer;
+}
+
+export function formatCustomerRecordResult(raw: string, requireNarrative = false): CustomerInsightResult | undefined {
   const output = insightObject(raw);
-  if (output && (requireNarrative || Object.hasOwn(output, 'answer'))) {
-    const rendered = renderNarrative(output.answer, new Map(Object.entries(recordChecks)), 'records');
-    return rendered?.factIds.length && rendered.factIds.length <= 3 ? rendered.answer : undefined;
+  if (requireNarrative || output && Object.hasOwn(output, 'answer')) {
+    return renderNarrative(narrativeText(raw, output), new Map(Object.entries(recordChecks)), 'records');
   }
   if (!Array.isArray(output?.checks)) return undefined;
   const checks = [...new Set(output.checks)].flatMap(id => typeof id === 'string' && Object.hasOwn(recordChecks, id)
     ? [`- ${recordChecks[id as keyof typeof recordChecks]}`] : []).slice(0, 3);
   if (!checks.length) return undefined;
-  return ['现有资料无法确认这家企业是否有相关记录。工作台本次未查询官方记录库。',
+  return { answer: ['现有资料无法确认这家企业是否有相关记录。工作台本次未查询官方记录库。',
     '### 可核验的官方入口', ...checks,
-    '查询时用企业全称或统一社会信用代码核对主体。涉及门店或关联公司时，核对实际经营主体。'].join('\n\n');
+    '查询时用企业全称或统一社会信用代码核对主体。涉及门店或关联公司时，核对实际经营主体。'].join('\n\n'), factIds: [] };
 }
 
 const oneLine = (value: string) => value.replace(/\s+/g, ' ').trim();
@@ -104,13 +109,18 @@ const oneLine = (value: string) => value.replace(/\s+/g, ' ').trim();
 export function customerInsightEvidence(deal: Deal): CustomerInsightEvidence[] {
   const profile = deal.companyProfile;
   const sources = new Map(profile?.sources.map(source => [source.id, oneLine(source.title)]));
-  const publicFacts = (profile?.facts ?? []).flatMap((fact, index) => {
-    const sourceIds = [...new Set(fact.sourceIds.filter(id => sources.get(id)))];
+  const publicFacts = (profile?.facts ?? []).flatMap((record, index) => {
+    const candidate = { ...record, sourceIds: [...new Set(record.sourceIds.filter(id => sources.get(id)))] };
+    const fact = profile?.provider === 'web' ? groundedWebProfileFacts([candidate], profile.sources, deal.name)[0] : candidate;
+    if (!fact) return [];
+    const sourceIds = fact.sourceIds;
     if (!sourceIds.length || !fact.label.trim() || !fact.value.trim()) return [];
     return [{ id: `fact-${index + 1}`, label: oneLine(fact.label), value: oneLine(fact.value).slice(0, 800),
       source: [...new Set(sourceIds.map(id => sources.get(id)))].join('、'), sourceIds }];
   }).slice(0, 16);
-  const publicExcerpts = publicFacts.length ? [] : (profile?.sources ?? []).flatMap((source, index) => source.snippet?.trim()
+  const hasProfileDetail = publicFacts.some(item => !/^(?:(?:企业|公司|客户|主体|机构)(?:的)?(?:名称|全称)|名称|全称|统一社会信用代码|信用代码|工商注册号)$/.test(item.label));
+  const publicExcerpts = hasProfileDetail ? [] : (profile?.sources ?? []).flatMap((source, index) => source.snippet?.trim() &&
+    (source.provider !== 'web' || webSourceMentionsCompany(source, deal.name))
     ? [{ id: `source-${index + 1}`, label: '公开来源摘录', value: oneLine(source.snippet).slice(0, 400),
       source: `${oneLine(source.title)}，待核实`, sourceIds: [source.id] }]
     : []).slice(0, 6);
@@ -128,7 +138,7 @@ export function customerInsightEvidence(deal: Deal): CustomerInsightEvidence[] {
   ].flatMap(([label, value], index) => value?.trim()
     ? [{ id: `record-${index + 1}`, label: label!, value: oneLine(value).slice(0, 800), source: recordedSource }]
     : []);
-  return [...publicFacts, ...publicExcerpts, ...records];
+  return [...publicExcerpts, ...publicFacts, ...records];
 }
 
 export function customerDemandEvidence(deal: Deal): CustomerInsightEvidence[] {
@@ -178,27 +188,28 @@ function selectedEvidence(ids: unknown[], evidence: CustomerInsightEvidence[]): 
 }
 
 type NarrativeKind = 'profile' | 'records' | 'demand';
-const sourceMarker = /^( {0,3}>[ \t]+)\[\[([A-Za-z0-9_.:-]{1,200})\]\][ \t]*(?=\r?$)/gm;
+const sourceMarker = /\[\[([A-Za-z0-9_.:-]{1,200})\]\]/g;
+const standaloneMarker = /^( {0,3}>[ \t]+)?\[\[([A-Za-z0-9_.:-]{1,200})\]\][ \t]*$/;
 const autolink = /(?:https?:|ftp:|mailto:|javascript:|data:|www\.|[\w.+-]+@[\w.-]+\.[a-z]{2,}|(?:^|[\s(])\/\/[a-z\d]|\b[a-z\d-]+(?:\.[a-z\d-]+)*\.(?:com|cn|gov|org|net|io|co|edu|info|app)(?:\b|\/))/i;
 const inventedLink = /(?:\]\s*\(|\]\s*\[|^\s{0,3}\[[^\]\n]+\]:|<[^>]*>|```|~~~)/m;
 const unverifiedIntent = /(?:(?:客户|对方|他们|她们|该企业|这家(?:企业|公司)).{0,12})?(?:确实|明确|已经|正在|近期|目前|一定会|很可能|大概率|没有|暂无|并无|有|无)(?:明确的?|实际的?|当前的?|任何)?(?:租赁|租房|租用|租店|租铺|承租|购房|采购|选址|搬迁|扩店|拓店|扩张|开店|场地)(?:的)?(?:需求|意向|计划|安排|动作)|(?:客户|对方|他们|她们|该企业|这家(?:企业|公司)).{0,8}(?:计划|打算|想要|想在|会在|准备|正在|已经|已)(?:[^，。！？；]{0,18})(?:租|承租|购|买|选址|搬迁|扩店|拓店|扩张|开店)|(?:已经|正在|计划|打算|准备|需要|将会)(?:在[^，。！？；]{1,12})?(?:租房|承租|采购|选址|迁址|搬迁|扩店|拓店|扩张|开店)/;
 const unverifiedProfile = /(?:注册资本|法定代表人|经营范围|主营业务|主要业务|经营重点|统一社会信用代码|成立时间|营收|营业额|门店(?:数|规模)|客户预算).{0,6}(?:是|为|达|超过|包括|覆盖|从事)|(?:企业|公司|他们|客户).{0,6}(?:成立于|隶属|主营|专营|从事|拥有|旗下有|在营|已经倒闭)|(?:设有|经营|拥有|共有|已开|开设|运营).{0,12}[\d一二三四五六七八九十百千万两]+\s*家(?:门店|分店|店铺)|(?:行业|市场).{0,6}(?:排名?|位居|领先).{0,6}(?:前|第|\d)/;
 const unverifiedRecord = /(?:已(?:经)?|我(?:方)?|我们|本次|系统).{0,16}(?:查阅|查到|查过|查了|核实到|检索到|看到(?:了)?[^，。！？；]{0,18}(?:处罚|违规|失信|经营异常|相关记录))|(?:查询|检索|核验|公示)结果(?:显示|表明|为|是)|(?:未发现|未查到|没有查到|查无|无任何|无|没有|不存在|未有|从未|没有任何|未受)(?:相关|任何|公开|已公示|被公示|受到)?(?:行政处罚|违规|违法|失信|被执行|经营异常|不良|处罚)|(?:曾经|已(?:经)?|确实|存在|有|被|遭到|受到).{0,8}(?:行政处罚|违规|违法|失信|被执行|经营异常|不良记录|处罚|罚款)|(?:违规|违法|处罚|失信|经营异常).{0,8}(?:记录)?(?:是|为)(?:零|无|\d)/;
-const decisiveIntent = /(?:客户|对方|他们|她们|企业|公司|负责人).{0,12}(?:表示|明确|确实|的确|透露|打算|想|希望|拟|准备|决定|将会|一定|已经|正在|刚刚|已).{0,14}(?:租|承租|买|采购|选址|迁址|搬迁|扩张|扩店|开店|找.{0,5}(?:铺|房|店)|签下|签约)|(?:已经|正在|刚刚|已)(?:签下|拿下|选定|租下|签约|新增).{0,12}(?:门店|店铺|场地|商铺|门面)|(?:有|无|没有|暂无|并无)(?:明确的?|实际的?|当前的?)?(?:扩店|拓店|扩张|开店|迁址|搬迁|选址|租赁|租房|承租|采购|购房)(?:计划|安排|意向|需求)/;
+const decisiveIntent = /(?:客户|对方|他们|她们|企业|公司|负责人).{0,12}(?:表示|明确|确实|的确|透露|打算|想|希望|拟|准备|决定|将会|一定|已经|正在|刚刚|已).{0,14}(?:租|承租|买|采购|选址|迁址|搬迁|扩张|扩店|开店|找.{0,5}(?:铺|房|店)|签下|签约)|(?:已经|正在|刚刚|已)(?:签下|拿下|选定|租下|签约|新增|开(?:设|出|了)?).{0,12}(?:新店|门店|店铺|场地|商铺|门面)|(?:有|无|没有|暂无|并无)(?:明确的?|实际的?|当前的?)?(?:扩店|拓店|扩张|开店|迁址|搬迁|选址|租赁|租房|承租|采购|购房)(?:计划|安排|意向|需求)/;
 const explicitUncertainty = /(?:还不能|尚不能|无法|不能|尚难|目前难以|难以|尚无法|不能据此|不足以|没法|不能仅凭)(?:直接|据此|仅凭[^，。]{1,24})?(?:确认|判断|确定|核实|下结论|证明|认定)|(?:尚不明确|尚不清楚|暂不清楚|看不出|未能证实|还未确认)|(?:没有|缺乏|没有足够的|尚缺).{0,10}(?:证据|资料|信息|记录).{0,6}(?:证明|表明|显示|确认|支持)|(?:未|没有)(?:查询|核对|核验|检索|查阅|查)(?:过)?(?:官方|监管|公开|权威)(?:机构|数据库|记录|公示|信息|平台)/;
 
 function narrativeClaimSupported(prose: string, kind: NarrativeKind): boolean {
   if (unsupportedAssertions.some(pattern => pattern.test(prose))) return false;
-  return prose.split(/(?<=[。！？!?；;])|\n/).every(sentence => {
-    const clauses = sentence.split(/[，,]/).map(clause => clause.replace(/^\s*(?:[#>*-]+|\d+[.)、])?\s*/, ''));
-    return clauses.every((clause, index) => {
-      if (explicitUncertainty.test(clause) || index === 0 && /^(?:如果|假如|假设|若|倘若)/.test(clause) ||
-        /[？?]$/.test(clause) && /(?:是否|有没有|能否|要不要|想不想|哪(?:家|些|个|里)|怎么|如何|什么|多久|吗|呢)/.test(clause)) return true;
-      const verification = /^(?:(?:下一步|目前|还|仍|可以|可|先|建议|最好|请|需要|再|并|也|宜|优先)\s*)*(?:(?:向|与|联系)[^，。！？；]{1,24})?(?:核对|核实|确认|查阅|查询|询问|问|了解|检查|比对|记录)(?:[^，。！？；]{0,22})(?:是否|有没有|是否曾|有无|哪(?:个|家|些)|具体|情况|记录|安排|计划|信息|要求|资料|进展|意向|结果)/.test(clause);
-      if (verification && !/(?:已经|确实|确定|肯定|保证|查到|查过|检索到|显示|表明)/.test(clause)) return true;
-      return !decisiveIntent.test(clause) && !unverifiedIntent.test(clause) && !unverifiedProfile.test(clause) && !unverifiedRecord.test(clause) &&
-        (kind !== 'records' || !/(?:查过|查到了|已查|查询过|未见异常|记录为空|没有问题|很干净|清白|没有|未见|无|存在|有|出现)(?:(?:相关|明确|已公示)?记录)?$/.test(clause.replace(/[。！!]$/, '')));
-    });
+  const clauses = prose.split(/[，,]|(?:但是|但|不过|然而|实际上|与此同时|事实上)(?=.{2})/).map(clause => clause.replace(/^\s*(?:[#>*-]+|\d+[.)、])?\s*/, ''));
+  return clauses.every((clause, index) => {
+    const assertion = decisiveIntent.test(clause) || unverifiedIntent.test(clause) || unverifiedProfile.test(clause) || unverifiedRecord.test(clause);
+    const uncertainty = explicitUncertainty.exec(clause);
+    if (uncertainty && (!assertion || ![decisiveIntent, unverifiedIntent, unverifiedProfile, unverifiedRecord].some(pattern => pattern.test(clause.slice(0, uncertainty.index))))) return true;
+    if (index === 0 && clauses.length > 1 && /^(?:如果|假如|假设|若|倘若)/.test(clause) ||
+      /[？?]$/.test(clause) && /(?:是否|有没有|能否|要不要|想不想|哪(?:家|些|个|里)|怎么|如何|什么|多久|吗|呢)/.test(clause)) return true;
+    const verification = /^(?:(?:下一步|目前|还|仍|可以|可|先|建议|最好|请|需要|再|并|也|宜|优先)\s*)*(?:(?:向|与|联系)[^，。！？；]{1,24})?(?:核对|核实|确认|查阅|查询|询问|问|了解|检查|比对|记录)(?:[^，。！？；]{0,22})(?:是否|有没有|是否曾|有无|哪(?:个|家|些)|具体|情况|记录|安排|计划|信息|要求|资料|进展|意向|结果)/.test(clause);
+    if (verification && !/(?:已经|确实|确定|肯定|保证|查到|查过|检索到|显示|表明)/.test(clause)) return true;
+    return !assertion && (kind !== 'records' || !/(?:查过|查到了|已查|查询过|未见异常|记录为空|没有问题|很干净|清白|没有|未见|无|存在|有|出现)(?:(?:相关|明确|已公示)?记录)?$/.test(clause.replace(/[。！!]$/, '')));
   });
 }
 
@@ -210,31 +221,78 @@ function literalQuote(value: string): string {
   return `${ticks} ${line} ${ticks}`;
 }
 
-function evidenceQuotes(evidence: CustomerInsightEvidence[]): Map<string, string> {
-  return new Map(evidence.map(item => {
-    const prefix = item.id.startsWith('expansion-web-') ? `公开搜索摘要，待核实（${literalQuote(item.source)}） · `
-      : item.label === '公开来源摘录' ? `公开来源摘录（${literalQuote(item.source)}） · `
-      : /^项目人工记录，\d{4}-\d{2}-\d{2}$/.test(item.source) ? `${item.source} · ` : '';
-    return [item.id, `${prefix}${literalQuote(item.value)}`];
-  }));
+export function formatCustomerEvidenceQuote(item: CustomerInsightEvidence, includeLabel = false): string {
+  const prefix = item.id.startsWith('expansion-web-') ? `公开搜索摘要，待核实（${literalQuote(item.source)}） · `
+    : item.label === '公开来源摘录' ? `公开来源摘录（${literalQuote(item.source)}） · `
+    : /^项目人工记录，\d{4}-\d{2}-\d{2}$/.test(item.source) ? `${item.source} · `
+    : includeLabel && item.sourceIds?.length && item.label !== '已授权知识库摘录' ? `${literalQuote(item.label)}：` : '';
+  return `${prefix}${literalQuote(item.value)}`;
+}
+
+function evidenceQuotes(evidence: CustomerInsightEvidence[], includeLabels = false): Map<string, string> {
+  return new Map(evidence.map(item => [item.id, formatCustomerEvidenceQuote(item, includeLabels)]));
+}
+
+function narrativeText(raw: string, output: Record<string, unknown> | undefined): unknown {
+  if (output) return output.answer;
+  return /^[{["`]/.test(raw.trim()) ? undefined : raw;
 }
 
 function renderNarrative(value: unknown, quotes: Map<string, string>, kind: NarrativeKind): CustomerInsightResult | undefined {
-  if (typeof value !== 'string' || value.length > 12000 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(value) ||
-      inventedLink.test(value) || autolink.test(value) || /&#(?:x[\da-f]+|\d+);|&(?:colon|period|commat|sol);/i.test(value)) return undefined;
-  const prose = value.replace(sourceMarker, '');
-  if (!/\p{L}/u.test(prose) || /\[\[|\]\]/.test(prose) || !narrativeClaimSupported(prose, kind)) return undefined;
-  const markers = [...value.matchAll(sourceMarker)];
-  if (markers.length > 10) return undefined;
-  const factIds = [...new Set(markers.map(match => match[2]))];
-  if (factIds.some(id => !quotes.has(id))) return undefined;
-  const answer = value.replace(sourceMarker, (_marker, prefix: string, id: string) => `${prefix}${quotes.get(id)}`);
-  return answer.length <= 12000 ? { answer, factIds } : undefined;
+  if (typeof value !== 'string' || value.length > 12000) return undefined;
+  const ids = new Set<string>();
+  let filtered = false;
+  let quoteCount = 0;
+  const resolveQuote = (id: string, prefix = '> '): string => {
+    const quote = quotes.get(id);
+    if (!quote || quoteCount >= 10 || kind === 'records' && ids.size >= 3 && !ids.has(id)) {
+      filtered = true;
+      return '';
+    }
+    quoteCount++;
+    ids.add(id);
+    return `${prefix}${quote}`;
+  };
+  const isSafe = (line: string) => !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(line) &&
+    !inventedLink.test(line) && !autolink.test(line) && !/&#(?:x[\da-f]+|\d+);|&(?:colon|period|commat|sol);/i.test(line);
+  let fence = '';
+  const segments: string[] = [];
+  let renderedLength = 0;
+  for (const part of value.split(/(\r?\n)/)) {
+    if (part === '\n' || part === '\r\n') {
+      segments.push(part);
+      renderedLength += part.length;
+      continue;
+    }
+    const delimiter = /^\s{0,3}(`{3,}|~{3,})/.exec(part)?.[1];
+    if (fence || delimiter) {
+      if (delimiter) fence = !fence ? delimiter : delimiter[0] === fence[0] && delimiter.length >= fence.length ? '' : fence;
+      filtered = true;
+      continue;
+    }
+    const standalone = standaloneMarker.exec(part);
+    const inline = standalone || !isSafe(part.replace(sourceMarker, '')) ? [] : [...part.matchAll(sourceMarker)];
+    const prose = standalone ? '' : part.replace(sourceMarker, '');
+    const sentences = prose.split(/(?<=[。！？；])|(?<=[.!?;])(?=\s|$)/);
+    const safeProse = sentences.filter(sentence => {
+      const keep = isSafe(sentence) && !/\[\[|\]\]/.test(sentence) && narrativeClaimSupported(sentence, kind);
+      if (!keep) filtered = true;
+      return keep;
+    }).join('');
+    const line = standalone ? resolveQuote(standalone[2], standalone[1])
+      : [safeProse, ...inline.map(match => resolveQuote(match[1]))].filter(Boolean).join('\n\n');
+    if (renderedLength + line.length > 12000) return undefined;
+    segments.push(line);
+    renderedLength += line.length;
+  }
+  const answer = segments.join('');
+  if (!/\p{L}/u.test(answer)) return undefined;
+  return { answer: filtered ? answer.trim() : answer, factIds: [...ids], ...(filtered ? { groundingRejected: true } : {}) };
 }
 
 export function formatCustomerInsightResult(raw: string, evidence: CustomerInsightEvidence[], requireNarrative = false): CustomerInsightResult | undefined {
   const output = insightObject(raw);
-  if (output && (requireNarrative || Object.hasOwn(output, 'answer'))) return renderNarrative(output.answer, evidenceQuotes(evidence), 'profile');
+  if (requireNarrative || output && Object.hasOwn(output, 'answer')) return renderNarrative(narrativeText(raw, output), evidenceQuotes(evidence, true), 'profile');
   if (!Array.isArray(output?.factIds)) return undefined;
   const facts = selectedEvidence(output.factIds, evidence).slice(0, 8);
   const sections = [['对接分析（推断）', output.insights], ['待核实', output.questions], ['下一步建议', output.nextSteps]] as const;
@@ -261,7 +319,7 @@ const statedDemand = /租|买|购|选址|迁址|搬迁|扩|开店|新店|需求|
 const quotedBudget = /预算.{0,16}(?:[\d一二三四五六七八九十百千万]+\s*(?:元|万|千|百|[kKwW])|上限|未设|未定)|(?:没有|不设|无|没)(?:.{0,4})预算|^[^\p{L}\d]*[\d一二三四五六七八九十百千万]+(?:[.点][\d一二三四五六七八九十]+)?\s*(?:元|万|千|百|[kKwW])/u;
 const unverifiedConclusion = /(?:已(?:经)?|明确)(?:确认|确定|表示|说|决定|同意|获悉|进入)|(?:已有明确|因此|鉴于|既然|由于|已知)|(?:拥有|具备|需要)\s*\d|肯定|必然|势必|一定会|很可能|大概率|(?:客户|这家(?:公司|企业)|该(?:公司|企业)|对方).{0,8}(?:已|正在|近期会|很快会)(?:有|找|租|买|采购|承租|扩店|开店|选址|启动|推进)/;
 
-function supportsDemand(evidence: CustomerInsightEvidence, query: string): boolean {
+export function supportsDemand(evidence: CustomerInsightEvidence, query: string): boolean {
   const { label, value } = evidence;
   if (pendingDemand.test(value) || /^(?:无|暂无|不详|不清楚|待确认|未填|不适用|—+|-+)$/.test(value)) return false;
   const topics = [lease, purchase, expansion, space].filter(pattern => pattern.test(query));
@@ -300,17 +358,18 @@ export function formatCustomerDemand(
   requireNarrative = false,
 ): CustomerDemandResult | undefined {
   const output = insightObject(raw);
-  if (output?.status !== 'recorded' && output?.status !== 'unconfirmed') return undefined;
   const publicEvidence = profileEvidence?.filter(item => item.sourceIds?.length) ?? [];
   const publicIds = new Set(publicEvidence.map(item => item.id));
   const demandEvidence = evidence.filter(fact => !publicIds.has(fact.id) && supportsDemand(fact, query));
-  if (requireNarrative || Object.hasOwn(output, 'answer')) {
-    const rendered = renderNarrative(output.answer, evidenceQuotes([...demandEvidence, ...publicEvidence]), 'demand');
+  if (requireNarrative || output && Object.hasOwn(output, 'answer')) {
+    const quotes = new Map([...evidenceQuotes(demandEvidence), ...evidenceQuotes(publicEvidence, true)]);
+    const rendered = renderNarrative(narrativeText(raw, output), quotes, 'demand');
     if (!rendered) return undefined;
     const factIds = rendered.factIds.filter(id => !publicIds.has(id));
-    if (output.status === 'recorded' && !factIds.length) return undefined;
-    return { answer: rendered.answer, factIds, profileFactIds: rendered.factIds.filter(id => publicIds.has(id)) };
+    return { ...rendered, factIds, profileFactIds: rendered.factIds.filter(id => publicIds.has(id)),
+      ...(output?.status === 'recorded' && !factIds.length ? { groundingRejected: true } : {}) };
   }
+  if (output?.status !== 'recorded' && output?.status !== 'unconfirmed') return undefined;
   if (!Array.isArray(output.factIds) || !Array.isArray(output.questions) || !Array.isArray(output.nextSteps)) return undefined;
   const records = selectedEvidence(output.factIds, demandEvidence).slice(0, 5);
   const profile = selectedEvidence(Array.isArray(output.profileFactIds) ? output.profileFactIds : [], publicEvidence).slice(0, 5);

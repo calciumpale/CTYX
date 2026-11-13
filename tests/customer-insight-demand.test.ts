@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  customerDemandEvidence, customerInsightEvidence, formatCustomerDemand, formatCustomerInsightResult,
+  customerDemandEvidence, customerInsightEvidence, formatCustomerDemand, formatCustomerInsightResult, formatCustomerRecordResult,
   isCustomerDemandFollowup, isCustomerDemandQuestion, isCustomerProfileRequest,
 } from '../app/lib/customer-insight.ts';
 import { createSeed } from '../app/lib/seed.ts';
@@ -25,7 +25,8 @@ function dealFixture(dataOrigin: Deal['dataOrigin'] = 'research'): Deal {
       companyName: company, summary: '协会名录背景', status: 'ready', provider: 'web',
       warnings: [], modelUsed: false, updatedAt: now,
       facts: [{ label: '名录类别', value: '餐饮品牌方', sourceIds: ['listing', 'missing'] }],
-      sources: [{ id: 'listing', title: '餐饮企业名录', url: 'https://example.com/list', provider: 'web', retrievedAt: now }],
+      sources: [{ id: 'listing', title: '餐饮企业名录', url: 'https://example.com/list', provider: 'web', retrievedAt: now,
+        snippet: `${company}是餐饮品牌方。` }],
     },
   };
 }
@@ -92,6 +93,58 @@ test('keeps public source IDs aligned with facts selected for the general projec
   }), evidence);
   assert.deepEqual(output?.factIds, ['fact-1']);
   assert.match(output?.answer ?? '', /餐饮品牌方/);
+});
+
+test('excludes an unsupported stored web fact and retains its source as an attributed excerpt', () => {
+  const deal = dealFixture();
+  deal.companyProfile!.facts[0].value = '已扩张至全国各地';
+  const evidence = customerInsightEvidence(deal);
+  assert.equal(evidence.find(item => item.id === 'fact-1'), undefined);
+  assert.equal(evidence.find(item => item.id === 'source-1')?.value, `${company}是餐饮品牌方。`);
+});
+
+test('keeps matched public context ahead of identity-only profile facts', () => {
+  const deal = dealFixture();
+  deal.companyProfile!.facts = [{ label: '机构名称', value: company, sourceIds: ['listing'] }];
+  const evidence = customerInsightEvidence(deal);
+  assert.deepEqual(evidence.slice(0, 2).map(item => item.id), ['source-1', 'fact-1']);
+  assert.match(evidence[0].value, /餐饮品牌方/);
+});
+
+test('keeps verified profile quotes and safe wording when the model includes unsupported clauses and markers', () => {
+  const safe = '现有资料不能证明对方有扩店计划，建议先联系拓展团队核实。';
+  const answer = `${safe}\n\n他们已经开了新店。\n\n[[fact-1]]\n\n> [[bad-id]]\n\n打开 [来源](https://bad.invalid)。`;
+  const output = formatCustomerDemand(JSON.stringify({ answer, status: 'recorded' }), [], '客户是否有扩张需求？', customerInsightEvidence(dealFixture()), true);
+  assert.ok(output);
+  assert.ok(output.answer.startsWith(safe));
+  assert.match(output.answer, /名录类别：餐饮品牌方/);
+  assert.doesNotMatch(output.answer, /已经开|bad-id|bad\.invalid/);
+  assert.deepEqual(output.factIds, []);
+  assert.deepEqual(output.profileFactIds, ['fact-1']);
+  assert.equal(output.groundingRejected, true);
+});
+
+test('does not let uncertainty about a detail validate an assertion about the company', () => {
+  const good = '先联系拓展团队核实。';
+  for (const claim of [
+    '我们已经确认客户确实有扩张计划但具体地址尚不清楚。',
+    '虽然还不能确认具体位置但他们已选址并准备开店。',
+    '现有资料不能证明对方有扩店计划但他们已经开了新店。',
+  ]) {
+    const output = formatCustomerDemand(`${claim}\n\n${good}`, [], '客户是否有扩张需求？', undefined, true);
+    assert.equal(output?.answer, good, claim);
+    assert.equal(output.groundingRejected, true, claim);
+  }
+});
+
+test('official record guidance keeps approved verification entrances and omits unsupported findings', () => {
+  const safe = '可用企业全称查询并核对实际经营主体。';
+  const output = formatCustomerRecordResult(JSON.stringify({ answer: `${safe}\n\n> [[registry]]\n\n> [[invented]]\n\n我在数据库里看到了该公司的行政处罚。` }), true);
+  assert.ok(output);
+  assert.ok(output.answer.startsWith(safe));
+  assert.match(output.answer, /https:\/\/www\.gsxt\.gov\.cn/);
+  assert.doesNotMatch(output.answer, /看到了|invented/);
+  assert.deepEqual(output.factIds, ['registry']);
 });
 
 test('renders public-only demand assessment as unconfirmed, even if the model reports a record', () => {

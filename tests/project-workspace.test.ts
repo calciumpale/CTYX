@@ -9,7 +9,7 @@ const now='2026-10-24T08:00:00.000Z';
 const context={now};
 const rejectsStatus=(status:number)=>(error:unknown)=>error instanceof DomainError&&error.status===status;
 const createInput={projectName:'采购协同系统一期',name:'远山科技有限公司',contact:'陈经理',industry:'企业服务'};
-const publicProfile=():CompanyProfile=>({companyName:createInput.name,summary:'公司官网介绍其提供企业协同产品。',facts:[{label:'主营业务',value:'企业协同产品',sourceIds:['official']}],sources:[{id:'official',title:'公司官网',url:'https://example.com/about',provider:'web',retrievedAt:now}],provider:'web',status:'ready',warnings:[],updatedAt:now,modelUsed:false});
+const publicProfile=():CompanyProfile=>({companyName:createInput.name,summary:'公司官网介绍其提供企业协同产品。',facts:[{label:'主营业务',value:'企业协同产品',sourceIds:['official']}],sources:[{id:'official',title:'公司官网',url:'https://example.com/about',provider:'web',retrievedAt:now,snippet:`${createInput.name}提供企业协同产品。`}],provider:'web',status:'ready',warnings:[],updatedAt:now,modelUsed:false});
 async function manual(role:'sales'|'manager'='sales') {return executeAction(createSeed(now),role,'deal_create',createInput,context);}
 
 test('new projects keep company and project identities separate and retain earlier records',async()=>{

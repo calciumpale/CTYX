@@ -83,11 +83,12 @@ export function useWorkbench() {
     mutationQueue.current = result.then(() => undefined, () => undefined);
     return result;
   }, [acceptMutation, request]);
-  const uploadFollowup = useCallback((dealId: string, text: string, audio: File): Promise<ApiResult> => {
+  const uploadFollowup = useCallback((dealId: string, text: string, audio: File, sourceOnly = false): Promise<ApiResult> => {
     const perform = async () => {
       const form = new FormData();
       form.set('dealId', dealId); form.set('text', text); form.set('audio', audio);
       form.set('revision', String(stateRef.current?.revision ?? ''));
+      if (sourceOnly) form.set('sourceOnly', 'true');
       return request('/api/deal-recordings', { method: 'POST', credentials: 'same-origin', body: form },
         response => acceptMutation(response, '录音未能保存，请稍后重试。'));
     };

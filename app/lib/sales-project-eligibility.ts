@@ -21,6 +21,6 @@ export function markSalesBusinessChanges(original: WorkbenchState, next: Workben
     const fields = [...SALES_BUSINESS_FIELDS, 'stage', 'outcome'] as const;
     const noteIds = new Set(previous.notes.map(note => note.id));
     const transcriptIds = new Set((original.transcripts ?? []).filter(item => item.dealId === deal.id).map(item => item.id));
-    if (fields.some(key => JSON.stringify(previous[key]) !== JSON.stringify(deal[key])) || deal.notes.some(note => !noteIds.has(note.id)) || (next.transcripts ?? []).some(item => item.dealId === deal.id && !transcriptIds.has(item.id))) deal.businessRecordedAt = now;
+    if (fields.some(key => JSON.stringify(previous[key]) !== JSON.stringify(deal[key])) || deal.notes.some(note => !note.recording?.sourceOnly && !noteIds.has(note.id)) || (next.transcripts ?? []).some(item => item.dealId === deal.id && !transcriptIds.has(item.id))) deal.businessRecordedAt = now;
   }
 }

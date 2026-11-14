@@ -45,6 +45,7 @@ export function assertMemberApi(role:MemberRole,pathname:string,method:string):v
   if(path==='/api/speech-settings'){if(verb==='GET'||verb==='POST'&&role!=='sales')return;return denied();}
   if(path==='/api/sales-reports'){if(role==='manager'&&['GET','POST'].includes(verb))return;return denied();}
   if(path==='/api/recording-quotes'){if(role!=='admin'&&['GET','POST','DELETE'].includes(verb))return;return denied();}
+  if(path==='/api/recording-processing'){if(role!=='admin'&&['GET','POST'].includes(verb))return;return denied();}
   if(['/api/deal-recordings','/api/recording-transcriptions','/api/training-voice'].includes(path)){if(role!=='admin'&&['GET','HEAD','POST','DELETE'].includes(verb))return;return denied();}
   return denied();
 }
@@ -55,7 +56,7 @@ export function assertMemberRoute(request:Request,role:MemberRole):void {
   const url=new URL(request.url);assertMemberApi(role,url.pathname,request.method);
   if(role==='admin'&&url.pathname.replace(/\/$/,'')==='/api/approvals'&&request.method==='GET'&&(url.searchParams.get('scope')!=='templates'||url.searchParams.has('id')))denied();
 }
-const customerActions=new Set(['deal_intake','deal_intake_followup','deal_assess','deal_create','deal_update','deal_enrich','deal_note','deal_stage','deal_outcome','transcript_add','feedback_retry','skill_candidate','chat','contract_save','contract_review','contract_finding_status','training_start','training_reply','training_finish']);
+const customerActions=new Set(['deal_intake','deal_intake_followup','deal_assess','deal_create','deal_update','deal_enrich','deal_note','recording_apply','deal_stage','deal_outcome','transcript_add','feedback_retry','skill_candidate','chat','contract_save','contract_review','contract_finding_status','training_start','training_reply','training_finish']);
 const contentActions=new Set(['knowledge_add','talktrack_policy','talktrack_archive','talktrack_weight']);
 const builderActions=new Set(['workflow_save','workflow_publish','workflow_run','workflow_review']);
 export function assertMemberAction(role:MemberRole,action:string,payload:Record<string,unknown>,state?:WorkbenchState):void {

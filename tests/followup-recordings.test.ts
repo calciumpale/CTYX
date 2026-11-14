@@ -117,3 +117,18 @@ test('a conditional storage collision cannot overwrite an object or persist a da
   await assert.rejects(saveRecordingNote('user','sales',{dealId:deal.id,text:'',revision:state.revision,audio:file()},deps),rejectsStatus(503));
   assert.equal(saved,false);assert.equal(existing.size,1);assert.deepEqual([...existing.values()][0],Uint8Array.from([1,2,3]));
 });
+
+test('processing upload stores an original recording without counting as customer follow-up',async()=>{
+  const state=createSeed(now);
+  const deal=state.deals.find(item=>item.ownerId==='sales-1')!;
+  deal.dataOrigin='research';
+  delete deal.businessRecordedAt;
+  const store=persistence(state);
+  const result=await saveRecordingNote('user','sales',{dealId:deal.id,text:'',revision:state.revision,audio:file(),sourceOnly:true},store.deps);
+  const updated=result.state.deals.find(item=>item.id===deal.id)!;
+  assert.equal(updated.notes[0].recording?.sourceOnly,true);
+  assert.equal(updated.version,deal.version);
+  assert.equal(updated.lastContact,deal.lastContact);
+  assert.equal(updated.businessRecordedAt,undefined);
+  assert.equal(store.objects.size,1);
+});

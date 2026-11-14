@@ -8,10 +8,10 @@ import type {WorkbenchState} from '../app/lib/types.ts';
 
 const recording={id:'recording-9a83c9a6-61ce-489c-bd7a-a6dba42ee69a',name:'沟通.m4a',size:4,mimeType:'audio/mp4'},now='2026-10-25T03:00:00.000Z',origin='https://app.example.com';
 const result:SpeechResult={text:'请看企查查。',rawText:'请看气查查。',segments:[{start:0,end:3,speaker:'speaker-1',text:'请看企查查。',rawText:'请看气查查。'}],speakers:[{id:'speaker-1',label:'讲话人1'}],corrections:[{from:'气查查',to:'企查查',count:1}],model:'FunASR-Nano',durationSeconds:3,dialectHint:'auto',diarization:true,hotwordVersion:1};
-function fixture(request:(url:string,options?:RequestInit)=>Promise<Response>,configured=true){
+function fixture(request:(url:string,options?:RequestInit)=>Promise<Response>,configured=true,sourceOnly=false){
   const sqlite=new DatabaseSync(':memory:');sqlite.exec('CREATE TABLE workbench_speech_settings (user_id TEXT PRIMARY KEY,version INTEGER NOT NULL,updated_at TEXT NOT NULL,data_json TEXT NOT NULL);CREATE TABLE workbench_recording_transcriptions (user_id TEXT NOT NULL,recording_id TEXT NOT NULL,deal_id TEXT NOT NULL,version INTEGER NOT NULL,remote_id TEXT,lease_until TEXT,updated_at TEXT NOT NULL,data_json TEXT NOT NULL,PRIMARY KEY(user_id,recording_id))');
   const db={prepare(sql:string){let values:unknown[]=[];return {bind(...args:unknown[]){values=args;return this;},async first(){return sqlite.prepare(sql).get(...values as (string|number|null)[])??null;},async run(){return {meta:{changes:Number(sqlite.prepare(sql).run(...values as (string|number|null)[]).changes)}};}};}} as unknown as D1Database;
-  let state=createSeed(now);state.deals[0].dataOrigin='manual';state.deals[0].ownerId='sales-1';state.deals[0].outcome='won';state.deals[0].notes.unshift({id:'note-recording',text:'',author:'销售',date:now,recording});let refreshes=0,feedback=0,saves=0;
+  let state=createSeed(now);state.deals[0].dataOrigin='manual';state.deals[0].ownerId='sales-1';state.deals[0].outcome='won';state.deals[0].notes.unshift({id:'note-recording',text:'',author:'销售',date:now,recording:sourceOnly?{...recording,sourceOnly:true}:recording});let refreshes=0,feedback=0,saves=0;
   const environment={DB:db,BUCKET:{async get(){return {size:4,arrayBuffer:async()=>new Uint8Array([1,2,3,4]).buffer};}} as unknown as R2Bucket,...(configured?{VOICE_GATEWAY_URL:'wss://voice.example.com/ws',VOICE_GATEWAY_SECRET:'secret'.repeat(8)}:{})};
   const service=createSpeechTranscriptionService(environment,{load:async(userId)=>userId==='alice'?structuredClone(state):createSeed(now),save:async(_userId,revision,next)=>{assert.equal(revision,state.revision);state=structuredClone(next);saves++;},refresh:async()=>{refreshes++;},feedback:async()=>{feedback++;}},request);
   return {service,sqlite,get state(){return state;},get refreshes(){return refreshes;},get feedback(){return feedback;},get saves(){return saves;}};
@@ -82,4 +82,18 @@ test('failed re-transcription preserves the last completed result and the attrib
 test('replacement transcription preserves attribution even after project ownership changes',async()=>{
   const f=fixture(async()=>Response.json(remote()));const first=await linkSpeechTranscript(f.state,f.state.deals[0].id,recording.id,result,now),original=structuredClone(first.state.transcripts![0]);first.state.deals[0].ownerId='sales-2';first.state.deals[0].owner='另一位员工';
   const updated=await linkSpeechTranscript(first.state,first.state.deals[0].id,recording.id,{...result,segments:[{...result.segments[0],text:'新的准确转写'}]},'2026-10-26T03:00:00.000Z');assert.equal(updated.changed,true);assert.equal(updated.state.transcripts?.length,1);assert.match(updated.state.transcripts![0].text,/新的准确转写/);assert.deepEqual({...updated.state.transcripts![0],text:original.text},original);
+});
+
+test('processing-source audio retains its completed transcript without updating project records before review',async()=>{
+  const {service,state,sqlite}=fixture(async(_url,options)=>Response.json(remote(options?.method==='POST'?'queued':'completed')),true,true);
+  const dealId=state.deals[0].id;
+  await service.start('alice','sales',dealId,recording.id,origin);
+  const completed=await service.read('alice','sales',dealId,recording.id,origin);
+  assert.equal(completed?.status,'completed');
+  assert.ok(completed?.linked);
+  assert.equal(completed?.result?.text,result.text);
+  assert.equal(state.transcripts?.length??0,0);
+  assert.equal(state.feedbackJobs?.length??0,0);
+  assert.equal(sqlite.prepare('SELECT json_extract(data_json, \'$.linked\') AS linked FROM workbench_recording_transcriptions').get()?.linked,1);
+  sqlite.close();
 });

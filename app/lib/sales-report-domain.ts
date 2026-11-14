@@ -30,7 +30,7 @@ export function salesMutationEvents(before:WorkbenchState,after:WorkbenchState,_
     if(Object.keys(changes).length)add('update',changes,`更新项目记录：${Object.keys(changes).map(key=>fieldLabels[key]??'负责人').join('、')}`);
     if(previous.stage!==deal.stage)add('stage',{stage:{before:previous.stage,after:deal.stage}},`阶段由${previous.stage}更新为${deal.stage}`);
     if((previous.outcome??'open')!==(deal.outcome??'open'))add('outcome',{outcome:{before:previous.outcome??'open',after:deal.outcome??'open'},amount:{before:previous.amount,after:deal.amount}},`用户确认项目结果：${deal.outcome==='won'?'成单':deal.outcome==='lost'?'结束未成单':'重新跟进'}`);
-    const noteIds=new Set(previous.notes.map(note=>note.id));for(const note of deal.notes)if(!noteIds.has(note.id))add('followup',{},note.text||`保存跟进录音：${note.recording?.name??'录音'}`,note.id);
+    const noteIds=new Set(previous.notes.map(note=>note.id));for(const note of deal.notes)if(!note.recording?.sourceOnly&&!noteIds.has(note.id))add('followup',{},note.text||`保存跟进录音：${note.recording?.name??'录音'}`,note.id);
     const transcriptIds=new Set((before.transcripts??[]).filter(item=>item.dealId===deal.id).map(item=>item.id));for(const source of after.transcripts??[])if(source.dealId===deal.id&&!transcriptIds.has(source.id))add('transcript',{},source.text,source.id);
   }
   return events;

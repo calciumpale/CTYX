@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { BookmarkPlus, Check, ChevronDown, CircleAlert, FileAudio, Loader2, Play, RotateCcw } from 'lucide-react';
 import type { SpeechResult, SpeechTranscriptionJob } from '../lib/speech-types';
 import './speech-recognition.css';
@@ -48,7 +48,7 @@ function TranscriptContent({ result, job, onSeek, onQuote, quotePending, isQuote
   </div>;
 }
 
-export function RecordingTranscript({ dealId, recordingId, onSeek, onQuote, quotePending, isQuoteSaved }: QuoteControls & { dealId: string; recordingId: string; onSeek?: (seconds: number) => void }) {
+export function RecordingTranscript({ dealId, recordingId, onSeek, onQuote, quotePending, isQuoteSaved, renderCompleted, reviewLocked = false, sourceOnly = false }: QuoteControls & { dealId: string; recordingId: string; onSeek?: (seconds: number) => void; renderCompleted?: (job: SpeechTranscriptionJob) => ReactNode; reviewLocked?: boolean; sourceOnly?: boolean }) {
   const id = useId();
   const [job, setJob] = useState<SpeechTranscriptionJob | null>(null);
   const [loading, setLoading] = useState(true);
@@ -81,7 +81,7 @@ export function RecordingTranscript({ dealId, recordingId, onSeek, onQuote, quot
         const current = await readJob(await fetch(`/api/recording-transcriptions?dealId=${encodeURIComponent(dealId)}&id=${encodeURIComponent(recordingId)}`, { signal: request.signal, credentials: 'same-origin', cache: 'no-store' }));
         if (cancelled) return;
         setJob(current); setError(''); setLoading(false);
-        if (current?.status === 'completed' && current.linked && announced.current !== current.id) {
+        if (!sourceOnly && current?.status === 'completed' && current.linked && announced.current !== current.id) {
           announced.current = current.id;
           window.dispatchEvent(new CustomEvent('speech-transcription-completed', { detail: { dealId, recordingId, jobId: current.id } }));
         }
@@ -95,7 +95,7 @@ export function RecordingTranscript({ dealId, recordingId, onSeek, onQuote, quot
     };
     void load();
     return () => { cancelled = true; request?.abort(); if (timer) clearTimeout(timer); };
-  }, [dealId, recordingId, refresh]);
+  }, [dealId, recordingId, refresh, sourceOnly]);
 
   async function start() {
     if (busy.current) return;
@@ -117,10 +117,10 @@ export function RecordingTranscript({ dealId, recordingId, onSeek, onQuote, quot
   const active = job?.status === 'queued' || job?.status === 'running';
   const status = job?.status === 'completed' ? '已完成' : job?.status === 'failed' ? '未完成' : job?.status === 'running' ? '正在识别' : job?.status === 'queued' ? '等待识别' : '';
   return <div className="recording-transcript" aria-labelledby={`${id}-title`}>
-    <header className="recording-transcript-heading"><h4 id={`${id}-title`}><FileAudio size={16} />录音转写</h4>{loading && !job ? <span className="recording-transcript-status"><Loader2 size={13} className="spin" />读取状态…</span> : status && <span className="recording-transcript-status" role="status">{active ? <Loader2 size={13} className="spin" /> : job?.status === 'completed' ? <Check size={13} /> : <CircleAlert size={13} />}{status}</span>}{!loading && !active && <button type="button" className="speech-button speech-button-secondary recording-transcript-start" disabled={starting} onClick={() => void start()}>{starting ? <Loader2 size={14} className="spin" /> : job ? <RotateCcw size={14} /> : <FileAudio size={14} />}{starting ? '正在提交…' : job?.status === 'completed' ? '按最新设置重转' : job?.status === 'failed' ? '重新转写' : '转写录音'}</button>}</header>
-    {active && <div className="recording-transcript-progress" role="status"><progress max={100} value={Math.max(0, Math.min(100, job.progress))} aria-label="录音转写进度" /><p>{job.message || (job.status === 'queued' ? '录音已进入队列，识别结果将在这里更新。' : '正在识别录音，结果将在这里更新。')}</p><span>原录音已保存。后台继续识别，重新打开时同步到项目。</span></div>}
+    <header className="recording-transcript-heading"><h4 id={`${id}-title`}><FileAudio size={16} />录音转写</h4>{loading && !job ? <span className="recording-transcript-status"><Loader2 size={13} className="spin" />读取状态…</span> : status && <span className="recording-transcript-status" role="status">{active ? <Loader2 size={13} className="spin" /> : job?.status === 'completed' ? <Check size={13} /> : <CircleAlert size={13} />}{status}</span>}{!loading && !active && <button type="button" className="speech-button speech-button-secondary recording-transcript-start" disabled={starting || reviewLocked} onClick={() => void start()}>{starting ? <Loader2 size={14} className="spin" /> : job ? <RotateCcw size={14} /> : <FileAudio size={14} />}{starting ? '正在提交…' : job?.status === 'completed' ? '按最新设置重转' : job?.status === 'failed' ? '重新转写' : '转写录音'}</button>}</header>
+    {active && <div className="recording-transcript-progress" role="status"><progress max={100} value={Math.max(0, Math.min(100, job.progress))} aria-label="录音转写进度" /><p>{job.message || (job.status === 'queued' ? '录音已进入队列，识别结果将在这里更新。' : '正在识别录音，结果将在这里更新。')}</p><span>原录音已保存。后台继续识别，重新打开可查看结果。</span></div>}
     {job?.status === 'failed' && <p className="recording-transcript-failed" role="alert">{job.message || '本次转写未完成，原录音仍保留，请重试。'}</p>}
-    {job?.status === 'completed' && job.result && <><p className="recording-transcript-link">{job.linked ? '已关联项目' : job.message || '转写已完成，正在关联到项目。'}</p><TranscriptContent key={job.id} result={job.result} job={job} onSeek={onSeek} onQuote={onQuote} quotePending={quotePending} isQuoteSaved={isQuoteSaved} /></>}
+    {job?.status === 'completed' && job.result && <><p className="recording-transcript-link">{job.linked ? (sourceOnly ? '已保存原始转写' : '已关联项目') : job.message || '转写已完成，正在关联到项目。'}</p><TranscriptContent key={job.id} result={job.result} job={job} onSeek={onSeek} onQuote={onQuote} quotePending={quotePending} isQuoteSaved={isQuoteSaved} />{renderCompleted?.(job)}</>}
     {job?.status === 'completed' && !job.result && <p className="recording-transcript-failed" role="alert">转写已完成，但结果暂未返回。请重新读取状态。</p>}
     {error && <div className="recording-transcript-error" role="alert"><CircleAlert size={15} /><div><p>{error}</p><button type="button" className="speech-text-button" disabled={starting || loading} onClick={() => { setError(''); setLoading(true); setRefresh(value => value + 1); }}><RotateCcw size={13} />重新读取状态</button></div></div>}
   </div>;

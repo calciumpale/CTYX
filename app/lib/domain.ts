@@ -24,6 +24,7 @@ import { isCompletedChatRun } from './chat-request.ts';
 import { companyRecordEvidencePassage, type searchCompanyRecords } from './company-record-research.ts';
 import type { searchJinghaiCompanyPenalties } from './jinghai-record-research.ts';
 import type { ChatProgressStep } from './chat-progress.ts';
+import type { RecordingProcessingApply } from './recording-processing-types.ts';
 
 export type { ChatProgressStep } from './chat-progress.ts';
 
@@ -38,7 +39,7 @@ type StoredState=WorkbenchState & {_access?:Record<string,string>;_workflowRuns?
 type GenerationKnowledge=Knowledge & {applicability?:string[]};
 export interface GenerationInput {salesScope?:SalesScope;query:string;agentId:AgentId;projectApprovals?:ProjectApprovalContext[];deal?:Deal;deals:Deal[];knowledge:GenerationKnowledge[];instruction?:string;previous?:string;history?:{query:string;answer:string}[];contractReviews?:{title:string;reviewedAt?:string;analysis:ContractAnalysis}[];purpose?:'chat'|'workflow';customerInsightEvidence?:CustomerInsightEvidence[];publicCompanyEvidence?:CustomerInsightEvidence[];agentMemory?:AgentMemoryContext;}
 export interface GenerationOutput {answer:string;mode:'demo'|'live';modelName?:string;groundingRejected?:boolean;evidenceIds?:string[];}
-export interface ActionContext {onChatProgress?:(step:ChatProgressStep)=>void;requireNarrative?:boolean;searchCompanyExpansion?:(company:Pick<Deal,'name'>)=>Promise<CompanyProfile>;searchCompanyRecords?:typeof searchCompanyRecords;searchCompanyPenalties?:(company:Pick<Deal,'name'>,query:string)=>Promise<Awaited<ReturnType<typeof searchJinghaiCompanyPenalties>>|undefined>;salesScope?:SalesScope;salesOwners?:SalesOwner[];prepareKnowledge?:(request:KnowledgeAgentRequest,scope?:{knowledgeIds:string[];knowledge:Knowledge[]})=>Promise<KnowledgePreparedContext>;actorName?:string;extractIntake?:(text:string)=>Promise<IntakeExtraction>;now?:string;generate?:(input:GenerationInput)=>Promise<GenerationOutput>;generateInsight?:(input:GenerationInput)=>Promise<GenerationOutput>;trainingGenerate?:(input:TrainingGenerationInput)=>Promise<TrainingGenerationOutput>;trainingEvaluate?:TrainingEvaluator;enrichCompany?:(deal:Deal)=>Promise<CompanyProfile>;trustedRecording?:FollowupRecording;reviewContract?:(document:ContractDocument,deal:Deal)=>Promise<ContractAnalysis>;contractModelName?:string;approveTalkTrack?:(track:TalkTrack)=>Promise<void>;retrieveTalkTracks?:(query:string)=>Promise<TalkTrack[]>;retrieveManagedKnowledge?:(query:string)=>Promise<Knowledge[]>;recallAgentMemory?:(query:string,projectId?:string)=>Promise<AgentMemoryContext|undefined>;}
+export interface ActionContext {trustedRecordingProcessing?:RecordingProcessingApply;onChatProgress?:(step:ChatProgressStep)=>void;requireNarrative?:boolean;searchCompanyExpansion?:(company:Pick<Deal,'name'>)=>Promise<CompanyProfile>;searchCompanyRecords?:typeof searchCompanyRecords;searchCompanyPenalties?:(company:Pick<Deal,'name'>,query:string)=>Promise<Awaited<ReturnType<typeof searchJinghaiCompanyPenalties>>|undefined>;salesScope?:SalesScope;salesOwners?:SalesOwner[];prepareKnowledge?:(request:KnowledgeAgentRequest,scope?:{knowledgeIds:string[];knowledge:Knowledge[]})=>Promise<KnowledgePreparedContext>;actorName?:string;extractIntake?:(text:string)=>Promise<IntakeExtraction>;now?:string;generate?:(input:GenerationInput)=>Promise<GenerationOutput>;generateInsight?:(input:GenerationInput)=>Promise<GenerationOutput>;trainingGenerate?:(input:TrainingGenerationInput)=>Promise<TrainingGenerationOutput>;trainingEvaluate?:TrainingEvaluator;enrichCompany?:(deal:Deal)=>Promise<CompanyProfile>;trustedRecording?:FollowupRecording;reviewContract?:(document:ContractDocument,deal:Deal)=>Promise<ContractAnalysis>;contractModelName?:string;approveTalkTrack?:(track:TalkTrack)=>Promise<void>;retrieveTalkTracks?:(query:string)=>Promise<TalkTrack[]>;retrieveManagedKnowledge?:(query:string)=>Promise<Knowledge[]>;recallAgentMemory?:(query:string,projectId?:string)=>Promise<AgentMemoryContext|undefined>;}
 const agentIds=new Set(AGENTS.map(item=>item.id));
 const nodeTypes=new Set(['start','intent','knowledge','agent','review','output']);
 const managerActions=new Set(['skill_review','knowledge_add','workflow_save','workflow_publish','workflow_review']);
@@ -838,7 +839,7 @@ function validateKnowledgeSelections(state:WorkbenchState,workflow:Workflow) {
   for(const node of workflow.nodes.filter(node=>node.type==='knowledge'))if(node.knowledgeIds?.some(id=>!available.has(id)))fail(`“${node.label}”包含不存在或尚未发布的知识，请重新选择`);
 }
 function compactDeal(deal:Deal):Deal {
-  return {...deal,notes:deal.notes.slice(0,5).map(note=>({...note,text:clip(note.text,1000)}))};
+  return {...deal,notes:deal.notes.filter(note=>!note.recording?.sourceOnly).slice(0,5).map(note=>({...note,text:clip(note.text,1000)}))};
 }
 /** A checkpoint contains references to shared outputs rather than nested copies of upstream text. */
 async function executeWorkflow(state:StoredState,run:Run,checkpoint:WorkflowCheckpoint,context:ActionContext):Promise<void> {
@@ -1008,8 +1009,26 @@ async function executeActionInternal(original:WorkbenchState,role:Role,action:st
       if(Object.prototype.hasOwnProperty.call(payload,'recording'))fail('请通过录音上传入口添加附件');
       const recording=context.trustedRecording;
       const value=recording?optional(payload.text,5000):text(payload.text,'跟进备注',6000);
-      deal.notes.unshift({id:uid('note'),text:value,author:actor,date:now,...(recording?{recording:{...recording}}:{})});deal.version++;deal.lastContact=now.slice(0,10);
+      deal.notes.unshift({id:uid('note'),text:value,author:actor,date:now,...(recording?{recording:{...recording}}:{})});if(recording?.sourceOnly){message='原录音已保存';break;}
+      deal.version++;deal.lastContact=now.slice(0,10);
       activity(state,role,`${deal.name}新增跟进`,value.slice(0,100)||(recording?`上传录音：${recording.name}`:''),'deal',now);break;
+    }
+    case 'recording_apply': {
+      const review=context.trustedRecordingProcessing;
+      if(!review||payload.confirmed!==true||payload.draftId!==review.draftId)fail('请先核对并确认录音整理草稿',403);
+      const source=visibleDeal(state,role,review.sourceDealId);
+      if(!source.notes.some(note=>note.recording?.id===review.recordingId))fail('原录音已不存在',404);
+      const deal=visibleDeal(state,role,review.dealId);
+      if(deal.archive)fail('归档项目不可写入跟进和画像',409);
+      checkVersion(deal.version,review.version);
+      if(Object.keys(review.profile).length)deal.customerProfile=customerProfile(review.profile,deal.customerProfile);
+      if(review.followup){
+        deal.notes.unshift({id:uid('note'),text:review.followup,author:actor,date:now,recordingProcessingId:review.draftId});
+        deal.lastContact=now.slice(0,10);
+      }
+      deal.version++;dealId=deal.id;
+      activity(state,role,'录音整理已确认',`${deal.projectName??deal.name} · ${actor}`,'deal',now);
+      message='已将确认内容写入项目';break;
     }
     case 'deal_stage': {
       const deal=visibleDeal(state,role,payload.dealId);checkVersion(deal.version,payload.version);

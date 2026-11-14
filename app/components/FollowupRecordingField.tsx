@@ -81,13 +81,15 @@ export function FollowupRecordingField({ file, onChange, disabled = false, child
   </div>;
 }
 
-export function FollowupRecordingPlayer({ dealId, recording, onQuote, quotePending, isQuoteSaved, sourcePosition }: {
+export function FollowupRecordingPlayer({ dealId, recording, onQuote, quotePending, isQuoteSaved, sourcePosition, renderCompleted, reviewLocked }: {
   dealId: string;
   recording: FollowupRecording;
   onQuote?: (job: SpeechTranscriptionJob, segmentIndex: number) => void;
   quotePending?: RecordingQuoteSelection | null;
   isQuoteSaved?: (job: SpeechTranscriptionJob, segmentIndex: number) => boolean;
   sourcePosition?: { seconds: number } | null;
+  renderCompleted?: (job: SpeechTranscriptionJob) => ReactNode;
+  reviewLocked?: boolean;
 }) {
   const audio = useRef<HTMLAudioElement>(null);
   const src = `/api/deal-recordings?dealId=${encodeURIComponent(dealId)}&id=${encodeURIComponent(recording.id)}`;
@@ -111,9 +113,9 @@ export function FollowupRecordingPlayer({ dealId, recording, onQuote, quotePendi
     try { element.currentTime = Math.max(0, seconds); void element.play().catch(() => undefined); }
     catch { /* The native player displays unsupported-format and loading errors. */ }
   };
-  return <section className="followup-recording-card followup-recording-saved" aria-label="已保存的跟进录音">
+  return <section className="followup-recording-card followup-recording-saved" aria-label={recording.sourceOnly ? '已保存的原录音' : '已保存的跟进录音'}>
     <div className="followup-recording-file"><AudioLines size={17} /><div><strong title={recording.name}>{recording.name}</strong><span>{fileSize(recording.size)}</span></div><a className="followup-recording-download" href={src} download={recording.name} aria-label={`下载录音：${recording.name}`}><ArrowDownToLine size={14} /><span>下载</span></a></div>
     <RecordingAudio src={src} name={recording.name} audioRef={audio} />
-    <RecordingTranscript dealId={dealId} recordingId={recording.id} onSeek={seek} onQuote={onQuote} quotePending={quotePending} isQuoteSaved={isQuoteSaved} />
+    <RecordingTranscript dealId={dealId} recordingId={recording.id} onSeek={seek} onQuote={onQuote} quotePending={quotePending} isQuoteSaved={isQuoteSaved} renderCompleted={renderCompleted} reviewLocked={reviewLocked} sourceOnly={recording.sourceOnly} />
   </section>;
 }

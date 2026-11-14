@@ -157,7 +157,7 @@ export function ProjectsView({ state, member, mutate, notify, onAsk, initialDeal
   const deal = state.deals.find(item => item.id === selectedId);
   const matchingProjects = scopedProjects.filter(item => (intentFilter === 'all' || (salesIntelligenceIsCurrent(item) && item.intelligence?.latest?.insight.grade || 'pending') === intentFilter) && (stageFilter === 'all' || item.stage === stageFilter) && `${projectTitle(item)} ${item.name} ${item.contact} ${item.industry} ${item.owner} ${item.nextAction}`.toLowerCase().includes(query.trim().toLowerCase()));
   const linkedRuns = deal ? state.runs.filter(run => run.dealId === deal.id).sort((a, b) => dateValue(b.createdAt) - dateValue(a.createdAt)) : [];
-  const notes = deal ? [...deal.notes].sort((a, b) => dateValue(b.date) - dateValue(a.date)) : [];
+  const notes = deal ? deal.notes.filter(note => !note.recording?.sourceOnly).sort((a, b) => dateValue(b.date) - dateValue(a.date)) : [];
   const transcripts = deal ? (state.transcripts || []).filter(item => item.dealId === deal.id).sort((a, b) => dateValue(b.createdAt) - dateValue(a.createdAt)) : [];
   const feedbackJob = deal ? (state.feedbackJobs || []).filter(item => item.dealId === deal.id).sort((a, b) => dateValue(b.updatedAt) - dateValue(a.updatedAt))[0] : undefined;
   const availableTalkTracks = (state.talkTracks || []).filter(item => item.status === 'published' && item.weight > 0);

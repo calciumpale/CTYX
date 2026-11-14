@@ -4,7 +4,7 @@ import type { ApiResult, FollowupRecording, Role, WorkbenchState } from './types
 
 export const MAX_RECORDING_BYTES=20*1024*1024;
 export const MAX_MULTIPART_BYTES=MAX_RECORDING_BYTES+64*1024;
-export interface RecordingForm {dealId:string;text:string;revision:number;audio:File;}
+export interface RecordingForm {dealId:string;text:string;revision:number;audio:File;sourceOnly?:true;}
 interface ValidatedAudio {name:string;mimeType:string;bytes:Uint8Array;}
 export interface RecordingObjectStore {
   put(key:string,bytes:Uint8Array,options:{onlyIf:{etagDoesNotMatch:string};httpMetadata:{contentType:string}}):Promise<unknown>;
@@ -90,12 +90,13 @@ export async function parseRecordingForm(request:Request):Promise<RecordingForm>
   let size=0;let tooLarge=false;
   const limited=request.body.pipeThrough(new TransformStream<Uint8Array,Uint8Array>({transform(chunk,controller){size+=chunk.byteLength;if(size>MAX_MULTIPART_BYTES){tooLarge=true;throw new DomainError('上传内容过大，请选择20MB以内的录音',413);}controller.enqueue(chunk);}}));
   let form:FormData;try{form=await new Response(limited,{headers:{'Content-Type':contentType}}).formData();}catch{if(tooLarge)throw new DomainError('上传内容过大，请选择20MB以内的录音',413);throw new DomainError('录音上传表单无效，请重新选择文件');}
-  const allowed=new Set(['dealId','text','revision','audio']);
+  const allowed=new Set(['dealId','text','revision','audio','sourceOnly']);
   for(const key of form.keys())if(!allowed.has(key)||form.getAll(key).length!==1)throw new DomainError('录音上传参数不正确');
-  const dealId=form.get('dealId');const text=form.get('text')??'';const revision=form.get('revision');const audio=form.get('audio');
+  const dealId=form.get('dealId');const text=form.get('text')??'';const revision=form.get('revision');const audio=form.get('audio');const sourceOnly=form.get('sourceOnly');
+  if(sourceOnly!==null&&(sourceOnly!=='true'||text!==''))throw new DomainError('录音处理只接收原录音，请在整理结果中填写跟进记录');
   if(typeof dealId!=='string'||!dealId.trim()||dealId.length>100||typeof text!=='string'||text.length>5000||typeof revision!=='string'||!/^\d+$/.test(revision)||!Number.isSafeInteger(Number(revision)))throw new DomainError('跟进记录参数不正确，请刷新后重试');
   if(!audio||typeof audio==='string'||typeof audio.arrayBuffer!=='function')throw new DomainError('请选择录音文件');
-  return {dealId:dealId.trim(),text:text.trim(),revision:Number(revision),audio};
+  return {dealId:dealId.trim(),text:text.trim(),revision:Number(revision),audio,...(sourceOnly==='true'?{sourceOnly:true as const}:{})};
 }
 export async function recordingObjectKey(userId:string,id:string):Promise<string> {
   if(!recordingId.test(id))throw new DomainError('录音不存在或当前视角无权访问',404);
@@ -105,7 +106,7 @@ export async function recordingObjectKey(userId:string,id:string):Promise<string
 export async function saveRecordingNote(userId:string,role:Role,input:RecordingForm,deps:RecordingPersistence):Promise<ApiResult> {
   const state=await deps.load();assertRevision(state,input.revision);
   const audio=await validateRecording(input.audio);
-  const recording:FollowupRecording={id:`recording-${crypto.randomUUID()}`,name:audio.name,size:audio.bytes.length,mimeType:audio.mimeType};
+  const recording:FollowupRecording={id:`recording-${crypto.randomUUID()}`,name:audio.name,size:audio.bytes.length,mimeType:audio.mimeType,...(input.sourceOnly?{sourceOnly:true as const}:{})};
   // The domain checks role visibility and text before any object can be written.
   const result=await executeAction(state,role,'deal_note',{dealId:input.dealId,text:input.text},{trustedRecording:recording,actorName:deps.actorName,salesScope:deps.salesScope});
   const key=await recordingObjectKey(userId,recording.id);
@@ -115,7 +116,7 @@ export async function saveRecordingNote(userId:string,role:Role,input:RecordingF
     try{await deps.bucket.delete(key);}catch{console.error('Follow-up recording cleanup failed');}
     throw error;
   }
-  return {...result,state:projectState(result.state,role,deps.salesScope),message:'录音及跟进记录已保存'};
+  return {...result,state:projectState(result.state,role,deps.salesScope),message:input.sourceOnly?'原录音已保存':'录音及跟进记录已保存'};
 }
 /** Call only with a state projected to the current role. */
 export function authorizedRecording(state:WorkbenchState,dealId:string,id:string):FollowupRecording {

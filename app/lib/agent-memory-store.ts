@@ -76,7 +76,7 @@ type TranscriptRow = { run_id: string; query: string; answer: string; trace: str
 type NoteRow = { id: string; run_id: string; kind: MemoryNote['kind']; topic: string; title: string; text: string; quote: string; created_at: string };
 type TopicRow = { topic: string; title: string; body: string; source_ids_json: string; updated_at: string; version: number };
 type ScopeRow = { owner_id: string; member_id: string; project_id: string };
-interface WorkspaceGuard { sql: string; bindings: [string, number, string]; }
+interface WorkspaceGuard { sql: string; bindings: (string | number)[]; }
 
 const transcriptFrom = (row: TranscriptRow): MemoryTranscript => ({ runId: row.run_id, query: row.query, answer: row.answer, createdAt: row.created_at, ...(row.trace === null ? {} : { trace: row.trace }) });
 const noteFrom = (row: NoteRow): MemoryNote => ({ id: row.id, runId: row.run_id, kind: row.kind, topic: row.topic, title: row.title, text: row.text, quote: row.quote, createdAt: row.created_at });

@@ -14,7 +14,7 @@ function only(v: Record<string, unknown>, allowed: string[]) { if (Object.keys(v
 function text(v: unknown, max: number): string { if (typeof v !== 'string' || !v.trim() || v.length > max) fail(); return (v as string).trim(); }
 function array(v: unknown, max: number, min = 0): unknown[] { if (!Array.isArray(v) || v.length > max || v.length < min) fail(); return v as unknown[]; }
 function texts(v: unknown, max = 6): string[] { return array(v, max).map(x => text(x, 300)); }
-const orderedNotes = (deal: Deal) => [...deal.notes].sort((a, b) => b.date.localeCompare(a.date) || a.id.localeCompare(b.id));
+const orderedNotes = (deal: Deal) => deal.notes.filter(note => !note.recording?.sourceOnly).sort((a, b) => b.date.localeCompare(a.date) || a.id.localeCompare(b.id));
 const orderedTranscripts = (deal: Deal, transcripts: CallTranscript[]) => transcripts.filter(t => t.dealId === deal.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id));
 
 /** Exact source slices only. Public registry facts and audio filenames are not purchase-intent evidence. */
@@ -40,7 +40,7 @@ export function salesInput(deal: Deal, transcripts: CallTranscript[]): SalesInpu
   for (const call of calls.slice(0, 3)) add(`transcript:${call.id}`, 'transcript', '用户提供的通话转写', call.text, 2000, call.createdAt);
   deal.risks.slice(0, 6).forEach((risk, i) => add(`project:risks:${i}`, 'project', '用户记录的风险', risk, 80));
   if (notes.length > 10 || calls.length > 3 || deal.risks.length > 6) truncated = true;
-  if (deal.notes.some(n => n.recording)) warnings.push('录音附件尚未作为对话内容分析；只有已填写文字或已保存转写可作为采购意向证据。');
+  if (notes.some(n => n.recording)) warnings.push('录音附件尚未作为对话内容分析；只有已填写文字或已保存转写可作为采购意向证据。');
   if (truncated) warnings.push('本次使用有界资料片段，较早或较长记录未全部提交；采购结论仍需人工核实。');
   if (deal.dataOrigin === 'research') warnings.push('公开来源本身不代表客户关系或采购意向；实际业务以人工记录为准。');
   else if (deal.dataOrigin !== 'manual') warnings.push('当前项目为合成示例，不构成真实客户意向或业绩证据。');

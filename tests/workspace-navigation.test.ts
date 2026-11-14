@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { canOpenWorkspaceView, readWorkspaceRoute, workspaceSearch, workspaceNavigation, workspaceSection, workspaceManagementNavigation } from '../app/lib/workspace-navigation.ts';
 
 test('business navigation starts with reminders and preserves role access', () => {
-  const expected=[{id:'reminders',label:'提醒'},{id:'prospecting',label:'AI获客'},{id:'geo',label:'GEO'},{id:'materials',label:'AI营销素材'},{id:'deals',label:'项目跟进'},{id:'recordings',label:'上传录音'},{id:'schedule',label:'日程'},{id:'contracts',label:'合同'},{id:'training',label:'AI带练'},{id:'knowledge',label:'知识库'}];
+  const expected=[{id:'reminders',label:'提醒'},{id:'prospecting',label:'AI获客'},{id:'geo',label:'GEO'},{id:'materials',label:'AI营销素材'},{id:'deals',label:'项目跟进'},{id:'recordings',label:'录音处理'},{id:'schedule',label:'日程'},{id:'contracts',label:'合同'},{id:'training',label:'AI带练'},{id:'knowledge',label:'知识库'}];
   for(const role of ['sales','manager'] as const){
     assert.deepEqual(workspaceNavigation(role).map(({id,label})=>({id,label})),expected);
     assert.ok(workspaceNavigation(role).every(item=>(item.mobileLabel??item.label).length<=4));

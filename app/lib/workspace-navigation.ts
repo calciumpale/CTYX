@@ -15,7 +15,7 @@ export type ProspectingSection = 'create' | 'screen' | 'handoff' | 'web';
 const pages: Record<View, WorkspacePage> = {
   home: { title:'概览', roles:['sales','manager','admin'], section:'deals' },
   deals: { title:'项目跟进', roles:['sales','manager'], section:'deals' },
-  recordings: { title:'上传录音', roles:['sales','manager'], section:'recordings' },
+  recordings: { title:'录音处理', roles:['sales','manager'], section:'recordings' },
   reminders: { title:'提醒', roles:['sales','manager'], section:'reminders' },
   schedule: { title:'日程', roles:['sales','manager'], section:'schedule' },
   meetings: { title:'会议', roles:['sales','manager','admin'], section:'deals' },

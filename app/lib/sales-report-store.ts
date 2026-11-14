@@ -6,15 +6,16 @@ import type { SalesEvent, SalesEventCounts, SalesEventKind, SalesReport, SalesRe
 
 const conflict=()=>new DomainError('工作空间或日报已更新，请刷新后重试；本次操作未保存',409);
 const user=(value:string)=>{if(typeof value!=='string'||!value||value.length>512)throw new DomainError('请先使用平台账号登录',401);};
-export type GuardedWorkspaceWrite = (guard: { sql: string; bindings: [string, number, string] }) => D1PreparedStatement;
+export type GuardedWorkspacePrecondition = { sql: string; bindings: (string | number)[] };
+export type GuardedWorkspaceWrite = (guard: GuardedWorkspacePrecondition) => D1PreparedStatement;
 
 /** D1.batch is atomic. Every insert and the final workspace CAS share the exact old JSON/revision guard. */
-export async function persistSalesWorkspace(db:D1Database,userId:string,expectedRevision:number,nextState:WorkbenchState,events:SalesEvent[]=[],extra?:GuardedWorkspaceWrite):Promise<void>{
+export async function persistSalesWorkspace(db:D1Database,userId:string,expectedRevision:number,nextState:WorkbenchState,events:SalesEvent[]=[],extra?:GuardedWorkspaceWrite,precondition?:GuardedWorkspacePrecondition):Promise<void>{
   user(userId);if(!Number.isInteger(expectedRevision)||nextState.revision!==expectedRevision+1)throw conflict();
   const json=JSON.stringify(nextState);if(new TextEncoder().encode(json).length>1800000)throw new DomainError('工作空间存储容量不足；本次新增内容未保存',413);
   const source=await db.prepare('SELECT state_json FROM workbench_workspaces WHERE user_id = ? AND revision = ?').bind(userId,expectedRevision).first<{state_json:string}>();if(!source)throw conflict();
   if(events.length>100)throw new DomainError('单次业务变更事件过多，请分批保存',413);
-  const now=new Date().toISOString();const guard='SELECT 1 FROM workbench_workspaces WHERE user_id = ? AND revision = ? AND state_json = ?';const guarded:[string,number,string]=[userId,expectedRevision,source.state_json];
+  const now=new Date().toISOString();const where=`user_id = ? AND revision = ? AND state_json = ?${precondition?` AND (${precondition.sql})`:''}`;const guard=`SELECT 1 FROM workbench_workspaces WHERE ${where}`;const guarded=[userId,expectedRevision,source.state_json,...(precondition?.bindings??[])];
   const statements:D1PreparedStatement[]=[];
   const eligible=new Map(nextState.deals.filter(salesReportEligible).map(deal=>[deal.id,deal]));
   for(const event of events){if(!eligible.has(event.projectId)||eligible.get(event.projectId)!.version!==event.sourceVersion||eligible.get(event.projectId)!.ownerId!==event.ownerId||!Number.isFinite(Date.parse(event.occurredAt)))throw new DomainError('销售事件与本次项目记录不一致',400);
@@ -23,7 +24,7 @@ export async function persistSalesWorkspace(db:D1Database,userId:string,expected
   const coverageAt=events.reduce((value,event)=>event.occurredAt<value?event.occurredAt:value,now);
   statements.push(db.prepare(`INSERT INTO workbench_sales_coverage (user_id,started_at) SELECT ?,? WHERE EXISTS (${guard}) ON CONFLICT(user_id) DO NOTHING`).bind(userId,coverageAt,...guarded));
   if(extra) statements.push(extra({sql:guard,bindings:guarded}));
-  statements.push(db.prepare('UPDATE workbench_workspaces SET state_json = ?,revision = ?,updated_at = ? WHERE user_id = ? AND revision = ? AND state_json = ?').bind(json,nextState.revision,now,...guarded));
+  statements.push(db.prepare(`UPDATE workbench_workspaces SET state_json = ?,revision = ?,updated_at = ? WHERE ${where}`).bind(json,nextState.revision,now,...guarded));
   const results=await db.batch(statements);if(results[results.length-1].meta.changes!==1)throw conflict();
 }
 interface ReportRow {status:SalesReport['status'];version:number;lease_token:string|null;lease_until:string|null;data_json:string;}

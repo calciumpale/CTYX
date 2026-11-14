@@ -4,7 +4,8 @@ import {createWorkbenchKnowledgeAgent} from './knowledge-agent-runtime.ts';
 import {prepareKnowledgeContext} from './knowledge-agent.ts';
 import {extractProjectIntake} from './project-intake.ts';
 import {processSalesIntelligence} from './sales-intelligence-service.ts';
-import {persistSalesWorkspace, type GuardedWorkspaceWrite} from './sales-report-store.ts';
+import {persistSalesWorkspace, type GuardedWorkspacePrecondition, type GuardedWorkspaceWrite} from './sales-report-store.ts';
+import { createRecordingProcessing } from './recording-processing.ts';
 import { agentMemoryRuntime } from './agent-memory-runtime.ts';
 import type { MemoryTranscript } from './agent-memory-types.ts';
 import {salesMutationEvents} from './sales-report-domain.ts';
@@ -35,7 +36,7 @@ import { searchJinghaiCompanyPenalties } from './jinghai-record-research.ts';
 import { buildTrainingMessages, demoTrainingGenerate, type TrainingGenerationOutput } from './training-dialogue.ts';
 import type { TrainingGenerationInput } from './training-dialogue.ts';
 import type { ApiResult, Role, WorkbenchState } from './types.ts';
-import {executeMemberAction,requireMemberRole} from './member-policy.ts';
+import {assertMemberAction,executeMemberAction,requireMemberRole} from './member-policy.ts';
 import type {MemberRole} from './member-types.ts';
 
 const environment=()=>env as Cloudflare.Env;
@@ -81,8 +82,8 @@ export async function loadWorkspace(userId:string,siteOrigin='https://production
   }
   throw new DomainError('工作空间已更新，请刷新后重试',409);
 }
-export async function saveWorkspace(userId:string,expectedRevision:number,state:WorkbenchState,events:SalesEvent[]=[],extra?:GuardedWorkspaceWrite):Promise<void> {
-  await persistSalesWorkspace(database(),userId,expectedRevision,state,events,extra);
+export async function saveWorkspace(userId:string,expectedRevision:number,state:WorkbenchState,events:SalesEvent[]=[],extra?:GuardedWorkspaceWrite,precondition?:GuardedWorkspacePrecondition):Promise<void> {
+  await persistSalesWorkspace(database(),userId,expectedRevision,state,events,extra,precondition);
 }
 /** Derived analysis follows the committed business write and cannot roll it back. */
 export async function refreshSalesProject(userId:string,dealId:string,siteOrigin:string,force=false):Promise<WorkbenchState>{
@@ -121,6 +122,17 @@ export async function readWorkbench(userId:string,role:Role,siteOrigin='https://
 /** Internal canonical result. The workbench route applies projectAccountResult exactly once. */
 export async function mutateWorkbench(userId:string,role:Role,action:string,payload:Record<string,unknown>,revision:unknown,siteOrigin='https://production.invalid',memberRole:MemberRole=role,actorName?:string,salesScope?:SalesScope,memberId?:string,onChatProgress?:ActionContext['onChatProgress']):Promise<ApiResult> {
   if(role==='sales'&&!salesScope)throw new DomainError('销售账号归属无效',401);const state=await loadWorkspace(userId,siteOrigin);assertRevision(state,revision);
+  if(action==='recording_apply'){
+    assertMemberAction(memberRole,action,payload,state);
+    if(!memberId)throw new DomainError('请先登录工作台',401);
+    const now=new Date().toISOString();
+    const review=await createRecordingProcessing(database()).prepareApply({ownerId:userId,memberId,role,salesScope},state,payload,now);
+    const result=await executeMemberAction(state,memberRole,action,payload,{salesScope,actorName,now,trustedRecordingProcessing:review.apply});
+    await saveWorkspace(userId,state.revision,result.state,salesMutationEvents(state,result.state,action,payload,now),review.receipt,review.precondition);
+    const target=review.apply.dealId;
+    waitUntil(refreshSalesProject(userId,target,siteOrigin).catch(()=>console.warn('Recording project analysis deferred')));
+    return result;
+  }
   const salesOwners=await readSalesOwners(userId);
   let model:Awaited<ReturnType<typeof readEffectiveModel>>=null;try{model=await readEffectiveModel(userId,siteOrigin);}catch{/* Keep customer writes usable when model settings need repair. */}
   let memory: ReturnType<typeof agentMemoryRuntime> | undefined;

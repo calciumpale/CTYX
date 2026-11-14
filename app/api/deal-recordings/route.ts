@@ -26,13 +26,14 @@ export async function POST(request:Request):Promise<Response> {
     if((origin&&origin!==siteOrigin)||request.headers.get('sec-fetch-site')==='cross-site')throw new DomainError('只允许从当前站点上传录音',403);
     const storage=bucket();const input=await parseRecordingForm(request);const role=readRole(request);
     let before:Awaited<ReturnType<typeof loadWorkspace>>;
-    const result=await saveRecordingNote(userId,role,input,{actorName:readMemberDisplayName(request),salesScope:readMemberSalesScope(request),bucket:storage,load:async()=>{before=await loadWorkspace(userId,siteOrigin);return before;},save:(revision,state)=>saveWorkspace(userId,revision,state,salesMutationEvents(before,state,'deal_note',{dealId:input.dealId},new Date().toISOString()))});
+    const result=await saveRecordingNote(userId,role,input,{actorName:readMemberDisplayName(request),salesScope:readMemberSalesScope(request),bucket:storage,load:async()=>{before=await loadWorkspace(userId,siteOrigin);return before;},save:(revision,state)=>saveWorkspace(userId,revision,state,input.sourceOnly?[]:salesMutationEvents(before,state,'deal_note',{dealId:input.dealId},new Date().toISOString()))});
     const existing=new Set(before!.deals.find(deal=>deal.id===input.dealId)?.notes.map(note=>note.id));
     const recording=result.state.deals.find(deal=>deal.id===input.dealId)?.notes.find(note=>!existing.has(note.id)&&note.recording)?.recording;
     let transcription:Awaited<ReturnType<ReturnType<typeof createSpeechTranscriptionService>['start']>>|undefined;
     if(recording){try{transcription=await createSpeechTranscriptionService(env as Cloudflare.Env,{load:loadWorkspace,save:saveWorkspace}).start(userId,role,input.dealId,recording.id,siteOrigin,false,readMemberSalesScope(request));}catch{/* A transcription failure never discards the committed recording. */}}
-    try{result.state=projectState(await refreshSalesProject(userId,input.dealId,siteOrigin),role,readMemberSalesScope(request));}catch{/* Derivative analysis cannot turn an already saved recording into a failed upload. */}
-    return Response.json({...result,...(recording?{recording}:{}),...(transcription?{transcription}:{}),message:transcription?.status==='failed'?`录音及跟进记录已保存；${transcription.message}`:transcription?'录音及跟进记录已保存，转写任务已提交':result.message},{headers:responseHeaders});
+    if(!input.sourceOnly)try{result.state=projectState(await refreshSalesProject(userId,input.dealId,siteOrigin),role,readMemberSalesScope(request));}catch{/* Derivative analysis cannot turn an already saved recording into a failed upload. */}
+    const saved=input.sourceOnly?'原录音已保存':'录音及跟进记录已保存';
+    return Response.json({...result,...(recording?{recording}:{}),...(transcription?{transcription}:{}),message:transcription?.status==='failed'?`${saved}；${transcription.message}`:transcription?`${saved}，转写任务已提交`:result.message},{headers:responseHeaders});
   }catch(error){return failure(error);}
 }
 async function read(request:Request,head=false):Promise<Response> {

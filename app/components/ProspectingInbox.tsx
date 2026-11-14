@@ -26,19 +26,29 @@ export function ProspectingList({ rows, selectedId, onSelect, label = '线索列
   </table></div>;
 }
 
-export function ProspectingPanel({ title, onClose, children, className, closeLabel = '关闭详情' }: {
+export function ProspectingPanel({ title, onClose, children, className, header, closeLabel = '关闭详情' }: {
   title: string; onClose: () => void; children: ReactNode; className?: string; closeLabel?: string;
+  header?: { avatar?: ReactNode; metadata?: ReactNode; actions?: ReactNode; status?: ReactNode };
 }) {
   const heading = useRef<HTMLHeadingElement>(null);
   useEffect(() => {
     const previous = document.activeElement;
     return () => { if (previous instanceof HTMLElement && previous.isConnected) previous.focus({ preventScroll: true }); };
   }, []);
-  useEffect(() => { heading.current?.focus({ preventScroll: true }); }, [title]);
+  const focusKey = header ? null : title;
+  useEffect(() => { heading.current?.focus({ preventScroll: true }); }, [focusKey]);
+  const titleElement = <h2 ref={heading} tabIndex={-1}>{title}</h2>;
   return <aside className={`prospect-inbox-panel${className ? ` ${className}` : ''}`} aria-label={title} onKeyDown={event => {
     if (event.key === 'Escape' && !event.defaultPrevented) { event.stopPropagation(); onClose(); }
   }}>
-    <header className="prospect-inbox-panel-header"><h2 ref={heading} tabIndex={-1}>{title}</h2><button type="button" className="icon-button" aria-label={closeLabel} title={closeLabel} onClick={onClose}><X size={19} aria-hidden="true" /></button></header>
+    <header className="prospect-inbox-panel-header">
+      {header ? <div className="prospect-inbox-panel-identity">
+        {header.avatar}<div>{titleElement}{header.metadata}</div>
+      </div> : titleElement}
+      {header?.actions}
+      <button type="button" className="icon-button" aria-label={closeLabel} title={closeLabel} onClick={onClose}><X size={19} aria-hidden="true" /></button>
+      {header?.status}
+    </header>
     <div className="prospect-inbox-panel-body">{children}</div>
   </aside>;
 }

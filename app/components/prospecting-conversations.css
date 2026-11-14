@@ -33,50 +33,51 @@
   background: var(--cds-surface-2);
 }
 
-.prospect-conversation-header {
+.prospect-chat-panel > .prospect-inbox-panel-header {
   display: grid;
   grid-template:
-    "identity actions" auto
-    "sync sync" auto / minmax(0, 1fr) auto;
+    "identity actions close" auto
+    "sync sync sync" auto / minmax(0, 1fr) auto auto;
   align-items: center;
-  gap: 6px 10px;
-  padding: 12px 15px;
-  border-bottom: 1px solid var(--cds-border);
+  gap: 4px 8px;
+  padding: 8px 12px;
 }
 
-.prospect-conversation-identity { grid-area: identity; display: flex; align-items: center; gap: 9px; min-width: 0; }
-.prospect-conversation-identity .prospect-conversation-avatar { width: 37px; height: 37px; font-size: 15px; }
-.prospect-conversation-header h3 { margin: 0; overflow-wrap: anywhere; font-size: 16px; font-weight: 650; }
-.prospect-conversation-header h3:focus-visible { outline: 2px solid var(--cds-border-strong); outline-offset: 2px; border-radius: 4px; }
+.prospect-chat-panel .prospect-inbox-panel-identity { grid-area: identity; display: flex; align-items: center; gap: 9px; min-width: 0; }
+.prospect-chat-panel .prospect-inbox-panel-identity > div { min-width: 0; }
+.prospect-chat-panel .prospect-inbox-panel-identity h2 { margin: 0; overflow-wrap: anywhere; font-size: 16px; font-weight: 650; line-height: 1.4; }
+.prospect-chat-panel .prospect-inbox-panel-identity h2:focus-visible { outline: 2px solid var(--cds-border-strong); outline-offset: 2px; border-radius: 4px; }
+.prospect-chat-panel > .prospect-inbox-panel-header > .icon-button { grid-area: close; }
 .prospect-conversation-actions { grid-area: actions; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; }
-.prospect-conversation-actions .button { padding-inline: 9px; font-size: 12px; }
-.prospect-conversation-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 9px; margin-top: 4px; font-size: 11px; }
-.prospect-conversation-meta a { display: inline-flex; align-items: center; gap: 3px; color: var(--cds-text-secondary); }
+.prospect-conversation-actions .button { padding-inline: 8px; font-size: 12px; }
+.prospect-conversation-actions .button > svg { flex: none; }
+.prospect-conversation-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 1px 8px; margin-top: 1px; font-size: 11px; }
+.prospect-conversation-meta a { display: inline-flex; min-height: 24px; align-items: center; gap: 3px; color: var(--cds-text-secondary); }
+.prospect-chat-tools-toggle[aria-expanded=true] { background: var(--cds-fill-ghost-selected); }
+.prospect-chat-tools-toggle[aria-expanded=true] > svg { transform: rotate(180deg); }
 
 .prospect-chat-tools {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
-  gap: 4px 12px;
-  padding: 0 15px;
+  max-height: min(320px, 36dvh);
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  scrollbar-width: thin;
+  padding: 0 12px;
   border-bottom: 1px solid var(--cds-border);
   background: var(--cds-surface-2);
 }
 
-.prospect-chat-tools:has(> .prospect-memory[open], .prospect-chat-learning-help[open]) { grid-template-columns: minmax(0, 1fr); }
 .prospect-chat-tools > .prospect-memory { border-bottom: 0; }
 .prospect-chat-tools > .prospect-memory > summary { min-height: var(--control-height); padding-inline: 0; }
 .prospect-chat-tools .prospect-memory-body { padding-inline: 0; }
-.prospect-chat-learning { display: flex; justify-content: flex-end; align-items: flex-start; gap: 7px; grid-column: -2 / -1; }
+.prospect-chat-learning { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 4px 10px; }
 .prospect-chat-learning .button { padding-inline: 6px; font-size: 12px; }
 .prospect-chat-learning-help { min-width: 0; font-size: 12px; color: var(--cds-text-secondary); }
 .prospect-chat-learning-help > summary { display: flex; align-items: center; gap: 4px; min-height: var(--control-height); list-style: none; cursor: pointer; white-space: nowrap; }
 .prospect-chat-learning-help > summary::-webkit-details-marker { display: none; }
 .prospect-chat-learning-help[open] > summary svg { transform: rotate(180deg); }
 .prospect-chat-learning-help > p { max-width: 43ch; margin: 0 0 9px; line-height: 1.6; }
-.prospect-chat-learning:has(.prospect-chat-learning-help[open]) { justify-content: flex-start; flex-wrap: wrap; }
 
-.prospect-chat-takeover { display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px; margin: 8px 12px 0; border: 1px solid var(--prospect-handoff-line); border-radius: 9px; background: var(--prospect-handoff-bg); color: var(--prospect-handoff-text); font-size: 12px; }
+.prospect-chat-takeover { display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px; margin: 8px 0 0; border: 1px solid var(--prospect-handoff-line); border-radius: 9px; background: var(--prospect-handoff-bg); color: var(--prospect-handoff-text); font-size: 12px; }
 .prospect-chat-takeover > svg { flex: none; margin-top: 2px; }
 .prospect-chat-takeover strong { font-weight: 600; }
 .prospect-chat-takeover p { margin: 3px 0 0; color: var(--prospect-handoff-text); overflow-wrap: anywhere; }
@@ -227,14 +228,6 @@
 }
 
 @container prospecting-chat (max-width: 750px) {
-  .prospect-conversation-header {
-    grid-template: "identity actions" auto "sync sync" auto / minmax(0, 1fr) auto;
-    gap: 5px;
-    padding: 8px 11px;
-  }
-  .prospect-conversation-actions .button { padding-inline: 6px; }
-  .prospect-chat-tools { gap: 0 6px; padding-inline: 10px; }
-  .prospect-chat-learning { gap: 3px; }
   .prospect-chat-transcript { padding: 11px 10px; }
   .prospect-chat-message { max-width: 91%; }
   .prospect-chat-message > p { padding: 9px 10px; }
@@ -246,9 +239,20 @@
 @media (max-width: 850px) {
   .prospect-chat-filters .prospect-chat-filter-search { flex-basis: 132px; flex-shrink: 0; }
 }
-@container prospecting-detail (max-width: 440px) {
-  .prospect-conversation-header { grid-template: "identity" auto "actions" auto "sync" auto / minmax(0, 1fr); }
+@container prospecting-detail (max-width: 500px) {
+  .prospect-chat-panel > .prospect-inbox-panel-header {
+    grid-template: "identity identity" auto "actions close" auto "sync sync" auto / minmax(0, 1fr) auto;
+    gap: 3px 6px;
+    padding: 7px 8px 7px 11px;
+  }
   .prospect-conversation-actions { justify-content: flex-start; }
-  .prospect-chat-tools { grid-template-columns: minmax(0, 1fr); }
-  .prospect-chat-learning { justify-content: flex-start; flex-wrap: wrap; }
+  .prospect-conversation-actions .button { padding-inline: 5px; gap: 4px; }
+}
+@media (pointer: coarse) {
+  .prospect-conversation-actions .button,
+  .prospect-conversation-meta a,
+  .prospect-chat-tools > .prospect-memory > summary,
+  .prospect-chat-learning .button,
+  .prospect-chat-learning-help > summary { min-height: 44px; }
+  .prospect-chat-panel > .prospect-inbox-panel-header > .icon-button { width: 44px; height: 44px; }
 }

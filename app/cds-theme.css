@@ -47,7 +47,7 @@
   --cds-shadow-composer-focus: inset 0 0 0 1px #858590;
   --app-frame-inset: 8px;
   --app-frame-radius: 20px;
-  --app-sidebar-width: 208px;
+  --app-sidebar-width: 168px;
   --app-backdrop: #e7e9ec;
   --nav-bg: #242628;
   --nav-raised: #303336;
@@ -133,5 +133,4 @@
   --cds-orange-800: #eeeeF3;
 }
 
-@media (max-width: 1150px) { :root { --app-sidebar-width: 198px; } }
-@media (max-width: 850px) { :root { --app-frame-inset: 0px; --app-frame-radius: 0px; --app-sidebar-width: 230px; } }
+@media (max-width: 850px) { :root { --app-frame-inset: 0px; --app-frame-radius: 0px; --app-sidebar-width: 200px; } }

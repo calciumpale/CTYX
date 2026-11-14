@@ -7,7 +7,7 @@ interface WorkspacePage {
   section?: WorkspaceSection;
 }
 
-export type WorkspaceSection = 'prospecting' | 'geo' | 'materials' | 'deals' | 'schedule' | 'contracts' | 'training' | 'knowledge';
+export type WorkspaceSection = 'reminders' | 'prospecting' | 'geo' | 'materials' | 'deals' | 'schedule' | 'contracts' | 'training' | 'knowledge';
 export type ProspectingSection = 'create' | 'screen' | 'handoff' | 'web';
 
 // One registry owns page names, frontend access, and navigation order.
@@ -15,16 +15,17 @@ export type ProspectingSection = 'create' | 'screen' | 'handoff' | 'web';
 const pages: Record<View, WorkspacePage> = {
   home: { title:'概览', roles:['sales','manager','admin'], section:'deals' },
   deals: { title:'项目跟进', roles:['sales','manager'], section:'deals' },
-  schedule: { title:'提醒及日程', roles:['sales','manager'], section:'schedule' },
+  reminders: { title:'提醒', roles:['sales','manager'], section:'reminders' },
+  schedule: { title:'日程', roles:['sales','manager'], section:'schedule' },
   meetings: { title:'会议', roles:['sales','manager','admin'], section:'deals' },
-  prospecting: { title:'社交平台获客', roles:['sales','manager'], section:'prospecting' },
+  prospecting: { title:'AI获客', roles:['sales','manager'], section:'prospecting' },
   geo: { title:'GEO', roles:['sales','manager'], section:'geo' },
   materials: { title:'AI营销素材', roles:['sales','manager'], section:'materials' },
   knowledge: { title:'知识库', roles:['sales','manager','admin'], section:'knowledge' },
-  training: { title:'培训提升', roles:['sales','manager'], section:'training' },
-  approvals: { title:'合同及审批', roles:['sales','manager'], section:'contracts' },
+  training: { title:'AI带练', roles:['sales','manager'], section:'training' },
+  approvals: { title:'合同', roles:['sales','manager'], section:'contracts' },
   reports: { title:'销售日报', roles:['manager'], section:'schedule' },
-  contracts: { title:'合同及审批', roles:['sales','manager'], section:'contracts' },
+  contracts: { title:'合同', roles:['sales','manager'], section:'contracts' },
   talktracks: { title:'成单话术', roles:['sales','manager','admin'], section:'knowledge' },
   studio: { title:'AI 搭建中心', roles:['sales','manager','admin'] },
   runs: { title:'AI 任务记录', roles:['sales','manager','admin'] },
@@ -43,8 +44,8 @@ export function workspaceTitle(view: View, role: MemberRole): string {
 }
 
 export function workspaceNavigation(role: MemberRole): Array<{id:View;label:string;mobileLabel?:string}> {
-  const mobile: Partial<Record<View,string>>={prospecting:'获客',materials:'素材',deals:'项目',schedule:'日程',contracts:'合同',training:'陪练',knowledge:'知识库'};
-  return (['prospecting','geo','materials','deals','schedule','contracts','training','knowledge'] as const)
+  const mobile: Partial<Record<View,string>>={prospecting:'获客',materials:'素材',deals:'项目',training:'带练'};
+  return (['reminders','prospecting','geo','materials','deals','schedule','contracts','training','knowledge'] as const)
     .filter(id => canOpenWorkspaceView(role,id))
     .map(id => ({id,label:workspaceTitle(id,role),...(mobile[id]?{mobileLabel:mobile[id]}:{})}));
 }

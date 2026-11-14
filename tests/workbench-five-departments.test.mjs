@@ -23,9 +23,10 @@ test('full workbench opens projects, submits a GEO draft and guards material dra
   const {chromium}=await import(pathToFileURL(path.join(root,'tools/douyin-bridge/node_modules/playwright/index.mjs')).href);
   browser=await chromium.launch({headless:true});
   const page=await browser.newPage({viewport:{width:1440,height:900}}),errors=[];
+  await page.clock.setFixedTime(new Date('2026-11-14T02:00:00Z'));
   page.on('pageerror',e=>errors.push(e.message));
   const state=createSeed('2026-11-08T00:00:00Z');state.role='sales';state.viewer={name:'ZS',team:'招商',salesId:'sales-1'};
-  const deal={...state.deals[0],id:'converted-project',name:'人工核实企业',projectName:'公开来源项目',dataOrigin:'research',contact:'',summary:'公开来源，客户需求待核实',needs:[],notes:[],amount:0,health:0};
+  const deal={...state.deals[0],id:'converted-project',name:'人工核实企业',projectName:'公开来源项目',dataOrigin:'research',contact:'',summary:'公开来源，客户需求待核实',needs:[],notes:[],amount:0,health:0,deadline:'2026-11-13T02:00:00Z',outcome:'open'};
   state.deals=[];state.runs=[];
   let reads=0;
   let geoProject;
@@ -69,9 +70,47 @@ test('full workbench opens projects, submits a GEO draft and guards material dra
   assert.equal(await page.locator('.cw-chat-title h2').innerText(),deal.name);
   assert.ok(reads>=2);
   assert.equal(new URL(page.url()).searchParams.get('deal'),deal.id);
+  const sidebar=page.getByRole('complementary',{name:'主导航',exact:true});
+  const account=sidebar.getByRole('button',{name:'账号菜单',exact:true});
   const businessNav=page.getByRole('navigation',{name:'业务导航'});
-  const businessNames=await businessNav.getByRole('link').allTextContents();
+  assert.ok((await sidebar.boundingBox()).width<=176);
+  assert.ok((await account.boundingBox()).y<(await businessNav.boundingBox()).y,'the account menu sits above business links');
+  for(const name of [/搜索工作空间/,/^通知/,/^AI 营销助手$/,/退出登录/]){
+   assert.equal(await sidebar.getByRole('button',{name}).count(),0);
+  }
+  await account.click();
+  await sidebar.getByRole('button',{name:'退出登录',exact:true}).waitFor();
+  await sidebar.getByRole('button',{name:'切换深色主题',exact:true}).click();
+  assert.deepEqual(await page.evaluate(()=>[document.documentElement.dataset.mode,localStorage.getItem('ctai-theme')]),['dark','dark']);
+  const light=sidebar.getByRole('button',{name:'切换浅色主题',exact:true});
+  if(!await light.isVisible()) await account.click();
+  await light.click();
+  assert.equal(await page.evaluate(()=>document.documentElement.dataset.mode),'light');
+  if(await sidebar.getByRole('button',{name:'退出登录',exact:true}).isVisible()) await account.click();
+  await page.keyboard.press('ControlOrMeta+k');
+  await page.getByRole('dialog',{name:'搜索工作空间',exact:true}).getByRole('button',{name:'关闭',exact:true}).click();
+
+  const assistant=page.getByRole('button',{name:'AI 营销助手',exact:true});
+  const floating=await assistant.boundingBox();
+  assert.ok(floating.x>1150&&floating.y>675,'the assistant floats at the bottom right');
+  await assistant.click();
+  const assistantDialog=page.getByRole('dialog',{name:'AI 营销助手',exact:true});
+  await assistantDialog.getByRole('button',{name:'关闭',exact:true}).click();
+
+  const businessNames=await businessNav.getByRole('link').locator('span').allTextContents();
+  assert.deepEqual(businessNames.slice(0,2),['提醒','AI获客']);
   assert.equal(businessNames.indexOf('AI营销素材'),businessNames.indexOf('GEO')+1);
+  for(const name of ['日程','合同','AI带练']) await businessNav.getByRole('link',{name,exact:true}).waitFor();
+  const reminderLink=businessNav.getByRole('link',{name:/^提醒/});
+  await reminderLink.click();
+  const reminders=page.getByRole('region',{name:'提醒',exact:true});
+  await reminders.getByRole('heading',{name:/^已逾期/}).waitFor();
+  await reminders.getByText(deal.projectName,{exact:true}).waitFor();
+  assert.equal(new URL(page.url()).searchParams.get('view'),'reminders');
+  assert.equal(await reminderLink.getAttribute('aria-current'),'page');
+  await reminders.getByRole('button',{name:'打开项目',exact:true}).click();
+  await page.locator('.cw-chat-title h2').getByText(deal.name,{exact:true}).waitFor();
+  assert.equal(new URL(page.url()).searchParams.get('deal'),deal.id);
   await businessNav.getByRole('link',{name:'GEO',exact:true}).click();
   await page.locator('.geo-workspace').waitFor();
   assert.equal(new URL(page.url()).searchParams.get('view'),'geo');
@@ -101,6 +140,7 @@ test('full workbench opens projects, submits a GEO draft and guards material dra
   assert.equal(await page.getByLabel('活动 / 主题',{exact:true}).inputValue(),'保留的活动主题');
   await page.setViewportSize({width:390,height:844});
   await page.waitForFunction(()=>document.querySelector('.sidebar').getBoundingClientRect().right<=1);
+  await page.getByRole('navigation',{name:'快捷导航',exact:true}).getByRole('button',{name:'提醒',exact:true}).waitFor();
   const shortcuts=await page.locator('.mobile-role-navigation button').evaluateAll(buttons=>buttons.map(button=>({width:button.getBoundingClientRect().width,labelHeight:button.querySelector('span').getBoundingClientRect().height})));
   assert.ok(shortcuts.every(button=>button.width>=44&&button.labelHeight<=20),JSON.stringify(shortcuts));
   await page.screenshot({path:'.superpowers/sdd/2026-11-08-five-departments/artifacts/workbench-material-mobile.png'});

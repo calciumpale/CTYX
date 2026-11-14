@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { canOpenWorkspaceView, readWorkspaceRoute, workspaceSearch, workspaceNavigation, workspaceSection, workspaceManagementNavigation } from '../app/lib/workspace-navigation.ts';
 
-test('business navigation puts GEO immediately above marketing materials without widening access', () => {
-  const expected=[{id:'prospecting',label:'社交平台获客'},{id:'geo',label:'GEO'},{id:'materials',label:'AI营销素材'},{id:'deals',label:'项目跟进'},{id:'schedule',label:'提醒及日程'},{id:'contracts',label:'合同及审批'},{id:'training',label:'培训提升'},{id:'knowledge',label:'知识库'}];
+test('business navigation starts with reminders and preserves role access', () => {
+  const expected=[{id:'reminders',label:'提醒'},{id:'prospecting',label:'AI获客'},{id:'geo',label:'GEO'},{id:'materials',label:'AI营销素材'},{id:'deals',label:'项目跟进'},{id:'schedule',label:'日程'},{id:'contracts',label:'合同'},{id:'training',label:'AI带练'},{id:'knowledge',label:'知识库'}];
   for(const role of ['sales','manager'] as const){
     assert.deepEqual(workspaceNavigation(role).map(({id,label})=>({id,label})),expected);
     assert.ok(workspaceNavigation(role).every(item=>(item.mobileLabel??item.label).length<=4));
@@ -11,6 +11,7 @@ test('business navigation puts GEO immediately above marketing materials without
   assert.deepEqual(workspaceNavigation('admin').map(({id,label})=>({id,label})),[{id:'knowledge',label:'知识库'}]);
   assert.equal(canOpenWorkspaceView('sales','settings'),false);
   assert.equal(canOpenWorkspaceView('admin','deals'),false);
+  assert.equal(canOpenWorkspaceView('admin','reminders'),false);
   assert.equal(canOpenWorkspaceView('manager','reports'),true);
   assert.equal(canOpenWorkspaceView('sales','contracts'),true);
   assert.equal(canOpenWorkspaceView('admin','materials'),false);
@@ -19,7 +20,7 @@ test('business navigation puts GEO immediately above marketing materials without
 });
 
 test('project, contract and acquisition context survive direct-link round trips', () => {
-  for(const view of ['deals','schedule','prospecting','geo','materials','knowledge','training','approvals','contracts','reports','studio','runs','settings','members','rules'] as const){
+  for(const view of ['deals','reminders','schedule','prospecting','geo','materials','knowledge','training','approvals','contracts','reports','studio','runs','settings','members','rules'] as const){
     const role=['settings','members','rules'].includes(view)?'admin':'manager';
     assert.equal(readWorkspaceRoute(workspaceSearch('',{view}),role).view,view);
   }
@@ -48,6 +49,7 @@ test('removed business landing and meeting pages resolve to their current homes'
 
 test('forbidden contexts fail closed and changing sections clears unrelated parameters', () => {
   assert.deepEqual(readWorkspaceRoute('?view=settings','sales'),{view:'deals'});
+  assert.deepEqual(readWorkspaceRoute('?view=reminders','admin'),{view:'home'});
   assert.deepEqual(readWorkspaceRoute('?view=schedule','admin'),{view:'home'});
   assert.deepEqual(readWorkspaceRoute('?view=made-up','admin'),{view:'home'});
   assert.deepEqual(readWorkspaceRoute('?view=deals&deal=%3Cscript%3E','sales'),{view:'deals'});
@@ -55,12 +57,13 @@ test('forbidden contexts fail closed and changing sections clears unrelated para
   assert.equal(workspaceSearch('?view=approvals&approval=old&contract=old&deal=old',{view:'prospecting',prospectingSection:'screen'}),'?view=prospecting&section=screen');
 });
 
-test('sections group approval with contracts and reports with reminder calendar', () => {
+test('sections group approval with contracts, reports with calendar, and identify reminders separately', () => {
   assert.equal(workspaceSection('deals','sales'),'deals');
   assert.equal(workspaceSection('contracts','sales'),'contracts');
   assert.equal(workspaceSection('approvals','manager'),'contracts');
   assert.equal(workspaceSection('reports','manager'),'schedule');
   assert.equal(workspaceSection('schedule','sales'),'schedule');
+  assert.equal(workspaceSection('reminders','sales'),'reminders');
   assert.equal(workspaceSection('materials','sales'),'materials');
   assert.equal(workspaceSection('geo','sales'),'geo');
   assert.equal(workspaceSection('talktracks','sales'),'knowledge');

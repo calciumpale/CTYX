@@ -76,7 +76,7 @@ export default function StudioContent({
     try {
       await studioRequest('', { action: 'create', requestId: scheduleRequest.current.id, draft }, '/api/schedules');
       setScheduleOpen(false);
-      notify('已添加到提醒及日程');
+      notify('已添加到日程');
     } catch (error) {
       setScheduleError((error as Error).message);
     } finally {

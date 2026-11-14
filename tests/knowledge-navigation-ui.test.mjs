@@ -40,6 +40,7 @@ test('knowledge drafts and accepted uploads guard inner tabs, global navigation 
    return route.fulfill({json:{pendingCount:0}});
   });
   await page.goto(server.resolvedUrls.local[0]+'?view=knowledge');
+  const account=page.getByRole('button',{name:'账号菜单',exact:true});
   await page.getByRole('button',{name:'导入资料',exact:true}).click();
   await page.getByRole('button',{name:'粘贴文本',exact:true}).click();
   await page.getByLabel('资料标题',{exact:true}).fill('未提交资料');
@@ -47,8 +48,15 @@ test('knowledge drafts and accepted uploads guard inner tabs, global navigation 
   const confirm=page.locator('.confirmation-dialog');
   // Dispatch the actual navigation handlers while the import overlay owns focus.
   // These paths must remain guarded even when triggered outside a pointer click.
-  for(const target of [page.getByRole('button',{name:'知识与方法',exact:true}),page.locator('.sidebar nav').getByRole('link',{name:'项目跟进',exact:true}),page.getByRole('button',{name:'退出登录',exact:true})]){
-   await target.dispatchEvent('click');await confirm.waitFor({timeout:4000});
+  for(const navigate of [
+   () => page.getByRole('button',{name:'知识与方法',exact:true}).dispatchEvent('click'),
+   () => page.locator('.sidebar nav').getByRole('link',{name:'项目跟进',exact:true}).dispatchEvent('click'),
+   async () => {
+    await account.dispatchEvent('click');
+    await page.getByRole('button',{name:'退出登录',exact:true}).dispatchEvent('click');
+   },
+  ]){
+   await navigate();await confirm.waitFor({timeout:4000});
    await confirm.getByRole('button',{name:'继续编辑',exact:true}).click();await confirm.waitFor({state:'hidden'});
    assert.equal(await page.getByLabel(/^正文/).inputValue(),'保留原始资料正文。');
    assert.equal(new URL(page.url()).searchParams.get('view'),'knowledge');

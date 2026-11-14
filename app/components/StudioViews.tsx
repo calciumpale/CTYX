@@ -214,7 +214,7 @@ export function TrainingView({ state, mutate, notify,onPendingChange,onMediaStop
   };
 
   return <section className="studio-view studio-training-view">
-    <header className="studio-heading training-page-heading"><h1>AI 销售陪练</h1></header>
+    <header className="studio-heading training-page-heading"><h1>AI带练</h1></header>
     {error && session && <Notice error>{error}</Notice>}
     <div className="studio-training-layout">
       <main className="studio-training-main">

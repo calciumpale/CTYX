@@ -92,6 +92,9 @@ test('prospecting inbox defaults to comment rows and only opens their details on
 
     await page.goto(`${origin}?view=prospecting`);
     await firstRow.getByText(storeLead.text, { exact: true }).waitFor();
+    const heading = page.getByRole('heading', { name: 'AI获客', exact: true });
+    const headingBounds = await heading.boundingBox();
+    assert.ok(headingBounds && headingBounds.height <= 1, 'the screen reader heading does not use space above the filters');
     assert.equal(await option(view), '评论线索');
     assert.deepEqual(await view.locator('option').allTextContents(), ['评论线索', '客户会话', '留资线索', '全网线索']);
     assert.deepEqual(await table.getByRole('columnheader').allTextContents(), ['用户名', '原文', '意向', '状态']);

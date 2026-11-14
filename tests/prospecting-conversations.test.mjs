@@ -96,8 +96,8 @@ test('conversation settings preserve drafts, save the loaded enabled state, and 
     await page.goto(origin);
     const roster = page.getByRole('list', { name: '客户会话', exact: true });
     await roster.waitFor();
-    const panel = page.getByRole('complementary', { name: '会话详情', exact: true });
-    assert.equal(await panel.count(), 0, 'No conversation is selected automatically');
+    const panel = page.getByRole('complementary', { name: '王女士', exact: true });
+    assert.equal(await page.locator('.prospect-chat-panel').count(), 0, 'No conversation is selected automatically');
     const wang = roster.getByRole('button', { name: '查看王女士详情', exact: true });
     const closed = roster.getByRole('button', { name: '查看已退订客户详情', exact: true });
     const wangRow = roster.getByRole('listitem').filter({ has: page.getByRole('button', { name: '查看王女士详情', exact: true }) });
@@ -117,8 +117,22 @@ test('conversation settings preserve drafts, save the loaded enabled state, and 
     assert.match(description, /需人工处理/);
     const settings = page.getByRole('button', { name: /^跟进设置/ });
     const closeSettings = page.getByRole('button', { name: '关闭跟进设置', exact: true });
+    const tools = panel.getByRole('button', { name: '会话工具', exact: true });
+    const openTools = async () => {
+      if (await tools.getAttribute('aria-expanded') !== 'true') await tools.click();
+    };
     await wang.click();
-    await page.locator('.prospect-chat-takeover').getByText(handoffReason, { exact: true }).waitFor();
+    await panel.getByRole('heading', { name: '王女士', exact: true }).waitFor();
+    await panel.locator('header').getByRole('button', { name: '立即同步', exact: true }).waitFor();
+    assert.equal(await tools.getAttribute('aria-expanded'), 'false');
+    assert.equal(await panel.locator('.prospect-memory').isVisible(), false);
+    await openTools();
+    const toolsRegion = panel.getByRole('region', { name: '会话工具', exact: true });
+    await toolsRegion.getByText(handoffReason, { exact: true }).waitFor();
+    await toolsRegion.getByRole('button', { name: '提炼话术 Skill / 重试', exact: true }).press('Escape');
+    await toolsRegion.waitFor({ state: 'hidden' });
+    assert.equal(await tools.evaluate(button => button === document.activeElement), true);
+    assert.equal(await panel.isVisible(), true, 'closing conversation tools leaves the transcript open');
     const expectWideDetail = async width => {
       await page.setViewportSize({ width, height: 1000 });
       const [rosterBounds, panelBounds] = await Promise.all([roster.boundingBox(), panel.boundingBox()]);
@@ -164,6 +178,7 @@ test('conversation settings preserve drafts, save the loaded enabled state, and 
     assert.equal(syncStatus, 'done', 'A completed task with an error must still show a sync failure');
     assert.match(await syncDetails.textContent(), /15:45/);
     assert.doesNotMatch(await syncDetails.textContent(), /16:00/, 'Task completion must not advance the platform observation time');
+    await openTools();
     assert.equal(await page.locator('.prospect-chat-takeover').getByText(handoffReason, { exact: true }).count(), 1, 'Synchronization status stays separate from the customer handoff reason');
     await settings.click();
     await page.waitForFunction(() => document.querySelector('.prospect-chat-policy input[type="number"]')?.value === '17');
@@ -234,6 +249,7 @@ test('conversation settings preserve drafts, save the loaded enabled state, and 
     assert.deepEqual(composingKeys, [true, true, true], 'IME shortcuts must keep their default composition behavior');
     assert.equal(await replyInput.inputValue(), '仅用于测试的未发送草稿');
     assert.equal(posts.filter(item => item.action === 'chatReply').length, 0, 'IME composition must not submit a reply');
+    await openTools();
     await page.locator('.prospect-memory > summary').click();
     await page.getByText('80–100 平方米', { exact: true }).waitFor();
     await page.getByText('邀请已提交 1 次 · 待发送 0 次 · 待核对 0 次', { exact: true }).waitFor();
@@ -274,6 +290,7 @@ test('conversation settings preserve drafts, save the loaded enabled state, and 
     lastSyncedAt = undefined;
     await page.waitForResponse(response => response.url().includes('/api/prospecting?') && response.request().method() === 'GET');
     await page.getByRole('button', { name: /王女士/ }).click();
+    await openTools();
     await page.locator('.prospect-chat-takeover').getByText('未记录接管原因，请查看客户消息后继续跟进。', { exact: true }).waitFor();
     await syncDetails.getByText('尚未完成可靠同步', { exact: true }).waitFor();
     assert.equal(await syncDetails.locator('time').count(), 0, 'Legacy records without a platform sync time must not show the database refresh time');
@@ -281,6 +298,7 @@ test('conversation settings preserve drafts, save the loaded enabled state, and 
     await page.evaluate(() => window.__chatFixture.setCampaign(undefined));
     await page.getByRole('button', { name: /王女士/ }).click();
     await page.getByText('只读会话，接管与发送由原任务负责人操作。', { exact: true }).waitFor();
+    await openTools();
     await page.locator('.prospect-chat-takeover').getByText(handoffReason, { exact: true }).waitFor();
     assert.equal(await page.getByRole('button', { name: '发送回复', exact: true }).count(), 0);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
@@ -427,6 +445,7 @@ test('conversation learning sends only source identifiers and shows retryable st
     });
     await page.goto(origin);
     await page.getByRole('button', { name: /案例客户/ }).click();
+    await page.getByRole('button', { name: '会话工具', exact: true }).click();
     const button = page.getByRole('button', { name: '提炼话术 Skill / 重试', exact: true });
     await button.click(); await page.getByText('至少需要两轮实质客户文本', { exact: true }).waitFor();
     assert.deepEqual(posts[0], { action: 'chatLearn', campaignId: 'campaign-a', conversationId: 'case-a' });
@@ -472,8 +491,10 @@ test('the capture list filters four columns and opens authorized conversation de
     await page.getByRole('log').getByText('想预约看铺').waitFor();
     assert.ok(selectedReads.length && selectedReads.every(scope => scope === null));
     assert.equal(await page.getByRole('button', { name: '发送回复' }).count(), 0);
+    const conversation = page.getByRole('complementary', { name: '留资客户', exact: true });
+    await conversation.waitFor();
     await page.getByRole('button', { name: '返回会话列表' }).click();
-    assert.equal(await page.getByRole('complementary', { name: '会话详情' }).count(), 0);
+    await conversation.waitFor({ state: 'hidden' });
   } finally { await browser?.close(); await server.close(); await rm(cacheDir, { recursive: true, force: true }); }
 });
 

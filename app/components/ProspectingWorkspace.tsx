@@ -435,8 +435,8 @@ export function ProspectingWorkspace({ onGuardReady, initialSection = 'screen', 
   };
 
   return <div className="prospect-workspace">
-    <div ref={contentPane} className="prospect-content" aria-label="社交平台获客">
-      <header className="prospect-inbox-heading"><h1>社交平台获客</h1></header>
+    <div ref={contentPane} className="prospect-content" aria-label="AI获客">
+      <h1 className="prospect-sr-only">AI获客</h1>
       {section === 'web' ? <>
         {error && <p className="prospect-inline-error" role="alert">{error}</p>}
         <WebProspecting toolbarStart={viewPicker} onDirtyChange={setWebDirty} onBusyChange={onWebBusyChange} onNavigateProject={onNavigateProject} />

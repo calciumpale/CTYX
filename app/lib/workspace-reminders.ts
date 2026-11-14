@@ -1,7 +1,7 @@
 import { DEFAULT_DEADLINE_RULES, projectUrgency, type DeadlineRules, type ProjectUrgency } from './project-deadline.ts';
 import type { Deal } from './types.ts';
 
-export type ReminderProject = Pick<Deal, 'id' | 'name' | 'projectName' | 'deadline' | 'outcome' | 'nextAction'>;
+export type ReminderProject = Pick<Deal, 'id' | 'name' | 'projectName' | 'deadline' | 'outcome' | 'nextAction' | 'archive'>;
 export type ProjectReminder = {
   dealId: string;
   title: string;
@@ -18,6 +18,7 @@ export function deriveProjectReminders(projects: readonly ReminderProject[], now
   const items: ProjectReminder[] = [];
   const counts: ProjectReminderCounts = { total: 0, overdue: 0, urgent: 0, upcoming: 0 };
   for (const project of projects) {
+    if (project.archive) continue;
     const urgency = projectUrgency(project, now, rules);
     if (urgency === 'none') continue;
     items.push({ dealId: project.id, title: project.projectName || project.name, company: project.name, deadline: project.deadline!, nextAction: project.nextAction, urgency });

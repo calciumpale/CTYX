@@ -20,9 +20,10 @@ test('reminders use elapsed-time deadline boundaries and update overdue status a
   assert.equal(deriveProjectReminders([project('due', 1)], now + 3_600_000).items[0].urgency, 'overdue');
 });
 
-test('closed, undated, invalid and out-of-window projects do not inflate reminder counts', () => {
+test('closed, archived, undated, invalid and out-of-window projects do not inflate reminder counts', () => {
   const result = deriveProjectReminders([
     project('won', -1, { outcome: 'won' }), project('lost', -2, { outcome: 'lost' }),
+    project('archived', -3, { outcome: 'open', archive: { at: new Date(now).toISOString(), reason: '移入历史', migrationKey: 'archive-test' } }),
     project('undated', 1, { deadline: undefined }), project('invalid', 1, { deadline: 'invalid' }),
     project('later', 140), project('open', -4, { outcome: 'open' }),
   ], now);

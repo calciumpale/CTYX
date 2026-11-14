@@ -35,8 +35,8 @@ export function ContractCenter({ initialTab = 'contracts', initialDealId, initia
   };
 
   return <section className="contract-center" aria-labelledby={`${prefix}-title`}>
-    <header className="contract-center-heading"><h1 id={`${prefix}-title`}>合同及审批</h1></header>
-    <nav className="contract-center-tabs" aria-label="合同及审批分类">
+    <header className="contract-center-heading"><h1 id={`${prefix}-title`}>合同</h1></header>
+    <nav className="contract-center-tabs" aria-label="合同分类">
       {([{ id: 'contracts', label: '合同初审' }, { id: 'approvals', label: '审批' }] as const).map(tab => <a key={tab.id} href={`/${workspaceSearch('', route(tab.id))}`} aria-current={tab.id === initialTab ? 'page' : undefined} onClick={event => navigateTab(event, tab.id)}>{tab.label}{tab.id === 'approvals' && pendingCount > 0 && <span aria-label={`${pendingCount} 项待审批`}>{pendingCount}</span>}</a>)}
     </nav>
     {initialTab === 'contracts' ? <ContractReviewView key={`contracts:${initialDealId || ''}:${initialContractId || ''}`} {...props} embeddedHeading initialDealId={initialDealId} initialContractId={initialContractId} onNavigate={onNavigate} onBusyChange={onBusyChange} onDirtyChange={onDirtyChange} onApproval={(contractId, dealId) => onNavigate('approvals', dealId, contractId)} /> : <ApprovalWorkspace key={`approvals:${initialDealId || ''}:${initialContractId || ''}:${initialApprovalId || ''}`} embeddedHeading state={props.state} notify={props.notify} onNavigate={onNavigate} initialDealId={initialDealId} initialContractId={initialContractId} initialApprovalId={initialApprovalId} onReloadWorkspace={onReloadWorkspace} onBusyChange={onBusyChange} onDirtyChange={onDirtyChange} />}

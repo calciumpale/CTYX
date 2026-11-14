@@ -9,9 +9,11 @@ import react from '@vitejs/plugin-react';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const profileMemory = { topic: 'practice', title: '跟进沟通要点', body: '先核对现场使用限制。', sourceIds: ['run-1'], updatedAt: '2026-11-08T03:00:00Z', version: 1 };
-const proposedAction = { action: '向客户确认计划搬迁日期', reason: '交付日期随着客户搬迁窗口调整。', evidence: [] };
+const proposedQuote = '客户说：搬迁日期要等物业确认后再定。';
+const proposedAction = { action: '向客户确认计划搬迁日期', reason: '交付日期随着客户搬迁窗口调整。', evidence: [{ refId: 'note-1', quote: proposedQuote }] };
+const recordedAction = '核对客户约定的现场联系人';
 const fixture = `import React,{useState} from 'react';import {createRoot} from 'react-dom/client';import {CustomerWorkspace} from '/app/components/CustomerWorkspace.tsx';import {ProjectsView} from '/app/components/ProjectWorkspace.tsx';import {createSeed} from '/app/lib/seed.ts';import '/app/globals.css';
-const now='2026-11-08T00:00:00Z';const seed=createSeed(now);const base={...seed.deals[0],owner:'ZS',ownerId:'sales-1',summary:'',contact:'',position:'',notes:[],needs:[],risks:[],amount:0,health:0};const active={...base,id:'new',name:'公开企业有限公司',projectName:'公开企业线索',dataOrigin:'research',health:72,companyProfile:{companyName:'公开企业有限公司',summary:'公开机构资料；尚未确认采购需求或建立客户关系。',provider:'web',status:'ready',modelUsed:false,updatedAt:now,facts:[{label:'地区',value:'嘉兴',sourceIds:['official']}],sources:[{id:'official',title:'官方机构名录',url:'https://example.com/registry',provider:'web',retrievedAt:now,snippet:'资料日期：2024-06-30'}],warnings:['当前登记、许可及营业状态尚未核验。']}};const old={...base,id:'old',name:'历史企业',projectName:'历史项目',archive:{at:now,reason:'五科室企业目录替换；历史保留',migrationKey:'setup'},notes:[{id:'note',text:'历史客户原话',author:'ZS',date:now}]};
+const now='2026-11-08T00:00:00Z';const seed=createSeed(now);const base={...seed.deals[0],owner:'ZS',ownerId:'sales-1',summary:'',contact:'',position:'',notes:[],needs:[],risks:[],amount:0,health:0};const active={...base,id:'new',name:'公开企业有限公司',projectName:'公开企业线索',dataOrigin:'research',health:72,nextAction:${JSON.stringify(recordedAction)},companyProfile:{companyName:'公开企业有限公司',summary:'公开机构资料；尚未确认采购需求或建立客户关系。',provider:'web',status:'ready',modelUsed:false,updatedAt:now,facts:[{label:'地区',value:'嘉兴',sourceIds:['official']}],sources:[{id:'official',title:'官方机构名录',url:'https://example.com/registry',provider:'web',retrievedAt:now,snippet:'资料日期：2024-06-30'}],warnings:['当前登记、许可及营业状态尚未核验。']}};const old={...base,id:'old',name:'历史企业',projectName:'历史项目',archive:{at:now,reason:'五科室企业目录替换；历史保留',migrationKey:'setup'},notes:[{id:'note',text:'历史客户原话',author:'ZS',date:now}]};
 function Fixture() {
   const [state,setState] = useState({ ...seed, model:{connected:true,name:'测试模型'}, deals:[active,old], salesOwners:[{salesId:'sales-empty',displayName:'WL'}], runs:[{id:'old-chat',dealId:'old',createdAt:now,query:'历史提问',answer:'历史回答',agentIds:['insight'],steps:[],citations:[],mode:'demo',duration:1}] });
   window.refreshFixture = () => setState(s => ({ ...s, revision:s.revision+1 }));
@@ -96,7 +98,8 @@ test('project overview separates intent and health, shows inline profile, and ke
     await conversationTitle.getByRole('heading', { name: '公开企业有限公司', exact: true }).waitFor();
     assert.equal(await conversationTitle.innerText(), '公开企业有限公司');
     const overview = conversation.getByRole('region', { name: '项目概览', exact: true });
-    assert.match(await overview.innerText(), /尚未评估/);
+    const intent = overview.getByRole('button', { name: /^意向程度/ });
+    assert.match(await intent.innerText(), /意向程度\s*尚未评估/);
     assert.match(await overview.innerText(), /健康程度\s*72/);
 
     const toggleProfile = overview.getByRole('button', { name: '企业画像与摘要', exact: true });
@@ -166,7 +169,18 @@ test('project overview separates intent and health, shows inline profile, and ke
     assert.equal(await restoreDirectory.getAttribute('aria-controls'), controls);
     assert.equal(await restoreDirectory.evaluate(button => document.activeElement === button), true);
     assert.equal(await filter.isVisible(), false);
-    assert.ok((await conversation.boundingBox()).width > widthBeforeCollapse + 100, 'collapsing returns the directory space to the project');
+    const [edge, collapsedWidth, chat] = await Promise.all([
+      restoreDirectory.boundingBox(), directory.evaluate(panel => panel.getBoundingClientRect().width), conversation.boundingBox(),
+    ]);
+    assert.ok(collapsedWidth <= 1, 'collapsing removes the full-height directory rail');
+    assert.ok(chat.width > widthBeforeCollapse + 100, 'collapsing returns the directory space to the project');
+    assert.ok(Math.abs(edge.x - chat.x) <= 4 && edge.width <= 40, 'restore stays on the left edge of the chat');
+    assert.ok(Math.abs(edge.y + edge.height / 2 - chat.y - chat.height / 2) <= 4,
+      `restore is centered vertically: ${JSON.stringify({ edge, chat })}`);
+    assert.equal(await restoreDirectory.evaluate(button => {
+      const { x, y, width, height } = button.getBoundingClientRect();
+      return button.contains(document.elementFromPoint(x + width / 2, y + height / 2));
+    }), true, 'the collapsed edge tab accepts pointer input');
     assert.equal(await composer.inputValue(), '折叠前的项目草稿');
     await restoreDirectory.press('Enter');
     assert.equal(await collapseDirectory.getAttribute('aria-expanded'), 'true');
@@ -178,31 +192,54 @@ test('project overview separates intent and health, shows inline profile, and ke
 
     for (const [grade, score, label] of [['A', 88, '高意向'], ['B', 58, '中意向'], ['C', 0, '低意向']]) {
       await page.evaluate(value => window.setIntentFixture(value), { grade, score });
-      const scoreButton = overview.getByRole('button', { name: new RegExp(label) });
-      await scoreButton.waitFor();
-      assert.equal(await scoreButton.innerText(), label);
+      await intent.getByText(label, { exact: true }).waitFor();
+      assert.match(await intent.innerText(), new RegExp(`^意向程度\\s*${label}$`));
       assert.match(await overview.innerText(), /健康程度\s*72/);
       assert.equal(await overview.evaluate(node => node.scrollWidth <= node.clientWidth), true);
     }
 
     await page.evaluate(() => window.setIntentFixture({ grade: 'A', score: 88, stale: true }));
-    await overview.getByText('待重新评估', { exact: true }).waitFor();
+    await intent.getByText('待重新评估', { exact: true }).waitFor();
     assert.doesNotMatch(await overview.innerText(), /88/);
     await page.evaluate(() => window.setIntentFixture({ grade: null, score: null }));
-    await overview.getByText('资料不足', { exact: true }).waitFor();
-    assert.doesNotMatch(await overview.getByRole('button', { name: /资料不足/ }).innerText(), /\/\s*100/);
+    await intent.getByText('尚未评估', { exact: true }).waitFor();
+    assert.doesNotMatch(await intent.innerText(), /\/\s*100/);
 
     const nextSteps = page.getByRole('complementary', { name: '下一步建议', exact: true });
     const assessment = nextSteps.getByRole('region', { name: 'AI 销售分析', exact: true });
     const completeAssessment = assessment.locator('summary').getByText('查看完整评估', { exact: true });
+
+    const task = title => nextSteps.locator('.cw-next-step').filter({ has: page.getByText(title, { exact: true }) });
+    const recordedTask = task(recordedAction);
+    const recordedTitle = recordedTask.locator('summary');
+    const editNextStep = nextSteps.getByRole('button', { name: '编辑下一步', exact: true });
+    await recordedTitle.waitFor();
+    assert.equal(await recordedTask.evaluate(row => row.open), false);
+    assert.equal(await editNextStep.isVisible(), false);
+    await recordedTitle.press('Enter');
+    await editNextStep.waitFor();
+    await recordedTask.getByText(/^截止时间/).waitFor();
     await page.evaluate(() => window.setIntentFixture({ grade: 'A', score: 88 }));
-    await assessment.getByRole('heading', { name: 'AI 建议', exact: true }).waitFor();
-    await assessment.getByText(proposedAction.reason, { exact: true }).waitFor();
-    assert.equal(await assessment.getByText(proposedAction.action, { exact: true }).count(), 1, 'identical proposals from both analyses are shown once');
+    const proposedTask = task(proposedAction.action);
+    const proposedTitle = proposedTask.locator('summary');
+    await proposedTitle.getByText('AI 建议', { exact: true }).waitFor();
+    assert.equal(await proposedTask.evaluate(row => row.open), false);
+    assert.equal(await nextSteps.getByText(proposedAction.reason, { exact: true }).isVisible(), false);
+    assert.equal(await nextSteps.getByText(proposedQuote, { exact: true }).isVisible(), false);
+    assert.equal(await nextSteps.getByText(proposedAction.action, { exact: true }).count(), 1, 'identical proposals from both analyses are shown once');
     assert.equal(await completeAssessment.evaluate(summary => summary.closest('details').open), false);
+    await proposedTitle.click();
+    await proposedTask.getByText(proposedAction.reason, { exact: true }).waitFor();
+    await proposedTask.getByText(proposedQuote, { exact: true }).waitFor();
+    assert.equal(await editNextStep.isVisible(), false, 'opening the suggested task closes the recorded task');
+    assert.equal(await completeAssessment.evaluate(summary => summary.closest('details').open), false);
+    await proposedTitle.click();
     await page.evaluate(() => window.setIntentFixture({ grade: 'A', score: 88, stale: true }));
-    await assessment.getByRole('heading', { name: '上次评估的 AI 建议', exact: true }).waitFor();
-    await assessment.getByText(proposedAction.reason, { exact: true }).waitFor();
+    await proposedTitle.getByText('上次评估', { exact: true }).waitFor();
+    assert.equal(await proposedTask.getByText(proposedAction.reason, { exact: true }).isVisible(), false);
+    await page.evaluate(() => window.setIntentFixture({ grade: 'C', score: 0 }));
+    await intent.getByText('低意向', { exact: true }).click();
+    await assessment.getByText(/意向评分\s*0\s*\/\s*100/).waitFor();
 
     await page.setViewportSize({ width: 320, height: 700 });
     assert.equal(await collapseDirectory.isVisible(), false, 'mobile keeps the existing directory screen');

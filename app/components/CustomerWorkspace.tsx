@@ -7,7 +7,7 @@ import { preferredScrollBehavior } from '../lib/scroll-behavior';
 import { useChatScroll } from '../lib/use-chat-scroll';
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type FormEvent } from 'react';
-import { ArrowDown, ArrowLeft, ArrowUp, BookOpen, Brain, Building2, ChevronDown, FileText, Loader2, MoreHorizontal, PanelLeftClose, PanelLeftOpen, PanelRight, Plus, Search, Sparkles, X } from 'lucide-react';
+import { ArrowDown, ArrowLeft, ArrowUp, BookOpen, Brain, Building2, ChevronDown, ChevronRight, FileText, Loader2, MoreHorizontal, PanelLeftClose, PanelRight, Plus, Search, Sparkles, X } from 'lucide-react';
 import { AGENTS, STAGES, type AgentId, type CustomerProfile, type Deal, type Run, type View, type ViewProps } from '../lib/types';
 import type { MemberSession } from '../lib/member-types';
 import { buildCustomerChatRequest, companyDirectory, customerChatHistory, selectCompanyProject, selectInitialCustomerProject, type CustomerChatRequest, type CustomerDirectoryScope } from '../lib/customer-workspace';
@@ -94,15 +94,13 @@ export function CustomerWorkspace({ state, member, mutate, notify, initialDealId
   const deal = state.deals.find(item => item.id === selectedId);
   const currentInsight = deal && !assessmentBusy && salesIntelligenceIsCurrent(deal) ? deal.intelligence?.latest?.insight : undefined;
   const intentGrade = currentInsight?.grade;
-  const intentScore = intentGrade ? currentInsight.score : null;
   const overviewOpen = !!deal && overviewDealId === deal.id;
   const healthScore = deal && Number.isFinite(deal.health) && deal.health > 0 ? deal.health : null;
   let intentLabel = '尚未评估';
   if (assessmentBusy) intentLabel = '评估中';
-  else if (intentGrade && intentScore !== null) intentLabel = SALES_GRADE_LABELS[intentGrade];
+  else if (intentGrade && currentInsight.score !== null) intentLabel = SALES_GRADE_LABELS[intentGrade];
   else if (deal?.outcome === 'won' || deal?.outcome === 'lost') intentLabel = '已结项';
-  else if (currentInsight) intentLabel = '资料不足';
-  else if (deal?.intelligence?.latest) intentLabel = '待重新评估';
+  else if (!currentInsight && deal?.intelligence?.latest) intentLabel = '待重新评估';
   const company = companies.find(item => item.projects.some(project => project.id === selectedId));
   const draft = selectedId ? drafts[selectedId] || emptyDraft() : emptyDraft();
   const locked = busy || intakeBusy || assessmentBusy;
@@ -303,7 +301,7 @@ export function CustomerWorkspace({ state, member, mutate, notify, initialDealId
   return <div className={`customer-workspace${profileOpen ? ' cw-profile-open' : ''}`} data-mobile-panel={mobilePanel} data-directory-collapsed={directoryCollapsed}>
     <aside className="cw-directory" aria-label="企业通讯录">
       <button type="button" className="button ghost cw-directory-toggle" aria-label={directoryToggleLabel} title={directoryToggleLabel} aria-expanded={!directoryCollapsed} aria-controls={`${id}-directory-content`} onClick={() => setDirectoryCollapsed(value => !value)}>
-        {directoryCollapsed ? <PanelLeftOpen size={18} aria-hidden="true" /> : <PanelLeftClose size={18} aria-hidden="true" />}
+        {directoryCollapsed ? <ChevronRight size={16} aria-hidden="true" /> : <PanelLeftClose size={18} aria-hidden="true" />}
       </button>
       <div className="cw-directory-content" id={`${id}-directory-content`}>
         <header className="cw-directory-heading"><div><h1>项目跟进</h1><span>{companies.length} 家企业</span></div><button className="button ghost" aria-label="新建企业或项目" title="新建企业或项目" disabled={locked} onClick={() => openForm('create', true)}><Plus size={17} /></button></header>
@@ -331,10 +329,10 @@ export function CustomerWorkspace({ state, member, mutate, notify, initialDealId
         <section className="cw-overview" aria-label="项目概览">
           <div className="cw-overview-bar">
             <div className="cw-overview-metrics">
-              <button ref={intentButton} type="button" className="button secondary cw-intent-summary" aria-controls={`${id}-assessment`} title="查看 AI 销售分析" disabled={locked} onClick={() => showInsights(true)}>
-                <span>{intentLabel}</span><ChevronDown size={12} aria-hidden="true" />
+              <button ref={intentButton} type="button" className="button ghost cw-metric cw-intent-summary" aria-controls={`${id}-assessment`} title="查看 AI 销售分析" disabled={locked} onClick={() => showInsights(true)}>
+                <span>意向程度</span><strong>{intentLabel}</strong><ChevronDown size={12} aria-hidden="true" />
               </button>
-              <div className="cw-health-summary"><span>健康程度</span><strong>{healthScore === null ? '尚未评估' : `${healthScore} / 100`}</strong></div>
+              <div className="cw-metric"><span>健康程度</span><strong>{healthScore === null ? '尚未评估' : `${healthScore} / 100`}</strong></div>
             </div>
             <button type="button" className="button ghost cw-overview-toggle" aria-label="企业画像与摘要" title="企业画像与摘要" aria-expanded={overviewOpen} aria-controls={`${id}-overview`} onClick={() => setOverviewDealId(overviewOpen ? null : deal.id)}>
               <Brain size={17} aria-hidden="true" /><ChevronDown size={13} aria-hidden="true" />
@@ -459,21 +457,24 @@ export function CustomerWorkspace({ state, member, mutate, notify, initialDealId
         <button className="button ghost" aria-label="收起下一步建议" onClick={hideInsights}><X size={17} /></button>
       </header>
       {deal ? <div className="cw-insights-body">
-        <section className="cw-profile-section cw-next-action">
-          <div className="cw-section-heading"><h3>已记录的下一步</h3><button disabled={locked} onClick={() => openForm('edit')}>编辑下一步</button></div>
-          <p>{deal.nextAction || '尚未填写下一步。'}</p>
-          {deal.deadline && <p className="cw-muted">截止时间 · {date(deal.deadline)}</p>}
-          <button className="button secondary" disabled={locked} onClick={() => {
-            updateDraft({ query: '请结合当前项目已确认的信息与资料缺口，给出下一步行动、沟通问题及理由', agent: 'strategy' });
-            if (!window.matchMedia('(min-width: 1201px)').matches) {
-              setProfileOpen(false);
-              setMobilePanel('chat');
-            }
-            requestFocus({ destination: 'composer' });
-          }}>与 AI 讨论下一步</button>
-        </section>
         <div id={`${id}-assessment`} ref={assessment} tabIndex={-1}>
-          <ProjectSalesIntelligence key={deal.id} prioritizeActions deal={deal} mutate={mutate} notify={notify} modelConnected={state.model.connected} disabled={locked} onBusyChange={onAssessmentBusy} onReload={onReload} />
+          <ProjectSalesIntelligence key={deal.id} deal={deal} mutate={mutate} notify={notify} modelConnected={state.model.connected} disabled={locked} onBusyChange={onAssessmentBusy} onReload={onReload} recordedAction={{
+            title: deal.nextAction.trim(),
+            detail: <>
+              <p>截止时间 · {deal.deadline ? <time dateTime={deal.deadline}>{date(deal.deadline)}</time> : '未设置'}</p>
+              <div className="cw-next-step-controls">
+                <button type="button" className="button secondary" disabled={locked} onClick={() => openForm('edit')}>编辑下一步</button>
+                <button type="button" className="button ghost" disabled={locked} onClick={() => {
+                  updateDraft({ query: '请结合当前项目已确认的信息与资料缺口，给出下一步行动、沟通问题及理由', agent: 'strategy' });
+                  if (!window.matchMedia('(min-width: 1201px)').matches) {
+                    setProfileOpen(false);
+                    setMobilePanel('chat');
+                  }
+                  requestFocus({ destination: 'composer' });
+                }}>与 AI 讨论下一步</button>
+              </div>
+            </>,
+          }} />
         </div>
       </div> : <p className="cw-muted">选择项目后查看下一步建议。</p>}
     </aside>

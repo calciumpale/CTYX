@@ -50,7 +50,12 @@
   .prospect-inbox-panel-header .icon-button { width: 44px; height: 44px; }
 }
 @media (max-width: 480px) {
-  .prospect-inbox-filters[aria-label] > select { min-width: 90px; max-width: 104px; text-overflow: ellipsis; }
+  .prospect-inbox-filters[aria-label] > select {
+    --field-padding-inline: 8px;
+    --field-select-padding-end: 17px;
+    min-width: 94px;
+    max-width: 100px;
+  }
   .prospect-inbox-filters > .prospect-inbox-settings { width: 44px; padding-inline: 0; }
   .prospect-inbox-settings > span { display: none; }
   .prospect-inbox-intent-col { width: 51px; }

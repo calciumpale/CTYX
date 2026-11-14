@@ -16,7 +16,7 @@ const at = '2026-11-14T03:00:00.000Z';
 const recording = { id:'recording-9a83c9a6-61ce-489c-bd7a-a6dba42ee69a', name:'沟通录音.wav', size:1024, mimeType:'audio/wav' };
 const source = { dealId:'source-deal', recordingId:recording.id, jobId:'fixture-job' };
 const quote = '澄光咖啡要为陆家嘴一号店另找位置，周五前确认新店预算。';
-const supported = (text: string) => ({ text, quote });
+const supported = (text: string) => ({ text, evidenceIds: ['s1'] });
 const response = JSON.stringify({ companyName:'澄光咖啡', projectName:'陆家嘴一号店',
   summary:supported('讨论陆家嘴一号店的新址。'), decisions:[supported('周五前确认预算。')],
   followup:supported('周五前和客户确认新店预算。'), profile:{ goals:supported('为陆家嘴一号店另找位置。') },
@@ -133,9 +133,9 @@ test('an ASR retry racing confirmation leaves the business write and its receipt
   assert.deepEqual(await f.service.read(f.context,f.state,source),{draft:null,applied:false,appliedDealId:null});
 });
 
-test('a model result with unsupported quote is rejected, and target version changes hide old drafts', async t => {
+test('unknown evidence IDs are rejected and target version changes hide old drafts', async t => {
   const f=fixture(); t.after(()=>f.sqlite.close());
-  await assert.rejects(f.service.generate(f.context,f.state,source,async()=>response.replaceAll(quote,'这句话在录音里没有出现')), {status:502});
+  await assert.rejects(f.service.generate(f.context,f.state,source,async()=>response.replaceAll('s1','s999')), {status:502});
   assert.deepEqual(await f.service.read(f.context,f.state,source),{draft:null,applied:false,appliedDealId:null});
   const draft=await f.service.generate(f.context,f.state,source,f.generate);
   const edited=structuredClone(f.state);
@@ -160,4 +160,25 @@ test('unassigned recording processing stays personal and writes only to the conf
     draftId:draft.id,profile:{goals:draft.profile.goals},followup:draft.followup,confirmed:true});
   assert.equal(applied.state.deals.find(deal=>deal.id===f.target.id)?.notes[0].text,draft.followup);
   assert.equal(applied.state.deals.some(deal=>deal.id===RECORDING_INBOX_DEAL_ID),false);
+});
+
+
+test('a malformed reply gets one repair and unsupported optional claims do not erase a grounded summary', async t => {
+  const f=fixture(); t.after(()=>f.sqlite.close());
+  let attempts=0;
+  const draft=await f.service.generate(f.context,f.state,source,async messages=>{
+    attempts++;
+    assert.match(messages[1].content,/"id":"s1"/);
+    if(attempts===1)return '{"summary":"模型未提供编号"}';
+    assert.equal(messages.length,3);
+    const data={summary:supported('讨论新店选址'),decisions:[{text:'无证据的承诺',evidenceIds:['s999']}],
+      followup:{text:'无证据的下一步',evidenceIds:['s999']},profile:{goals:supported('考虑新店位置'),budget:{text:'',evidenceIds:[]}}};
+    return '`'.repeat(3)+'json\n'+JSON.stringify(data)+'\n'+'`'.repeat(3);
+  });
+  assert.equal(attempts,2);
+  assert.equal(draft.summary,'讨论新店选址');
+  assert.deepEqual(draft.decisions,[]);
+  assert.equal(draft.followup,'');
+  assert.deepEqual(draft.profile,{goals:'考虑新店位置'});
+  assert.deepEqual(draft.evidence,[quote]);
 });

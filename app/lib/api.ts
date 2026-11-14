@@ -1,6 +1,7 @@
 'use client';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ApiResult, WorkbenchState } from './types';
+import { CHAT_PROGRESS_CONTENT_TYPE, ChatProgressError, readChatProgress, type ChatProgressStep } from './chat-progress.ts';
 
 function incompleteResponse(response: Response): Error {
   if (response.redirected || response.status === 401) return new Error('工作台登录状态可能已失效，请刷新页面后重试。');
@@ -28,13 +29,16 @@ export function useWorkbench() {
   const disposed=useRef(false);
   const requests=useRef(new Set<AbortController>());
   useEffect(()=>{disposed.current=false;const activeRequests=requests.current;return()=>{disposed.current=true;for(const controller of activeRequests)controller.abort();activeRequests.clear();};},[]);
-  const request=useCallback(async(url:string,init:RequestInit={})=>{
+  const request=useCallback(async<T,>(url:string,init:RequestInit,read:(response:Response)=>Promise<T>,streamingChat=false)=>{
     if(disposed.current)throw new DOMException('当前账号已退出','AbortError');
     const controller=new AbortController();requests.current.add(controller);
-    try { return await fetch(url, { ...init, signal: controller.signal }); }
-    catch {
-      if (controller.signal.aborted) throw new DOMException('当前账号已退出', 'AbortError');
-      throw new Error('暂时无法连接工作台，请检查网络后重试。');
+    try {
+      const response = await fetch(url, { ...init, signal: controller.signal }).catch(() => {
+        if (controller.signal.aborted) throw new DOMException('当前账号已退出', 'AbortError');
+        if (streamingChat) throw new ChatProgressError('暂时无法确认本次回复是否已保存，请先刷新查看记录。', 0, true);
+        throw new Error('暂时无法连接工作台，请检查网络后重试。');
+      });
+      return await read(response);
     } finally { requests.current.delete(controller); }
   },[]);
   // Keep role changes and writes in one order, including slow model requests.
@@ -44,28 +48,36 @@ export function useWorkbench() {
   const reload = useCallback(async () => {
     const previous=stateRef.current;
     try {
-      const response = await request('/api/workbench', { cache: 'no-store', credentials: 'same-origin' });
-      const body = await readWorkbenchResponse<WorkbenchState>(response, '工作台暂时未能加载，请重试。');
-      if (!Number.isSafeInteger(body.revision)) throw incompleteResponse(response);
+      const body = await request('/api/workbench', { cache: 'no-store', credentials: 'same-origin' }, async response => {
+        const body = await readWorkbenchResponse<WorkbenchState>(response, '工作台暂时未能加载，请重试。');
+        if (!Number.isSafeInteger(body.revision)) throw incompleteResponse(response);
+        return body;
+      });
       if(stateRef.current===previous)accept(body);
     } catch (cause) { setError(cause instanceof Error ? cause.message : '网络连接失败，请重试'); throw cause; }
     finally { setLoading(false); }
   }, [accept,request]);
   useEffect(() => { void Promise.resolve().then(reload).catch(() => {}); }, [reload]);
-  const acceptMutation = useCallback(async (response: Response, fallback: string) => {
-    const result = await readWorkbenchResponse<ApiResult>(response, fallback).catch(async error => {
+  const acceptMutation = useCallback(async (response: Response, fallback: string, onChatProgress?: (step: ChatProgressStep) => void) => {
+    const result = await (onChatProgress ? readChatProgress(response, step => {
+      if (!disposed.current) onChatProgress(step);
+    }) : readWorkbenchResponse<ApiResult>(response, fallback)).catch(async error => {
       // A refresh can resolve a stale revision, but must not replace the original error.
-      if (response.status === 409) await reload().catch(() => {});
+      if (response.status === 409 || error instanceof ChatProgressError && error.status === 409) await reload().catch(() => {});
       throw error;
     });
     if (!Number.isSafeInteger(result.state?.revision)) throw incompleteResponse(response);
     accept(result.state);
     return result;
   }, [accept, reload]);
-  const mutate = useCallback((action: string, payload: Record<string, unknown> = {}): Promise<ApiResult> => {
+  const mutate = useCallback((action: string, payload: Record<string, unknown> = {}, onChatProgress?: (step: ChatProgressStep) => void): Promise<ApiResult> => {
     const perform = async () => {
-      const response = await request('/api/workbench', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action, payload, revision: stateRef.current?.revision }) });
-      return acceptMutation(response, '这次操作没有完成，请稍后重试。');
+      const progress = action === 'chat' ? onChatProgress : undefined;
+      return request('/api/workbench', {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json', ...(progress ? { Accept: CHAT_PROGRESS_CONTENT_TYPE } : {}) },
+        body: JSON.stringify({ action, payload, revision: stateRef.current?.revision }),
+      }, response => acceptMutation(response, '这次操作没有完成，请稍后重试。', progress), Boolean(progress));
     };
     const result = mutationQueue.current.then(perform, perform);
     mutationQueue.current = result.then(() => undefined, () => undefined);
@@ -76,8 +88,8 @@ export function useWorkbench() {
       const form = new FormData();
       form.set('dealId', dealId); form.set('text', text); form.set('audio', audio);
       form.set('revision', String(stateRef.current?.revision ?? ''));
-      const response = await request('/api/deal-recordings', { method: 'POST', credentials: 'same-origin', body: form });
-      return acceptMutation(response, '录音未能保存，请稍后重试。');
+      return request('/api/deal-recordings', { method: 'POST', credentials: 'same-origin', body: form },
+        response => acceptMutation(response, '录音未能保存，请稍后重试。'));
     };
     const result = mutationQueue.current.then(perform, perform);
     mutationQueue.current = result.then(() => undefined, () => undefined);

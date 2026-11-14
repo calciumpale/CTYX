@@ -436,11 +436,6 @@ button.notification-item:hover { background: var(--cds-fill-ghost-hover); }
 .chat-composer-wrap { padding: 18px 23px 12px; border-top: 1px solid var(--cds-border); background: var(--cds-surface-1); }
 .chat-composer-wrap > p { text-align: center; font-size: 9px; color: var(--cds-text-muted); margin: 11px 0 0; }
 .chat-composer-wrap .composer { padding: 15px 16px 11px; }
-.thinking-line { display: flex; align-items: center; gap: 4px; color: var(--cds-text-muted); font-size: 11px; }
-.thinking-line > span { margin: 0 9px 0 5px; }
-.thinking-line i { width: 3px; height: 3px; background: var(--cds-clay); border-radius: 50%; animation: thinking 1.2s var(--cds-ease-pulse) infinite; }
-.thinking-line i:nth-last-child(2) { animation-delay: 120ms; }
-.thinking-line i:last-child { animation-delay: 240ms; }
 .jump-latest { align-self: center; flex-shrink: 0; margin: 0 0 10px; font-size: 11px; min-height: 30px; }
 .toast { position: fixed; bottom: 25px; left: calc(50% + 104px); transform: translateX(-50%); display: flex; align-items: center; gap: 9px; padding: 10px 12px 10px 15px; background: var(--cds-surface-popover); color: var(--cds-text-primary); box-shadow: var(--cds-shadow-popover); border-radius: 10px; font-size: 12px; z-index: 100; max-width: calc(100vw - 35px); line-height: 1.5; animation: content-enter 220ms var(--cds-ease-enter) both; }
 .toast > svg { color: var(--brand); }
@@ -452,7 +447,6 @@ button.notification-item:hover { background: var(--cds-fill-ghost-hover); }
 @keyframes content-enter { from { opacity: 0; translate: 0 7px; } to { opacity: 1; translate: 0 0; } }
 @keyframes drawer-enter { from { opacity: 0; translate: 30px 0; } to { opacity: 1; translate: 0 0; } }
 @keyframes spin { to { rotate: 360deg; } }
-@keyframes thinking { 0%, 75%, 100% { opacity: .3; translate: 0 0; } 35% { opacity: 1; translate: 0 -3px; } }
 @media (min-width: 1550px) { .welcome { margin-top: 95px; } .expert-section { margin-top: 62px; } }
 @media (max-height: 800px) and (min-width: 851px) { .welcome { margin-top: 35px; } .expert-section { margin-top: 34px; } .home-view { padding-left: 35px; padding-right: 35px; } .sidebar-recent { margin-top: 25px; } .welcome-intro > .brand-mark { width: 40px; height: 40px; } }
 @media (max-width: 1150px) { .sidebar { padding-left: 10px; padding-right: 10px; } .brand-link small { font-size: 10px; } .brand-link > span { font-size: 19px; } .brand-divider { margin-left: 7px; margin-right: 7px; } .home-view { padding-left: 30px; padding-right: 30px; } .business-page { padding: 35px 30px; } .topbar { padding: 0 26px; } .expert-grid > button { padding-left: 12px; padding-right: 12px; } .expert-grid p { font-size: 9px; } .manager-columns { gap: 15px; } .funnel-card, .intervention-card { padding: 18px; } .deals-overview { grid-template-columns: .8fr 1fr .7fr; } .deals-overview .overview-note { display: none; } .deals-overview > div:nth-child(3) { border: 0; } .toast { left: calc(50% + 99px); } }

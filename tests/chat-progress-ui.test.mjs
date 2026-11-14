@@ -1,0 +1,141 @@
+import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import test from 'node:test';
+import { fileURLToPath } from 'node:url';
+import react from '@vitejs/plugin-react';
+import { createServer } from 'vite';
+import { chromium } from '../tools/douyin-bridge/node_modules/playwright/index.mjs';
+import { createSeed } from '../app/lib/seed.ts';
+
+const root = fileURLToPath(new URL('../', import.meta.url));
+const entry = path.join(root, '__chat-progress.jsx');
+const fixture = `import React from 'react';
+import {createRoot} from 'react-dom/client';
+import '/app/globals.css';
+import Workbench from '/app/components/Workbench.tsx';
+createRoot(document.getElementById('root')).render(<Workbench member={{accountId:'member-1',username:'ZS',displayName:'ZS',role:'sales',salesId:'sales-1'}} onLogout={async()=>{}} />);`;
+
+const now = '2026-11-14T00:00:00Z';
+const lookup = { id: 'lookup', title: '检索项目资料', detail: '正在读取本轮资料', duration: 0, status: 'running' };
+const found = { ...lookup, detail: '找到一条授权资料', duration: 41, status: 'success' };
+const generation = { id: 'generation', title: '组织模型答复', detail: '正在等待本轮模型答复', duration: 0, status: 'running' };
+const generated = { ...generation, detail: '模型已完成答复', duration: 87, status: 'success' };
+
+function json(response, value) {
+  response.setHeader('Content-Type', 'application/json');
+  response.end(JSON.stringify(value));
+}
+
+const line = event => `${JSON.stringify(event)}\n`;
+
+test('project chat and the assistant show live progress before applying one final answer', { timeout: 60000 }, async t => {
+  const cacheDir = await mkdtemp(path.join(tmpdir(), 'workbench-chat-progress-'));
+  let state = createSeed(now);
+  state.role = 'sales';
+  state.viewer = { name: 'ZS', team: '招商', salesId: 'sales-1' };
+  state.deals = [state.deals[0]];
+  state.runs = [];
+  const dealId = state.deals[0].id;
+  const posts = [];
+  const gates = new Map();
+  const handle = async (request, response, next, vite) => {
+    const pathname = request.url?.split('?')[0];
+    if (pathname === '/') {
+      response.setHeader('Content-Type', 'text/html');
+      return response.end(await vite.transformIndexHtml('/', '<html lang="zh-CN"><body><div id="root"></div><script type="module" src="/__chat-progress.jsx"></script></body></html>'));
+    }
+    if (pathname !== '/api/workbench') return pathname?.startsWith('/api/') ? json(response, { pendingCount: 0 }) : next();
+    if (request.method === 'GET') return json(response, state);
+
+    const body = JSON.parse((await Array.fromAsync(request.setEncoding('utf8'))).join(''));
+    const gate = gates.get(body.payload?.query);
+    posts.push({ method: request.method, action: body.action, query: body.payload?.query, dealId: body.payload?.dealId, accept: request.headers.accept });
+    assert.ok(gate, 'only the two fixture questions may call chat');
+    response.writeHead(200, { 'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-store' });
+    response.flushHeaders();
+    response.write(line({ type: 'step', step: lookup }));
+    await gate.lookup.promise;
+    response.write(line({ type: 'step', step: found }) + line({ type: 'step', step: generation }));
+    await gate.generation.promise;
+    const run = { id: `run-${posts.length}`, query: body.payload.query, answer: gate.answer, agentIds: ['insight'], steps: [found, generated], citations: [], mode: 'live', createdAt: now, duration: 128, ...(body.payload.dealId ? { dealId: body.payload.dealId } : {}) };
+    state = { ...state, revision: state.revision + 1, runs: [run, ...state.runs] };
+    response.end(line({ type: 'step', step: generated }) + line({ type: 'complete', result: { state, run } }));
+  };
+
+  let server;
+  let browser;
+  try {
+    server = await createServer({
+      root, configFile: false, logLevel: 'error', cacheDir,
+      resolve: { dedupe: ['react', 'react-dom'] },
+      optimizeDeps: { include: ['react', 'react-dom/client', 'react/jsx-runtime', 'react/jsx-dev-runtime', 'lucide-react'] },
+      plugins: [react(), {
+        name: 'chat-progress-fixture',
+        resolveId(id) { if (id === '/__chat-progress.jsx') return entry; },
+        load(id) { if (id === entry) return fixture; },
+        configureServer(vite) { vite.middlewares.use((request, response, next) => { void handle(request, response, next, vite).catch(next); }); },
+      }],
+      server: { host: '127.0.0.1', port: 0, hmr: false },
+    });
+    await server.listen();
+    browser = await chromium.launch({ headless: true });
+
+    for (const surface of ['项目对话', 'AI 营销助手']) {
+      await t.test(surface, async () => {
+        const project = surface === '项目对话';
+        const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+        page.setDefaultTimeout(6000);
+        const query = `${surface}测试：这家企业有什么公开资料？`;
+        const gate = { lookup: Promise.withResolvers(), generation: Promise.withResolvers(), answer: `${surface}测试的最终模型回复。` };
+        gates.set(query, gate);
+        try {
+          await page.goto(`${server.resolvedUrls.local[0]}?view=deals&deal=${dealId}`);
+          if (!project) await page.getByRole('button', { name: 'AI 营销助手', exact: true }).click();
+          const view = project ? page.locator('[aria-label="当前项目对话历史"]') : page.getByRole('dialog', { name: 'AI 营销助手' });
+          const composer = project ? page.getByRole('textbox', { name: '向 AI 询问当前项目' }) : view.getByRole('textbox', { name: '描述你的任务' });
+          const send = (project ? page : view).getByRole('button', { name: project ? '发送当前项目问题' : '发送任务' });
+          const progress = view.getByRole('list', { name: '处理步骤' });
+          const lookupRow = progress.getByRole('listitem').filter({ hasText: lookup.title });
+          const answer = view.getByText(gate.answer, { exact: true });
+          await composer.fill(query);
+          await send.click();
+
+          await view.getByText('处理过程', { exact: true }).last().waitFor();
+          await lookupRow.getByText(lookup.detail, { exact: true }).waitFor();
+          await lookupRow.getByText('进行中', { exact: true }).waitFor();
+          assert.equal(await send.isDisabled(), true);
+          assert.equal(await answer.count(), 0);
+
+          gate.lookup.resolve();
+          await progress.getByText(generation.detail, { exact: true }).waitFor();
+          assert.equal(await lookupRow.count(), 1);
+          assert.equal(await lookupRow.getByText(lookup.detail, { exact: true }).count(), 0);
+          await lookupRow.getByText(found.detail, { exact: true }).waitFor();
+          await lookupRow.getByText('已完成', { exact: true }).waitFor();
+          assert.equal(await answer.count(), 0);
+
+          gate.generation.resolve();
+          await answer.waitFor();
+          assert.equal(await view.getByText(query, { exact: true }).count(), 1);
+          assert.equal(await view.getByText(generation.detail, { exact: true }).count(), 0);
+          const matchingPosts = posts.filter(post => post.query === query);
+          assert.equal(matchingPosts.length, 1);
+          const [{ accept, ...request }] = matchingPosts;
+          assert.deepEqual(request, { method: 'POST', action: 'chat', query, dealId: project ? dealId : undefined });
+          assert.match(accept, /\bapplication\/x-ndjson\b/);
+        } finally {
+          gate.lookup.resolve();
+          gate.generation.resolve();
+          await page.close();
+        }
+      });
+    }
+    assert.equal(posts.length, 2);
+  } finally {
+    await browser?.close();
+    await server?.close();
+    await rm(cacheDir, { force: true, recursive: true });
+  }
+});

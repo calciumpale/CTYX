@@ -1,6 +1,7 @@
 'use client';
 
 import { isMatchingChatRun } from '../lib/chat-request';
+import { upsertChatProgressStep, type ChatProgressStep } from '../lib/chat-progress';
 import { publicSourceLabel, salesReportEligible } from '../lib/sales-project-eligibility';
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type FormEvent } from 'react';
@@ -13,6 +14,7 @@ import { runAnswerForDisplay, runGenerationLabel } from '../lib/run-history';
 import { salesIntelligenceIsCurrent } from '../lib/sales-intelligence';
 import { SALES_GRADE_LABELS } from '../lib/sales-intelligence-types';
 import { AnswerContent } from './AnswerContent';
+import { ChatProcessing } from './ChatProcessing';
 import { AgentMemoryButton } from './AgentMemoryPanel';
 import { Overlay } from './CoreViews';
 import { FollowupRecordingPlayer } from './FollowupRecordingField';
@@ -55,6 +57,7 @@ export function CustomerWorkspace({ state, member, mutate, notify, initialDealId
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [returnedRuns, setReturnedRuns] = useState<Run[]>([]);
   const [pending, setPending] = useState<CustomerChatRequest | null>(null);
+  const [chatProgress, setChatProgress] = useState<ChatProgressStep[]>([]);
   const [failures, setFailures] = useState<Record<string, { request: CustomerChatRequest; error: string }>>({});
   const [busy, setBusy] = useState(false);
   const [intakeBusy, setIntakeBusy] = useState(false);
@@ -144,7 +147,7 @@ export function CustomerWorkspace({ state, member, mutate, notify, initialDealId
     if (!followLatest.current) return;
     const frame = requestAnimationFrame(() => { const element = stream.current; if (element) element.scrollTop = element.scrollHeight; setShowLatest(false); });
     return () => cancelAnimationFrame(frame);
-  }, [selectedId, historyKey, pending, failure]);
+  }, [selectedId, historyKey, pending, chatProgress, failure]);
 
   const updateDraft = (values: Partial<Draft>, target = selectedId) => { if (target) setDrafts(current => ({ ...current, [target]: { ...(current[target] || emptyDraft()), ...values } })); };
   const selectProject = (target: string | null) => {
@@ -203,16 +206,16 @@ export function CustomerWorkspace({ state, member, mutate, notify, initialDealId
   const send = async (request: CustomerChatRequest) => {
     if (!request.query.trim() || !state.deals.some(item => item.id === request.dealId) || !begin()) return;
     // Capture the request once: retries keep both the exact text and the historical context IDs.
-    setPending(request); followLatest.current = true;
+    setPending(request); setChatProgress([]); followLatest.current = true;
     setFailures(current => { const next = { ...current }; delete next[request.dealId]; return next; });
     try {
-      const result = await mutate('chat', { ...request });
+      const result = await mutate('chat', { ...request }, step => setChatProgress(current => upsertChatProgressStep(current, step)));
       const run = result.run;
       if (!isMatchingChatRun(run, request)) throw new Error('本次未返回当前项目的完整回答，原话已保留，请重试。');
       setReturnedRuns(current => [...current.filter(item => item.id !== run.id), run]);
       setDrafts(current => { const previous = current[request.dealId] || emptyDraft(); return { ...current, [request.dealId]: { ...previous, query: previous.query === request.query ? '' : previous.query } }; });
     } catch (cause) { setFailures(current => ({ ...current, [request.dealId]: { request, error: cause instanceof Error ? cause.message : '生成未完成，请重试。' } })); }
-    finally { setPending(null); finish(); }
+    finally { setPending(null); setChatProgress([]); finish(); }
   };
   const submitChat = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -264,7 +267,7 @@ export function CustomerWorkspace({ state, member, mutate, notify, initialDealId
         <div className="cw-chat-stream" ref={stream} tabIndex={0} aria-label="当前项目对话历史" onScroll={() => { const element = stream.current; if (!element) return; followLatest.current = element.scrollHeight - element.scrollTop - element.clientHeight < 100; setShowLatest(!followLatest.current); }}>
           {!history.length && !pending && <div className="cw-chat-welcome"><div className="cw-welcome-mark"><Sparkles size={24} /></div><h3>{deal.dataOrigin === 'research' && !salesReportEligible(deal) ? '了解' : '一起推进'}{company?.name || deal.name}</h3><p>{deal.dataOrigin === 'research' && !salesReportEligible(deal) ? '先核对公开资料、适用场景与负责部门，记录实际沟通后再补充客户事实。' : '结合当前项目的资料，梳理需求、准备沟通和确认下一步。'}</p><div>{[{ label: '梳理客户需求', query: '请结合当前项目资料梳理客户需求、决策人及待确认信息', agent: 'insight' }, { label: '准备下一次沟通', query: '请为当前项目准备下一次沟通的议程、开场和需确认的问题', agent: 'strategy' }, { label: '分析推进重点', query: '请分析当前项目的推进重点、风险和下一步行动', agent: 'opportunity' }].map(item => <button className="button secondary" key={item.agent} disabled={locked} onClick={() => { updateDraft({ query: item.query, agent: item.agent as AgentId }); composer.current?.focus(); }}>{item.label}</button>)}</div></div>}
           {history.map(run => <article className="cw-chat-turn" key={run.id}><div className="cw-user-message">{run.query}</div><div className="cw-assistant-label"><Sparkles size={15} /><strong>AI 营销助手</strong><span>{runGenerationLabel(run)}</span></div>{run.answer ? <AnswerContent text={runAnswerForDisplay(run.answer)} /> : <p className="cw-muted">此次运行尚未返回回答。</p>}{run.status && run.status !== 'completed' && <p className="cw-error">{run.status === 'failed' ? '本次任务未完成。' : `任务状态：${run.status}`}</p>}{run.citations.length > 0 && <details className="cw-citations"><summary>参考来源 · {run.citations.length} <ChevronDown size={13} /></summary>{run.citations.map((citation, index) => <details key={`${citation.id}:${index}`}><summary>{citation.title}</summary><p>{citation.excerpt}</p></details>)}</details>}<div className="cw-turn-footer"><time>{date(run.createdAt)}</time>{run.steps.length > 0 && <details><summary>处理过程 <ChevronDown size={12} /></summary><ol>{run.steps.map(step => <li key={step.id}><strong>{step.title}</strong><p>{step.detail}</p></li>)}</ol></details>}<button type="button" onClick={() => void navigator.clipboard.writeText(run.answer).then(() => notify('已复制回答')).catch(() => notify('浏览器未允许复制，请选择文本复制。'))}>复制</button></div></article>)}
-          {pending?.dealId === deal.id && <div className="cw-chat-turn" role="status"><div className="cw-user-message">{pending.query}</div><p className="cw-thinking"><Loader2 size={16} className="spin" />正在结合当前项目资料思考…</p></div>}
+          {pending?.dealId === deal.id && <div className="cw-chat-turn"><div className="cw-user-message">{pending.query}</div><ChatProcessing steps={chatProgress} /></div>}
           {failure && <div className="cw-failed" role="alert"><p className="cw-failed-query">{failure.request.query}</p><p>{failure.error}</p><button className="button secondary" disabled={locked} onClick={() => void send(failure.request)}>重试本次问题</button><button className="button ghost" disabled={locked} onClick={() => setFailures(current => { const next = { ...current }; delete next[deal.id]; return next; })}>关闭错误提示</button></div>}
         </div>
         {showLatest && <button className="button secondary cw-jump" onClick={() => { followLatest.current = true; stream.current?.scrollTo({ top: stream.current.scrollHeight, behavior: 'smooth' }); setShowLatest(false); }}><ArrowDown size={14} />最新消息</button>}

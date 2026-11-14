@@ -76,7 +76,6 @@
 .cw-turn-footer summary { cursor: pointer; display: flex; align-items: center; gap: 4px; }
 .cw-turn-footer ol { margin: 12px 0; padding-left: 15px; line-height: 1.7; }
 .cw-turn-footer ol p { margin: 3px 0 9px; overflow-wrap: anywhere; }
-.cw-thinking { display: flex; gap: 9px; align-items: center; margin-top: 22px !important; color: var(--cds-text-muted); font-size: 12px; }
 .cw-failed { max-width: 800px; margin: 0 auto 20px; padding: 15px; background: var(--cds-alpha-1); border: 1px solid var(--cds-border); border-radius: 8px; font-size: 12px; line-height: 1.8; }
 .cw-failed-query { white-space: pre-wrap; overflow-wrap: anywhere; padding-bottom: 12px; }
 .cw-failed > .button { margin: 12px 8px 0 0; }

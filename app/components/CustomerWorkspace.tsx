@@ -7,7 +7,7 @@ import { preferredScrollBehavior } from '../lib/scroll-behavior';
 import { useChatScroll } from '../lib/use-chat-scroll';
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type FormEvent } from 'react';
-import { ArrowDown, ArrowLeft, ArrowUp, BookOpen, Building2, ChevronDown, FileText, Loader2, MoreHorizontal, PanelLeftClose, PanelLeftOpen, PanelRight, Plus, Search, Sparkles, X } from 'lucide-react';
+import { ArrowDown, ArrowLeft, ArrowUp, BookOpen, Brain, Building2, ChevronDown, FileText, Loader2, MoreHorizontal, PanelLeftClose, PanelLeftOpen, PanelRight, Plus, Search, Sparkles, X } from 'lucide-react';
 import { AGENTS, STAGES, type AgentId, type CustomerProfile, type Deal, type Run, type View, type ViewProps } from '../lib/types';
 import type { MemberSession } from '../lib/member-types';
 import { buildCustomerChatRequest, companyDirectory, customerChatHistory, selectCompanyProject, selectInitialCustomerProject, type CustomerChatRequest, type CustomerDirectoryScope } from '../lib/customer-workspace';
@@ -17,7 +17,7 @@ import { salesIntelligenceIsCurrent } from '../lib/sales-intelligence';
 import { SALES_GRADE_LABELS } from '../lib/sales-intelligence-types';
 import { AnswerContent } from './AnswerContent';
 import { ChatProcessing } from './ChatProcessing';
-import { AgentMemoryButton } from './AgentMemoryPanel';
+import { AgentMemoryPanel } from './AgentMemoryPanel';
 import { Overlay } from './CoreViews';
 import { FollowupRecordingPlayer } from './FollowupRecordingField';
 import { ProjectIntake } from './ProjectIntake';
@@ -56,6 +56,8 @@ export function CustomerWorkspace({ state, member, mutate, notify, initialDealId
   const [search, setSearch] = useState('');
   const [directoryCollapsed, setDirectoryCollapsed] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
+  const [overviewDealId, setOverviewDealId] = useState<string | null>(null);
+  const [focusRequest, requestFocus] = useState<{ destination: 'assessment' | 'insights' | 'composer' | 'return' } | null>(null);
   const [isMobile, setIsMobile] = useState(false);
   const [mobilePanel, setMobilePanel] = useState<'directory' | 'chat' | 'profile'>(initialDealId ? 'chat' : 'directory');
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
@@ -84,14 +86,21 @@ export function CustomerWorkspace({ state, member, mutate, notify, initialDealId
   const scopeSelection = useRef<Partial<Record<CustomerDirectoryScope, string>>>({});
   const menu = useRef<HTMLDetailsElement>(null);
   const assessment = useRef<HTMLDivElement>(null);
+  const insightsTitle = useRef<HTMLHeadingElement>(null);
+  const insightsOpener = useRef<HTMLButtonElement>(null);
+  const intentButton = useRef<HTMLButtonElement>(null);
+  const insightsOpenedFromIntent = useRef(false);
   const dialog = useRef<HTMLDialogElement>(null), composer = useRef<HTMLTextAreaElement>(null);
   const deal = state.deals.find(item => item.id === selectedId);
   const currentInsight = deal && !assessmentBusy && salesIntelligenceIsCurrent(deal) ? deal.intelligence?.latest?.insight : undefined;
   const intentGrade = currentInsight?.grade;
   const intentScore = intentGrade ? currentInsight.score : null;
+  const overviewOpen = !!deal && overviewDealId === deal.id;
+  const healthScore = deal && Number.isFinite(deal.health) && deal.health > 0 ? deal.health : null;
   let intentLabel = '尚未评估';
   if (assessmentBusy) intentLabel = '评估中';
-  else if (intentGrade && intentScore !== null) intentLabel = `${intentGrade} · ${SALES_GRADE_LABELS[intentGrade]}`;
+  else if (intentGrade && intentScore !== null) intentLabel = SALES_GRADE_LABELS[intentGrade];
+  else if (deal?.outcome === 'won' || deal?.outcome === 'lost') intentLabel = '已结项';
   else if (currentInsight) intentLabel = '资料不足';
   else if (deal?.intelligence?.latest) intentLabel = '待重新评估';
   const company = companies.find(item => item.projects.some(project => project.id === selectedId));
@@ -127,6 +136,25 @@ export function CustomerWorkspace({ state, member, mutate, notify, initialDealId
     };
   }, []);
   useEffect(() => { if (selectedId) onSelectedDealChange?.(selectedId); }, [selectedId, onSelectedDealChange]);
+  useEffect(() => {
+    if (!focusRequest) return;
+    const { destination: focusDestination } = focusRequest;
+    const frame = window.requestAnimationFrame(() => {
+      if (focusDestination === 'assessment') {
+        const details = assessment.current?.querySelector<HTMLDetailsElement>('.cw-assessment-details');
+        if (details) details.open = true;
+        assessment.current?.scrollIntoView({ block: 'start', behavior: preferredScrollBehavior() });
+        assessment.current?.focus({ preventScroll: true });
+      } else if (focusDestination === 'insights') {
+        insightsTitle.current?.focus({ preventScroll: true });
+      } else if (focusDestination === 'composer') {
+        composer.current?.focus();
+      } else {
+        (insightsOpenedFromIntent.current ? intentButton : insightsOpener).current?.focus({ preventScroll: true });
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [focusRequest]);
   useEffect(() => { dirtyRef.current = dirty; onDirtyChange?.(dirty); }, [dirty, onDirtyChange]);
   useEffect(() => { onBusyChange?.(locked); }, [locked, onBusyChange]);
   useEffect(() => () => { onBusyChange?.(false); onDirtyChange?.(false); }, [onBusyChange, onDirtyChange]);
@@ -161,7 +189,7 @@ export function CustomerWorkspace({ state, member, mutate, notify, initialDealId
     if (!target || !state.deals.some(item => item.id === target)) return;
     const ownerCompany = companies.find(item => item.projects.some(project => project.id === target));
     if (ownerCompany) remembered.current[ownerCompany.key] = target;
-    setSelectedId(target); setMobilePanel('chat'); setError('');
+    setSelectedId(target); setOverviewDealId(null); setMobilePanel('chat'); setError('');
   };
   const switchDirectory = (scope: CustomerDirectoryScope) => {
     if (scope === directoryScope || isBusy()) return;
@@ -232,7 +260,23 @@ export function CustomerWorkspace({ state, member, mutate, notify, initialDealId
     const target = deal.id, text = draft.note;
     if (await perform('deal_note', { dealId: target, text }, '客户原话已保存')) updateDraft({ note: '' }, target);
   };
-  const navigate = (view: View) => { if (!isBusy()) onNavigate?.(view, deal?.id); };
+  const navigate = (view: View) => {
+    if (isBusy()) return;
+    if (menu.current) menu.current.open = false;
+    onNavigate?.(view, deal?.id);
+  };
+  const showInsights = (fromIntent: boolean) => {
+    if (isBusy() || !deal) return;
+    insightsOpenedFromIntent.current = fromIntent;
+    setProfileOpen(true);
+    if (isMobile) setMobilePanel('profile');
+    requestFocus({ destination: fromIntent ? 'assessment' : 'insights' });
+  };
+  const hideInsights = () => {
+    setProfileOpen(false);
+    setMobilePanel('chat');
+    requestFocus({ destination: 'return' });
+  };
 
   const fieldsForm = (creating: boolean) => <>
     <div className="cw-form-grid">
@@ -273,7 +317,89 @@ export function CustomerWorkspace({ state, member, mutate, notify, initialDealId
 
     <section className="cw-conversation" aria-label="企业 AI 对话">
       {deal ? <>
-        <header className="cw-chat-header"><button className="button ghost cw-mobile-back" aria-label="返回企业通讯录" disabled={locked} onClick={() => setMobilePanel('directory')}><ArrowLeft size={17} /></button><div className="cw-chat-title"><h2>{company?.name || deal.name}</h2><div>{company && company.projects.length > 1 ? <label className="cw-project-select"><span className="sr-only">选择企业项目</span><select value={deal.id} disabled={locked} onChange={event => selectProject(event.target.value)}>{company.projects.map(project => <option key={project.id} value={project.id}>{project.projectName || project.name}</option>)}</select></label> : <span>{deal.projectName || '企业项目'}</span>}{deal.archive && <span className="cw-stage">已归档</span>}{deal.dataOrigin === 'research' && <span className="cw-stage">{publicSourceLabel(deal)}</span>}<span className="cw-stage">{deal.stage}{deal.outcome === 'won' ? ' · 已成单' : deal.outcome === 'lost' ? ' · 已结束' : ''}</span></div></div><div className="cw-header-actions">{member.role !== 'admin' && <AgentMemoryButton key={deal.id} project={{ id: deal.id, label: deal.projectName || deal.name }} disabled={locked} />}<button className="button ghost" aria-label="查看客户资料" title="客户资料与销售分析" aria-expanded={isMobile ? mobilePanel === 'profile' : profileOpen} aria-controls={`${id}-insights`} disabled={locked} onClick={() => { setProfileOpen(value => isMobile || !value); setMobilePanel('profile'); }}><PanelRight size={17} /><span>客户资料</span></button><details className="cw-actions" ref={menu} onKeyDown={event => { if (event.key === 'Escape') { event.currentTarget.open = false; event.currentTarget.querySelector('summary')?.focus(); } }}><summary aria-label="项目操作" title="项目操作"><MoreHorizontal size={18} /></summary><div><button disabled={locked} onClick={() => openForm('edit')}>编辑项目资料</button><button disabled={locked} onClick={() => openForm('profile')}>编辑客户画像</button><button disabled={locked} onClick={() => openForm('create')}>为此企业新增项目</button><button disabled={locked} onClick={() => openForm('lifecycle')}>推进阶段与结果</button>{onNavigate && <button disabled={locked} onClick={() => navigate('contracts')}>查看项目合同</button>}</div></details></div></header>
+        <header className="cw-chat-header">
+          <button className="button ghost cw-mobile-back" aria-label="返回企业通讯录" disabled={locked} onClick={() => setMobilePanel('directory')}><ArrowLeft size={17} /></button>
+          <div className="cw-chat-title"><h2>{company?.name || deal.name}</h2></div>
+          <div className="cw-header-actions">
+            <button ref={insightsOpener} className="button ghost" aria-label="查看下一步建议" title="下一步建议" aria-expanded={isMobile ? mobilePanel === 'profile' : profileOpen} aria-controls={`${id}-insights`} disabled={locked} onClick={() => {
+              if (!isMobile && profileOpen) { insightsOpenedFromIntent.current = false; hideInsights(); }
+              else showInsights(false);
+            }}><PanelRight size={17} /></button>
+            <details className="cw-actions" ref={menu} onKeyDown={event => { if (event.key === 'Escape') { event.currentTarget.open = false; event.currentTarget.querySelector('summary')?.focus(); } }}><summary aria-label="项目操作" title="项目操作"><MoreHorizontal size={18} /></summary><div><button disabled={locked} onClick={() => openForm('edit')}>编辑项目资料</button><button disabled={locked} onClick={() => openForm('profile')}>编辑客户画像</button><button disabled={locked} onClick={() => openForm('create')}>为此企业新增项目</button><button disabled={locked} onClick={() => openForm('lifecycle')}>推进阶段与结果</button>{onNavigate && <button disabled={locked} onClick={() => navigate('contracts')}>查看项目合同</button>}</div></details>
+          </div>
+        </header>
+        <section className="cw-overview" aria-label="项目概览">
+          <div className="cw-overview-bar">
+            <div className="cw-overview-metrics">
+              <button ref={intentButton} type="button" className="button secondary cw-intent-summary" aria-controls={`${id}-assessment`} title="查看 AI 销售分析" disabled={locked} onClick={() => showInsights(true)}>
+                <span>{intentLabel}</span><ChevronDown size={12} aria-hidden="true" />
+              </button>
+              <div className="cw-health-summary"><span>健康程度</span><strong>{healthScore === null ? '尚未评估' : `${healthScore} / 100`}</strong></div>
+            </div>
+            <button type="button" className="button ghost cw-overview-toggle" aria-label="企业画像与摘要" title="企业画像与摘要" aria-expanded={overviewOpen} aria-controls={`${id}-overview`} onClick={() => setOverviewDealId(overviewOpen ? null : deal.id)}>
+              <Brain size={17} aria-hidden="true" /><ChevronDown size={13} aria-hidden="true" />
+            </button>
+          </div>
+          <section id={`${id}-overview`} className="cw-overview-body" aria-label="企业画像与摘要" tabIndex={0} hidden={!overviewOpen} key={deal.id}>
+            {overviewOpen && <>
+              {error && !mode && <p className="cw-error" role="alert">{error}</p>}
+              <div className="cw-project-meta">
+                {deal.archive && <span className="cw-stage">已归档</span>}
+                <span className="cw-stage">{deal.stage}{deal.outcome === 'won' ? ' · 已成单' : deal.outcome === 'lost' ? ' · 已结束' : ''}</span>
+                {deal.dataOrigin === 'research' && <span className="cw-stage">{publicSourceLabel(deal)}</span>}
+              </div>
+              <div className="cw-overview-sections">
+                <section className="cw-profile-section">
+                  <div className="cw-section-heading"><h3>企业与联系人</h3><button disabled={locked} onClick={() => openForm('edit')}>编辑</button></div>
+                  <dl className="cw-profile-facts">
+                    <div><dt>联系人</dt><dd>{deal.contact || '待补充'}{deal.position ? ` · ${deal.position}` : ''}</dd></div>
+                    <div><dt>行业</dt><dd>{deal.industry || '待补充'}</dd></div>
+                    <div><dt>负责人</dt><dd>{deal.owner}</dd></div>
+                    <div><dt>项目</dt><dd>{company && company.projects.length > 1
+                      ? <label className="cw-project-select"><span className="sr-only">选择企业项目</span>
+                          <select value={deal.id} disabled={locked} onChange={event => {
+                            selectProject(event.target.value);
+                            setOverviewDealId(event.target.value);
+                          }}>{company.projects.map(project => <option key={project.id} value={project.id}>{project.projectName || project.name}</option>)}</select>
+                        </label>
+                      : deal.projectName || '未填写项目名称'}</dd></div>
+                  </dl>
+                </section>
+                <section className="cw-profile-section">
+                  <div className="cw-section-heading"><h3>客户确认资料</h3><button disabled={locked} onClick={() => openForm('profile')}>补充</button></div>
+                  <dl className="cw-profile-facts">{profileLabels.map(([key, label]) => <div key={key}><dt>{label}</dt><dd>{deal.customerProfile?.[key] || '待确认'}</dd></div>)}</dl>
+                  {deal.needs.length > 0 && <><h3>关键需求</h3><ul>{deal.needs.map((need, index) => <li key={index}>{need}</li>)}</ul></>}
+                </section>
+                <section className="cw-profile-section">
+                  <div className="cw-section-heading"><h3>公开企业资料</h3><button disabled={locked} onClick={() => void perform('deal_enrich', { dealId: deal.id, version: deal.version }, '企业资料已更新')}>{busy ? '处理中…' : deal.companyProfile ? '更新' : '补全'}</button></div>
+                  {deal.companyProfile ? <>
+                    <p className="cw-muted">{deal.companyProfile.status === 'partial' ? '部分资料待核实' : '已整理公开资料'} · 核验时间：{fullDate(deal.companyProfile.updatedAt)}</p>
+                    <p>{deal.companyProfile.summary || '暂未形成企业摘要。'}</p>
+                    <dl className="cw-profile-facts">{deal.companyProfile.facts.map((fact, index) => <div key={index}><dt>{fact.label}</dt><dd>{fact.value}</dd></div>)}</dl>
+                    {deal.companyProfile.warnings.map((warning, index) => <p key={index} className="cw-muted">{warning}</p>)}
+                    <details className="cw-sources"><summary>资料来源 · {deal.companyProfile.sources.length}<ChevronDown size={13} /></summary>
+                      {deal.companyProfile.sources.map((source, index) => <p key={`${source.id}:${index}`}>
+                        {safeUrl(source.url) ? <a href={safeUrl(source.url)} target="_blank" rel="noopener noreferrer">{source.title}</a> : source.title}
+                        <small>{source.snippet?.split('\n').find(line => line.startsWith('资料日期：')) || '资料日期未标注'} · 核验时间：{fullDate(source.retrievedAt)}</small>
+                        {source.snippet && <span className="cw-source-excerpt">{source.snippet}</span>}
+                      </p>)}
+                    </details>
+                  </> : <p className="cw-muted">尚未补全公开资料。</p>}
+                </section>
+                <section className="cw-profile-section">
+                  <h3>项目摘要</h3>
+                  <p>{deal.summary || '尚未填写需求与背景。'}</p>
+                  {currentInsight?.summary && <><h4>AI 客户洞察</h4><p>{currentInsight.summary}</p></>}
+                </section>
+              </div>
+              {member.role !== 'admin' && <details className="cw-project-memory">
+                <summary>助手记忆 <ChevronDown size={13} aria-hidden="true" /></summary>
+                <AgentMemoryPanel project={{ id: deal.id, label: deal.projectName || deal.name }} />
+              </details>}
+              <details className="cw-materials"><summary><FileText size={15} />项目资料 <span>{deal.notes.length} 条原话</span><ChevronDown size={14} /></summary><div><label htmlFor={`${id}-note`}>保存客户原话或沟通事实</label><textarea id={`${id}-note`} rows={3} maxLength={4000} disabled={locked} value={draft.note} onChange={event => updateDraft({ note: event.target.value })} placeholder="只记录已确认的原话、事实与约定" /><button className="button secondary" disabled={locked || !draft.note.trim()} onClick={() => void saveNote()}>保存原话</button>{[...deal.notes].sort((a, b) => (Date.parse(b.date) || 0) - (Date.parse(a.date) || 0)).map(note => <article className="cw-saved-note" key={note.id}><p>{note.text}</p><small>{note.author} · {date(note.date)}</small>{note.recording && <FollowupRecordingPlayer dealId={deal.id} recording={note.recording} />}</article>)}{(state.transcripts || []).filter(item => item.dealId === deal.id).map(item => <details className="cw-saved-note" key={item.id}><summary>通话转写 · {date(item.createdAt)}</summary><p>{item.text}</p></details>)}</div></details>
+            </>}
+          </section>
+        </section>
         {deal.archive && <div className="cw-record-status" role="status"><strong>归档历史</strong><p>{fullDate(deal.archive.at)} · {deal.archive.reason}。历史对话与资料继续保留。</p></div>}
         <div className="cw-chat-stream" ref={stream} tabIndex={0} aria-label="当前项目对话历史" onScroll={onScroll} onWheel={markUserInput} onTouchMove={markUserInput} onKeyDown={event => {
           if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key) && event.target === event.currentTarget) markUserInput();
@@ -326,29 +452,30 @@ export function CustomerWorkspace({ state, member, mutate, notify, initialDealId
       </> : <div className="cw-no-selection"><Building2 size={32} /><h2>{unavailable ? '该项目不可访问' : '选择一家企业，开始推进'}</h2><p>{unavailable ? '项目可能已移除，或当前账号没有访问权限。请从企业通讯录选择可访问项目。' : '企业资料、对话和下一步建议都会保留在这里。'}</p><button className="button secondary cw-mobile-show-directory" onClick={() => setMobilePanel('directory')}>查看企业通讯录</button><button className="button secondary" disabled={locked} onClick={() => openForm('create', true)}><Plus size={15} />新建企业或项目</button></div>}
     </section>
 
-    <aside className="cw-insights" id={`${id}-insights`} aria-label="客户资料与销售分析">
+    <aside className="cw-insights" id={`${id}-insights`} aria-label="下一步建议">
       <header className="cw-insights-heading">
-        <button className="button ghost cw-mobile-back" aria-label="返回项目对话" disabled={locked} onClick={() => setMobilePanel('chat')}><ArrowLeft size={17} /></button>
-        <h2>客户资料</h2>
-        {deal && <button type="button" className="button secondary cw-intent-summary" aria-controls={`${id}-assessment`} title="查看 AI 销售分析" onClick={() => {
-          assessment.current?.scrollIntoView({ block: 'start', behavior: preferredScrollBehavior() });
-          assessment.current?.focus({ preventScroll: true });
-        }}>
-          <span>{intentLabel}</span>
-          {intentScore !== null && <span className="cw-intent-score"><span className="sr-only">意向评分 </span><strong>{intentScore}</strong> / 100</span>}
-          <ChevronDown size={12} aria-hidden="true" />
-          <span className="sr-only">，查看 AI 销售分析</span>
-        </button>}
-        <button className="button ghost" aria-label="收起客户资料" onClick={() => { setProfileOpen(false); setMobilePanel('chat'); }}><X size={17} /></button>
+        <button className="button ghost cw-mobile-back" aria-label="返回项目对话" disabled={locked} onClick={hideInsights}><ArrowLeft size={17} /></button>
+        <h2 ref={insightsTitle} tabIndex={-1}>下一步建议</h2>
+        <button className="button ghost" aria-label="收起下一步建议" onClick={hideInsights}><X size={17} /></button>
       </header>
-      {deal ? <div className="cw-insights-body">{error && !mode && <p className="cw-error" role="alert">{error}</p>}<section className="cw-profile-section"><div className="cw-section-heading"><h3>企业与联系人</h3><button disabled={locked} onClick={() => openForm('edit')}>编辑</button></div><h4>{deal.name}</h4><dl className="cw-profile-facts"><div><dt>联系人</dt><dd>{deal.contact || '待补充'}{deal.position ? ` · ${deal.position}` : ''}</dd></div><div><dt>行业</dt><dd>{deal.industry || '待补充'}</dd></div><div><dt>负责人</dt><dd>{deal.owner}</dd></div><div><dt>项目</dt><dd>{deal.projectName || '未填写项目名称'}</dd></div>{deal.deadline && <div><dt>截止时间</dt><dd>{date(deal.deadline)}</dd></div>}</dl>{deal.summary && <p>{deal.summary}</p>}<div className="cw-section-heading"><h3>客户确认资料</h3><button disabled={locked} onClick={() => openForm('profile')}>补充</button></div><dl className="cw-profile-facts">{profileLabels.map(([key, label]) => <div key={key}><dt>{label}</dt><dd>{deal.customerProfile?.[key] || '待确认'}</dd></div>)}</dl>{deal.needs.length > 0 && <><h3>关键需求</h3><ul>{deal.needs.map((need, index) => <li key={index}>{need}</li>)}</ul></>}</section>
-        <section className="cw-profile-section"><div className="cw-section-heading"><h3>公开企业资料</h3><button disabled={locked} onClick={() => void perform('deal_enrich', { dealId: deal.id, version: deal.version }, '企业资料已更新')}>{busy ? '处理中…' : deal.companyProfile ? '更新' : '补全'}</button></div>{deal.companyProfile ? <><p className="cw-muted">{deal.companyProfile.status === 'partial' ? '部分资料待核实' : '已整理公开资料'} · 核验时间：{fullDate(deal.companyProfile.updatedAt)}</p><p>{deal.companyProfile.summary || '暂未形成企业摘要。'}</p><dl className="cw-profile-facts">{deal.companyProfile.facts.map((fact, index) => <div key={index}><dt>{fact.label}</dt><dd>{fact.value}</dd></div>)}</dl>{deal.companyProfile.warnings.map((warning, index) => <p key={index} className="cw-muted">{warning}</p>)}<details className="cw-sources"><summary>资料来源 · {deal.companyProfile.sources.length}<ChevronDown size={13} /></summary>{deal.companyProfile.sources.map((source, index) => <p key={`${source.id}:${index}`}>{safeUrl(source.url) ? <a href={safeUrl(source.url)} target="_blank" rel="noopener noreferrer">{source.title}</a> : source.title}<small>{source.snippet?.split('\n').find(line => line.startsWith('资料日期：')) || '资料日期未标注'} · 核验时间：{fullDate(source.retrievedAt)}</small>{source.snippet && <span className="cw-source-excerpt">{source.snippet}</span>}</p>)}</details></> : <p className="cw-muted">尚未补全公开资料。先核对企业全称，再检索有来源的企业信息。</p>}</section>
+      {deal ? <div className="cw-insights-body">
+        <section className="cw-profile-section cw-next-action">
+          <div className="cw-section-heading"><h3>已记录的下一步</h3><button disabled={locked} onClick={() => openForm('edit')}>编辑下一步</button></div>
+          <p>{deal.nextAction || '尚未填写下一步。'}</p>
+          {deal.deadline && <p className="cw-muted">截止时间 · {date(deal.deadline)}</p>}
+          <button className="button secondary" disabled={locked} onClick={() => {
+            updateDraft({ query: '请结合当前项目已确认的信息与资料缺口，给出下一步行动、沟通问题及理由', agent: 'strategy' });
+            if (!window.matchMedia('(min-width: 1201px)').matches) {
+              setProfileOpen(false);
+              setMobilePanel('chat');
+            }
+            requestFocus({ destination: 'composer' });
+          }}>与 AI 讨论下一步</button>
+        </section>
         <div id={`${id}-assessment`} ref={assessment} tabIndex={-1}>
-          <ProjectSalesIntelligence key={deal.id} deal={deal} mutate={mutate} notify={notify} modelConnected={state.model.connected} disabled={locked} onBusyChange={onAssessmentBusy} onReload={onReload} />
+          <ProjectSalesIntelligence key={deal.id} prioritizeActions deal={deal} mutate={mutate} notify={notify} modelConnected={state.model.connected} disabled={locked} onBusyChange={onAssessmentBusy} onReload={onReload} />
         </div>
-        <section className="cw-profile-section cw-next-action"><h3>当前下一步</h3><p>{deal.nextAction || '尚未填写下一步。可让 AI 梳理待确认信息，再与客户核对。'}</p><button className="button secondary" disabled={locked} onClick={() => { updateDraft({ query: '请结合当前项目已确认的信息与资料缺口，给出下一步行动、沟通问题及理由', agent: 'strategy' }); setMobilePanel('chat'); composer.current?.focus(); }}>与 AI 讨论下一步</button></section>
-        <details className="cw-materials"><summary><FileText size={15} />项目资料 <span>{deal.notes.length} 条原话</span><ChevronDown size={14} /></summary><div><label htmlFor={`${id}-note`}>保存客户原话或沟通事实</label><textarea id={`${id}-note`} rows={3} maxLength={4000} disabled={locked} value={draft.note} onChange={event => updateDraft({ note: event.target.value })} placeholder="只记录已确认的原话、事实与约定" /><button className="button secondary" disabled={locked || !draft.note.trim()} onClick={() => void saveNote()}>保存原话</button>{[...deal.notes].sort((a, b) => (Date.parse(b.date) || 0) - (Date.parse(a.date) || 0)).map(note => <article className="cw-saved-note" key={note.id}><p>{note.text}</p><small>{note.author} · {date(note.date)}</small>{note.recording && <FollowupRecordingPlayer dealId={deal.id} recording={note.recording} />}</article>)}{(state.transcripts || []).filter(item => item.dealId === deal.id).map(item => <details className="cw-saved-note" key={item.id}><summary>通话转写 · {date(item.createdAt)}</summary><p>{item.text}</p></details>)}</div></details>
-      </div> : <p className="cw-muted">选择项目后查看客户资料。</p>}
+      </div> : <p className="cw-muted">选择项目后查看下一步建议。</p>}
     </aside>
 
     {mode && <dialog className="cw-dialog" ref={dialog} aria-labelledby={`${id}-form-title`} onCancel={event => { event.preventDefault(); closeForm(); }}><header><h2 id={`${id}-form-title`}>{mode === 'create' ? '新建企业项目' : mode === 'edit' ? '编辑项目资料' : mode === 'profile' ? '编辑客户画像' : '推进阶段与结果'}</h2><button className="button ghost" aria-label="关闭资料编辑" disabled={locked} onClick={closeForm}><X size={18} /></button></header>

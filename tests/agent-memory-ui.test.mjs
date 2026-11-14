@@ -98,8 +98,10 @@ test('assistant memory separates personal and project actions, and leaves the ch
     assert.equal(await chat.getByLabel('描述你的任务').inputValue(), '保留我的聊天草稿');
     await chat.getByRole('button', { name: '关闭', exact: true }).click();
 
-    await page.getByRole('button', { name: '查看项目记忆' }).click();
-    const projectMemory = page.getByRole('dialog', { name: '项目记忆', exact: true });
+    await page.getByRole('button', { name: '企业画像与摘要', exact: true }).click();
+    const profile = page.getByRole('region', { name: '企业画像与摘要', exact: true });
+    await profile.locator('summary').getByText('助手记忆', { exact: true }).click();
+    const projectMemory = profile.getByRole('region', { name: '项目记忆', exact: true });
     await projectMemory.getByText('项目沟通做法', { exact: true }).click();
     assert.equal(await projectMemory.getByText(personTopic.title, { exact: true }).count(), 0);
     await projectMemory.getByRole('button', { name: '查看依据' }).click();

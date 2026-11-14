@@ -118,7 +118,7 @@ export function AgentMemoryButton({ project, disabled }: { project?: ProjectScop
   </>;
 }
 
-export function AgentMemoryPanel({ project, onClose }: { project?: ProjectScope; onClose: () => void }) {
+export function AgentMemoryPanel({ project, onClose }: { project?: ProjectScope; onClose?: () => void }) {
   const [snapshot, setSnapshot] = useState<MemorySnapshot | null>(null);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -162,12 +162,11 @@ export function AgentMemoryPanel({ project, onClose }: { project?: ProjectScope;
     }
   }
 
-  return <Overlay title={project ? '项目记忆' : '助手记忆'} onClose={onClose} className="agent-memory-dialog">
-    <section className="agent-memory-content" aria-busy={busy !== null}>
-      <div className="agent-memory-scope">
+  const content = <section className="agent-memory-content" aria-label={onClose ? undefined : '项目记忆'} aria-busy={busy !== null}>
+      {onClose && <div className="agent-memory-scope">
         <strong>{project?.label ?? '个人记忆'}</strong>
         <p>{project ? '此处显示当前项目内形成的记忆主题。' : '此处显示你的通用偏好与可复用经验。'}</p>
-      </div>
+      </div>}
       {error && <div className="agent-memory-error" role="alert"><p>{error}</p><button type="button" className="button secondary" onClick={() => { setConfirmTopic(null); void perform(); }}>重新加载</button></div>}
       {!snapshot && busy === 'load' && <p className="agent-memory-status" role="status"><Loader2 size={16} className="spin" aria-hidden="true" />正在加载记忆</p>}
       {snapshot && <>
@@ -213,6 +212,8 @@ export function AgentMemoryPanel({ project, onClose }: { project?: ProjectScope;
           })}
         </div>
       </>}
-    </section>
-  </Overlay>;
+    </section>;
+  return onClose
+    ? <Overlay title={project ? '项目记忆' : '助手记忆'} onClose={onClose} className="agent-memory-dialog">{content}</Overlay>
+    : content;
 }

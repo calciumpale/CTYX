@@ -8,10 +8,12 @@ import { createServer } from 'vite';
 import react from '@vitejs/plugin-react';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
+const profileMemory = { topic: 'practice', title: '跟进沟通要点', body: '先核对现场使用限制。', sourceIds: ['run-1'], updatedAt: '2026-11-08T03:00:00Z', version: 1 };
+const proposedAction = { action: '向客户确认计划搬迁日期', reason: '交付日期随着客户搬迁窗口调整。', evidence: [] };
 const fixture = `import React,{useState} from 'react';import {createRoot} from 'react-dom/client';import {CustomerWorkspace} from '/app/components/CustomerWorkspace.tsx';import {ProjectsView} from '/app/components/ProjectWorkspace.tsx';import {createSeed} from '/app/lib/seed.ts';import '/app/globals.css';
-const now='2026-11-08T00:00:00Z';const seed=createSeed(now);const base={...seed.deals[0],owner:'ZS',ownerId:'sales-1',summary:'',contact:'',position:'',notes:[],needs:[],risks:[],amount:0,health:0};const active={...base,id:'new',name:'公开企业有限公司',projectName:'公开企业线索',dataOrigin:'research',companyProfile:{companyName:'公开企业有限公司',summary:'公开机构资料；尚未确认采购需求或建立客户关系。',provider:'web',status:'ready',modelUsed:false,updatedAt:now,facts:[{label:'地区',value:'嘉兴',sourceIds:['official']}],sources:[{id:'official',title:'官方机构名录',url:'https://example.com/registry',provider:'web',retrievedAt:now,snippet:'资料日期：2024-06-30'}],warnings:['当前登记、许可及营业状态尚未核验。']}};const old={...base,id:'old',name:'历史企业',projectName:'历史项目',archive:{at:now,reason:'五科室企业目录替换；历史保留',migrationKey:'setup'},notes:[{id:'note',text:'历史客户原话',author:'ZS',date:now}]};
+const now='2026-11-08T00:00:00Z';const seed=createSeed(now);const base={...seed.deals[0],owner:'ZS',ownerId:'sales-1',summary:'',contact:'',position:'',notes:[],needs:[],risks:[],amount:0,health:0};const active={...base,id:'new',name:'公开企业有限公司',projectName:'公开企业线索',dataOrigin:'research',health:72,companyProfile:{companyName:'公开企业有限公司',summary:'公开机构资料；尚未确认采购需求或建立客户关系。',provider:'web',status:'ready',modelUsed:false,updatedAt:now,facts:[{label:'地区',value:'嘉兴',sourceIds:['official']}],sources:[{id:'official',title:'官方机构名录',url:'https://example.com/registry',provider:'web',retrievedAt:now,snippet:'资料日期：2024-06-30'}],warnings:['当前登记、许可及营业状态尚未核验。']}};const old={...base,id:'old',name:'历史企业',projectName:'历史项目',archive:{at:now,reason:'五科室企业目录替换；历史保留',migrationKey:'setup'},notes:[{id:'note',text:'历史客户原话',author:'ZS',date:now}]};
 function Fixture() {
-  const [state,setState] = useState({ ...seed, deals:[active,old], salesOwners:[{salesId:'sales-empty',displayName:'WL'}], runs:[{id:'old-chat',dealId:'old',createdAt:now,query:'历史提问',answer:'历史回答',agentIds:['insight'],steps:[],citations:[],mode:'demo',duration:1}] });
+  const [state,setState] = useState({ ...seed, model:{connected:true,name:'测试模型'}, deals:[active,old], salesOwners:[{salesId:'sales-empty',displayName:'WL'}], runs:[{id:'old-chat',dealId:'old',createdAt:now,query:'历史提问',answer:'历史回答',agentIds:['insight'],steps:[],citations:[],mode:'demo',duration:1}] });
   window.refreshFixture = () => setState(s => ({ ...s, revision:s.revision+1 }));
   window.setIntentFixture = ({ grade, score, stale = false }) => setState(current => ({
     ...current,
@@ -19,8 +21,8 @@ function Fixture() {
       if (deal.id !== 'new') return deal;
       const latest = {
         sourceHash: 'fixture', sourceVersion: deal.version - Number(stale), assessedAt: now, modelName: '测试模型',
-        insight: { grade, score, summary: '意向依据', dimensions: [], nextActions: [], missingInfo: [] },
-        forecast: { kind: 'estimated', probability: 21, range: null, confidence: null, summary: '成交估计依据', factors: [], nextActions: [] },
+        insight: { grade, score, summary: '意向依据', dimensions: [], nextActions: [${JSON.stringify(proposedAction)}], missingInfo: [] },
+        forecast: { kind: 'estimated', probability: 21, range: null, confidence: null, summary: '成交估计依据', factors: [], nextActions: [${JSON.stringify(proposedAction)}] },
         warnings: [],
       };
       return { ...deal, intelligence: { status: grade ? 'ready' : 'needs_info', sourceHash: 'fixture', updatedAt: now, modelName: '测试模型', message: '', history: [], latest } };
@@ -44,10 +46,26 @@ async function createFixture() {
 test('archive directory retains per-project drafts, history and contracts navigation; research and roster remain distinct', {timeout:60000}, async()=>{
   const {chromium}=await import(pathToFileURL(path.join(root,'tools/douyin-bridge/node_modules/playwright/index.mjs')).href);const {server,origin,cacheDir}=await createFixture();let browser;
   try{browser=await chromium.launch({headless:true});const page=await browser.newPage({viewport:{width:1440,height:900}});const errors=[];page.on('pageerror',error=>errors.push(error.message));await page.goto(origin);
-    await page.getByRole('button',{name:/公开企业有限公司/}).waitFor();assert.equal(await page.getByRole('button',{name:/历史企业/}).count(),0);await page.getByLabel('向 AI 询问当前项目').fill('当前线索草稿');await page.getByRole('button',{name:/归档历史/}).click();await page.getByRole('button',{name:/历史企业/}).waitFor();await page.getByText('历史回答',{exact:true}).waitFor();assert.equal(await page.evaluate(()=>window.workspaceBusy),false);await page.getByLabel('向 AI 询问当前项目').fill('归档讨论草稿');await page.locator('summary[aria-label="项目操作"]').click();await page.getByRole('button',{name:'查看项目合同'}).click();assert.deepEqual(await page.evaluate(()=>window.navigation),{view:'contracts',id:'old'});await page.getByRole('button',{name:/当前企业/}).click();assert.equal(await page.getByLabel('向 AI 询问当前项目').inputValue(),'当前线索草稿');await page.evaluate(()=>window.refreshFixture());assert.equal(await page.getByLabel('向 AI 询问当前项目').inputValue(),'当前线索草稿');await page.locator('.cw-chat-title').getByText('公开线索 · 待开发',{exact:true}).waitFor();
+    await page.getByRole('button',{name:/公开企业有限公司/}).waitFor();assert.equal(await page.getByRole('button',{name:/历史企业/}).count(),0);await page.getByLabel('向 AI 询问当前项目').fill('当前线索草稿');await page.getByRole('button',{name:/归档历史/}).click();await page.getByRole('button',{name:/历史企业/}).waitFor();await page.getByText('历史回答',{exact:true}).waitFor();assert.equal(await page.evaluate(()=>window.workspaceBusy),false);await page.getByLabel('向 AI 询问当前项目').fill('归档讨论草稿');await page.locator('summary[aria-label="项目操作"]').click();await page.getByRole('button',{name:'查看项目合同'}).click();assert.deepEqual(await page.evaluate(()=>window.navigation),{view:'contracts',id:'old'});await page.getByRole('button',{name:/当前企业/}).click();assert.equal(await page.getByLabel('向 AI 询问当前项目').inputValue(),'当前线索草稿');await page.evaluate(()=>window.refreshFixture());assert.equal(await page.getByLabel('向 AI 询问当前项目').inputValue(),'当前线索草稿');
     assert.equal(await page.locator('.cw-record-status').count(),0);
-    await page.locator('.cw-sources > summary').click();await page.locator('.cw-sources small').filter({hasText:'资料日期：2024-06-30'}).waitFor();await page.getByRole('button',{name:/归档历史/}).click();assert.equal(await page.getByLabel('向 AI 询问当前项目').inputValue(),'归档讨论草稿');await page.getByRole('button',{name:'新建企业或项目'}).click();await page.getByLabel('项目负责人').selectOption('sales-empty');await page.getByLabel(/^客户企业/).fill('新建企业');await page.getByLabel(/^项目名称/).fill('新建项目');await page.getByRole('button',{name:'创建项目',exact:true}).click();assert.equal((await page.evaluate(()=>window.lastMutation)).payload.ownerId,'sales-empty');
-    await page.goto(origin+'/?deal=old');await page.getByText('历史回答',{exact:true}).waitFor();await page.locator('.cw-materials > summary').click();await page.getByText('历史客户原话',{exact:true}).waitFor();await page.getByText('已归档',{exact:true}).waitFor();await page.locator('.cw-record-status').getByText(/历史保留/).waitFor();await mkdir(path.join(root,'.superpowers/sdd/2026-11-08-five-departments/artifacts'),{recursive:true});await page.screenshot({path:path.join(root,'.superpowers/sdd/2026-11-08-five-departments/artifacts/archive-desktop.png'),fullPage:true});await page.setViewportSize({width:390,height:844});await page.getByRole('button',{name:'返回企业通讯录'}).click();await page.getByRole('button',{name:/当前企业/}).click();await page.getByRole('button',{name:/公开企业有限公司/}).click();await page.getByRole('button',{name:'查看客户资料'}).click();await page.screenshot({path:path.join(root,'.superpowers/sdd/2026-11-08-five-departments/artifacts/archive-mobile.png'),fullPage:true});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);assert.equal(await page.getByRole('button',{name:'收起客户资料'}).evaluate(el=>el.getBoundingClientRect().height>=44),true);assert.deepEqual(errors,[]);
+    const toggleProfile = page.getByRole('button', { name: '企业画像与摘要', exact: true });
+    assert.equal(await page.locator('.cw-actions[open]').count(), 0, 'opening project contracts dismisses the operations menu');
+    const inlineProfile = page.getByRole('region', { name: '企业画像与摘要', exact: true });
+    await toggleProfile.click();
+    await inlineProfile.getByText('公开线索 · 待开发', { exact: true }).waitFor();
+    await inlineProfile.locator('.cw-sources > summary').click();
+    await inlineProfile.locator('.cw-sources small').filter({ hasText: '资料日期：2024-06-30' }).waitFor();
+    await page.getByRole('button',{name:/归档历史/}).click();assert.equal(await page.getByLabel('向 AI 询问当前项目').inputValue(),'归档讨论草稿');await page.getByRole('button',{name:'新建企业或项目'}).click();await page.getByLabel('项目负责人').selectOption('sales-empty');await page.getByLabel(/^客户企业/).fill('新建企业');await page.getByLabel(/^项目名称/).fill('新建项目');await page.getByRole('button',{name:'创建项目',exact:true}).click();assert.equal((await page.evaluate(()=>window.lastMutation)).payload.ownerId,'sales-empty');
+    await page.goto(origin+'/?deal=old');
+    await page.getByText('历史回答',{exact:true}).waitFor();
+    const archivedOverview = page.getByRole('region', { name: '项目概览', exact: true });
+    assert.match(await archivedOverview.innerText(), /健康程度\s*(?:未评估|尚未评估|未评分|未设置)/);
+    await toggleProfile.click();
+    await inlineProfile.locator('.cw-materials > summary').click();
+    await inlineProfile.getByText('历史客户原话',{exact:true}).waitFor();
+    await inlineProfile.getByText('已归档',{exact:true}).waitFor();
+    await page.locator('.cw-record-status').getByText(/历史保留/).waitFor();
+    await mkdir(path.join(root,'.superpowers/sdd/2026-11-08-five-departments/artifacts'),{recursive:true});await page.screenshot({path:path.join(root,'.superpowers/sdd/2026-11-08-five-departments/artifacts/archive-desktop.png'),fullPage:true});await page.setViewportSize({width:390,height:844});await page.getByRole('button',{name:'返回企业通讯录'}).click();await page.getByRole('button',{name:/当前企业/}).click();await page.getByRole('button',{name:/公开企业有限公司/}).click();await page.getByRole('button',{name:'查看下一步建议'}).click();await page.screenshot({path:path.join(root,'.superpowers/sdd/2026-11-08-five-departments/artifacts/archive-mobile.png'),fullPage:true});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);assert.equal(await page.getByRole('button',{name:'收起下一步建议'}).evaluate(el=>el.getBoundingClientRect().height>=44),true);assert.deepEqual(errors,[]);
   }finally{await browser?.close();await server.close();await rm(cacheDir,{recursive:true,force:true});}
 });
 
@@ -57,19 +75,50 @@ test('legacy project view excludes archives by default and exposes explicit hist
   }finally{await browser?.close();await server.close();await rm(cacheDir,{recursive:true,force:true});}
 });
 
-test('customer details header shows the current intent score and links to the existing assessment', { timeout: 30000 }, async () => {
+test('project overview separates intent and health, shows inline profile, and keeps assessment in next steps', { timeout: 30000 }, async () => {
   const { chromium } = await import(pathToFileURL(path.join(root, 'tools/douyin-bridge/node_modules/playwright/index.mjs')).href);
   const { server, origin, cacheDir } = await createFixture();
   let browser;
   try {
     browser = await chromium.launch({ headless: true });
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
-    await page.goto(origin);
-    const header = page.locator('.cw-insights-heading');
-    await header.getByRole('heading', { name: '客户资料' }).waitFor();
-    assert.match(await header.innerText(), /尚未评估/);
+    page.setDefaultTimeout(6000);
+    const memoryReads = [];
+    await page.route('**/api/agent-memory?*', route => {
+      const request = route.request();
+      const url = new URL(request.url());
+      memoryReads.push({ method: request.method(), projectId: url.searchParams.get('projectId') });
+      return route.fulfill({ json: { enabled: true, pending: 0, topics: [profileMemory] } });
+    });
+    await page.goto(origin, { waitUntil: 'domcontentloaded', timeout: 20000 });
+    const conversation = page.getByRole('region', { name: '企业 AI 对话', exact: true });
+    const conversationTitle = conversation.locator('.cw-chat-title');
+    await conversationTitle.getByRole('heading', { name: '公开企业有限公司', exact: true }).waitFor();
+    assert.equal(await conversationTitle.innerText(), '公开企业有限公司');
+    const overview = conversation.getByRole('region', { name: '项目概览', exact: true });
+    assert.match(await overview.innerText(), /尚未评估/);
+    assert.match(await overview.innerText(), /健康程度\s*72/);
 
-    const editProject = page.getByRole('button', { name: '编辑', exact: true });
+    const toggleProfile = overview.getByRole('button', { name: '企业画像与摘要', exact: true });
+    const inlineProfile = conversation.getByRole('region', { name: '企业画像与摘要', exact: true });
+    assert.equal(await toggleProfile.getAttribute('aria-expanded'), 'false');
+    assert.equal(await inlineProfile.isVisible(), false);
+    assert.deepEqual(memoryReads, []);
+    await toggleProfile.click();
+    assert.equal(await toggleProfile.getAttribute('aria-expanded'), 'true');
+    const controlsId = await toggleProfile.getAttribute('aria-controls');
+    assert.ok(controlsId);
+    assert.equal(await inlineProfile.getAttribute('id'), controlsId);
+    await inlineProfile.getByText('公开企业线索', { exact: true }).waitFor();
+    await inlineProfile.getByText('公开线索 · 待开发', { exact: true }).waitFor();
+    await inlineProfile.getByText('方案', { exact: true }).waitFor();
+    await inlineProfile.locator('summary').getByText('助手记忆', { exact: true }).click();
+    await inlineProfile.getByText(profileMemory.title, { exact: true }).waitFor();
+    assert.deepEqual(memoryReads, [{ method: 'GET', projectId: 'new' }]);
+    assert.equal(await inlineProfile.evaluate(region => !!region.closest('[aria-label="企业 AI 对话"]')), true);
+    const toggleBounds = await toggleProfile.boundingBox();
+    assert.ok((await inlineProfile.boundingBox()).y >= toggleBounds.y + toggleBounds.height - 1);
+    const editProject = inlineProfile.getByRole('button', { name: '编辑', exact: true });
     const projectDialog = page.getByRole('dialog', { name: '编辑项目资料', exact: true });
     await editProject.click();
     const centered = () => projectDialog.evaluate(dialog => {
@@ -89,13 +138,22 @@ test('customer details header shows the current intent score and links to the ex
     await page.keyboard.press('Escape');
     await projectDialog.waitFor({ state: 'hidden' });
     await page.setViewportSize({ width: 1440, height: 900 });
+    const fillProfile = inlineProfile.getByRole('button', { name: '补充', exact: true });
+    const profileDialog = page.getByRole('dialog', { name: '编辑客户画像', exact: true });
+    await fillProfile.click();
+    await profileDialog.waitFor();
+    assert.equal(await profileDialog.evaluate(dialog => dialog.matches(':modal')), true);
+    await page.keyboard.press('Escape');
+    await profileDialog.waitFor({ state: 'hidden' });
+    await toggleProfile.click();
+    await inlineProfile.waitFor({ state: 'hidden' });
+    assert.equal(await toggleProfile.getAttribute('aria-expanded'), 'false');
 
     const directory = page.getByRole('complementary', { name: '企业通讯录', exact: true });
     const collapseDirectory = directory.getByRole('button', { name: '收起企业目录', exact: true });
     const restoreDirectory = directory.getByRole('button', { name: '展开企业目录', exact: true });
     const filter = directory.getByRole('textbox', { name: '搜索企业、项目或联系人', exact: true });
     const composer = page.getByRole('textbox', { name: '向 AI 询问当前项目', exact: true });
-    const conversation = page.getByRole('region', { name: '企业 AI 对话', exact: true });
     await filter.fill('公开企业');
     await composer.fill('折叠前的项目草稿');
     const widthBeforeCollapse = (await conversation.boundingBox()).width;
@@ -120,31 +178,53 @@ test('customer details header shows the current intent score and links to the ex
 
     for (const [grade, score, label] of [['A', 88, '高意向'], ['B', 58, '中意向'], ['C', 0, '低意向']]) {
       await page.evaluate(value => window.setIntentFixture(value), { grade, score });
-      const scoreButton = header.getByRole('button', { name: new RegExp(`${grade}.*${label}.*${score}.*100`) });
+      const scoreButton = overview.getByRole('button', { name: new RegExp(label) });
       await scoreButton.waitFor();
-      assert.doesNotMatch(await scoreButton.innerText(), /21%/);
-      assert.equal(await header.evaluate(node => node.scrollWidth <= node.clientWidth), true);
+      assert.equal(await scoreButton.innerText(), label);
+      assert.match(await overview.innerText(), /健康程度\s*72/);
+      assert.equal(await overview.evaluate(node => node.scrollWidth <= node.clientWidth), true);
     }
 
     await page.evaluate(() => window.setIntentFixture({ grade: 'A', score: 88, stale: true }));
-    await header.getByText('待重新评估', { exact: true }).waitFor();
-    assert.doesNotMatch(await header.innerText(), /88/);
+    await overview.getByText('待重新评估', { exact: true }).waitFor();
+    assert.doesNotMatch(await overview.innerText(), /88/);
     await page.evaluate(() => window.setIntentFixture({ grade: null, score: null }));
-    await header.getByText('资料不足', { exact: true }).waitFor();
-    assert.doesNotMatch(await header.innerText(), /\/\s*100/);
+    await overview.getByText('资料不足', { exact: true }).waitFor();
+    assert.doesNotMatch(await overview.getByRole('button', { name: /资料不足/ }).innerText(), /\/\s*100/);
+
+    const nextSteps = page.getByRole('complementary', { name: '下一步建议', exact: true });
+    const assessment = nextSteps.getByRole('region', { name: 'AI 销售分析', exact: true });
+    const completeAssessment = assessment.locator('summary').getByText('查看完整评估', { exact: true });
+    await page.evaluate(() => window.setIntentFixture({ grade: 'A', score: 88 }));
+    await assessment.getByRole('heading', { name: 'AI 建议', exact: true }).waitFor();
+    await assessment.getByText(proposedAction.reason, { exact: true }).waitFor();
+    assert.equal(await assessment.getByText(proposedAction.action, { exact: true }).count(), 1, 'identical proposals from both analyses are shown once');
+    assert.equal(await completeAssessment.evaluate(summary => summary.closest('details').open), false);
+    await page.evaluate(() => window.setIntentFixture({ grade: 'A', score: 88, stale: true }));
+    await assessment.getByRole('heading', { name: '上次评估的 AI 建议', exact: true }).waitFor();
+    await assessment.getByText(proposedAction.reason, { exact: true }).waitFor();
 
     await page.setViewportSize({ width: 320, height: 700 });
     assert.equal(await collapseDirectory.isVisible(), false, 'mobile keeps the existing directory screen');
     await page.getByRole('button', { name: /公开企业有限公司/ }).click();
-    await page.getByRole('button', { name: '查看客户资料' }).click();
     await page.evaluate(() => window.setIntentFixture({ grade: 'A', score: 88 }));
-    const mobileScore = header.getByRole('button', { name: /A.*高意向.*88.*100/ });
-    await mobileScore.click();
-    await page.getByRole('button', { name: '重新评估' }).waitFor();
-    assert.equal(await page.evaluate(() => Boolean(document.activeElement?.matches('[tabindex="-1"]') && document.activeElement.querySelector('[aria-label="AI 销售分析"]'))), true);
-    assert.equal(await page.evaluate(() => window.lastMutation), undefined);
-    assert.equal(await header.evaluate(node => node.scrollWidth <= node.clientWidth), true);
+    const mobileScore = overview.getByRole('button', { name: /高意向/ });
     assert.equal(await mobileScore.evaluate(node => node.getBoundingClientRect().height >= 44), true);
+    assert.equal(await overview.evaluate(node => node.scrollWidth <= node.clientWidth), true);
+    await mobileScore.click();
+    await nextSteps.getByRole('heading', { level: 2, name: '下一步建议', exact: true }).waitFor();
+    await assessment.getByText(/意向评分\s*88\s*\/\s*100/).waitFor();
+    assert.equal(await completeAssessment.evaluate(summary => summary.closest('details').open), true);
+    const rerun = assessment.getByRole('button', { name: '重新评估', exact: true });
+    await rerun.waitFor();
+    assert.equal(await page.evaluate(() => window.lastMutation), undefined);
+    await rerun.click();
+    const mutation = await page.evaluate(() => window.lastMutation);
+    assert.equal(mutation.action, 'deal_assess');
+    assert.equal(mutation.payload.dealId, 'new');
+    await nextSteps.getByRole('button', { name: '收起下一步建议', exact: true }).click();
+    await page.getByRole('button', { name: '查看下一步建议', exact: true }).waitFor();
+    assert.equal(await nextSteps.isVisible(), false);
   } finally {
     await browser?.close();
     await server.close();

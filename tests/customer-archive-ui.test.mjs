@@ -69,6 +69,34 @@ test('customer details header shows the current intent score and links to the ex
     await header.getByRole('heading', { name: '客户资料' }).waitFor();
     assert.match(await header.innerText(), /尚未评估/);
 
+    const directory = page.getByRole('complementary', { name: '企业通讯录', exact: true });
+    const collapseDirectory = directory.getByRole('button', { name: '收起企业目录', exact: true });
+    const restoreDirectory = directory.getByRole('button', { name: '展开企业目录', exact: true });
+    const filter = directory.getByRole('textbox', { name: '搜索企业、项目或联系人', exact: true });
+    const composer = page.getByRole('textbox', { name: '向 AI 询问当前项目', exact: true });
+    const conversation = page.getByRole('region', { name: '企业 AI 对话', exact: true });
+    await filter.fill('公开企业');
+    await composer.fill('折叠前的项目草稿');
+    const widthBeforeCollapse = (await conversation.boundingBox()).width;
+    assert.equal(await collapseDirectory.getAttribute('aria-expanded'), 'true');
+    const controls = await collapseDirectory.getAttribute('aria-controls');
+    assert.ok(controls);
+    await collapseDirectory.press('Enter');
+    await restoreDirectory.waitFor();
+    assert.equal(await restoreDirectory.getAttribute('aria-expanded'), 'false');
+    assert.equal(await restoreDirectory.getAttribute('aria-controls'), controls);
+    assert.equal(await restoreDirectory.evaluate(button => document.activeElement === button), true);
+    assert.equal(await filter.isVisible(), false);
+    assert.ok((await conversation.boundingBox()).width > widthBeforeCollapse + 100, 'collapsing returns the directory space to the project');
+    assert.equal(await composer.inputValue(), '折叠前的项目草稿');
+    await restoreDirectory.press('Enter');
+    assert.equal(await collapseDirectory.getAttribute('aria-expanded'), 'true');
+    assert.equal(await collapseDirectory.evaluate(button => document.activeElement === button), true);
+    assert.equal(await filter.inputValue(), '公开企业');
+    assert.equal(await composer.inputValue(), '折叠前的项目草稿');
+    await filter.fill('');
+    await composer.fill('');
+
     for (const [grade, score, label] of [['A', 88, '高意向'], ['B', 58, '中意向'], ['C', 0, '低意向']]) {
       await page.evaluate(value => window.setIntentFixture(value), { grade, score });
       const scoreButton = header.getByRole('button', { name: new RegExp(`${grade}.*${label}.*${score}.*100`) });
@@ -85,6 +113,7 @@ test('customer details header shows the current intent score and links to the ex
     assert.doesNotMatch(await header.innerText(), /\/\s*100/);
 
     await page.setViewportSize({ width: 320, height: 700 });
+    assert.equal(await collapseDirectory.isVisible(), false, 'mobile keeps the existing directory screen');
     await page.getByRole('button', { name: /公开企业有限公司/ }).click();
     await page.getByRole('button', { name: '查看客户资料' }).click();
     await page.evaluate(() => window.setIntentFixture({ grade: 'A', score: 88 }));

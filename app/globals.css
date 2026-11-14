@@ -111,7 +111,6 @@ a { text-underline-offset: 3px; }
 .brand-mark { width: 49px; height: 49px; color: var(--cds-clay); }
 .brand-mark.small { width: 27px; height: 27px; }
 .close-nav { display: none; }
-.nav-caption { color: var(--cds-text-muted); padding: 0 12px; font-size: 10px; letter-spacing: .5px; margin-bottom: 10px; display: flex; align-items: center; justify-content: space-between; }
 .sidebar nav { display: flex; flex-direction: column; gap: 3px; }
 .nav-item { text-decoration: none; min-height: 36px; display: flex; align-items: center; gap: 12px; background: transparent; border: 0; border-radius: 12px; color: var(--cds-text-secondary); text-align: left; padding: 10px 12px; font-size: .875rem; }
 .nav-item:hover { background: var(--cds-fill-ghost-hover); }
@@ -119,12 +118,6 @@ a { text-underline-offset: 3px; }
 .nav-item.active > svg { color: var(--brand); }
 .nav-item small { margin-left: auto; font-weight: 450; font-size: 10px; background: var(--cds-surface-1); padding: 0 5px; border-radius: 4px; }
 .sidebar-recent { margin-top: 38px; }
-.sidebar-recent .nav-caption { padding-right: 4px; margin-bottom: 0; }
-.sidebar-recent .nav-caption .icon-button { width: 25px; height: 25px; }
-.sidebar-recent > button { display: flex; align-items: center; gap: 9px; width: 100%; text-align: left; border: 0; background: transparent; color: var(--cds-text-secondary); font-size: 11px; padding: 9px 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-radius: 6px; }
-.sidebar-recent > button:hover { background: var(--cds-fill-ghost-hover); }
-.sidebar-recent > button > span { width: 4px; height: 4px; border-radius: 50%; background: var(--cds-alpha-3); flex-shrink: 0; }
-.sidebar-recent > p { font-size: 10px; color: var(--cds-text-muted); line-height: 1.8; padding: 7px 12px; }
 .status-dot { height: 5px; width: 5px; background: var(--cds-clay); display: inline-block; border-radius: 50%; flex-shrink: 0; }
 .status-dot.connected { background: var(--cds-text-secondary); }
 .role-switch { margin-left: auto; display: flex; align-items: center; gap: 2px; }
@@ -340,14 +333,6 @@ kbd { font: inherit; font-size: 10px; color: var(--cds-text-muted); border: 1px 
 .search-result strong { display: block; font-size: 12px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .search-result small { display: block; color: var(--cds-text-muted); font-size: 10px; line-height: 1.5; margin-top: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .notice-intro { display: flex; align-items: center; gap: 6px; padding: 15px 24px; color: var(--cds-text-muted); font-size: 11px; }
-.notification-item { display: flex; align-items: flex-start; gap: 13px; padding: 20px 24px; width: 100%; text-align: left; border: 0; border-top: 1px solid var(--cds-border); background: transparent; }
-button.notification-item:hover { background: var(--cds-fill-ghost-hover); }
-.notification-symbol { background: var(--cds-surface-0); color: var(--brand); border-radius: 8px; width: 34px; height: 34px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-.notification-item > span:nth-child(2) { flex: 1; }
-.notification-item strong { font-size: 12px; font-weight: 500; }
-.notification-item p { font-size: 11px; color: var(--cds-text-secondary); margin: 8px 0; line-height: 1.8; }
-.notification-item small { font-size: 9px; color: var(--cds-text-muted); }
-.notification-item > svg { margin-top: 9px; color: var(--cds-text-muted); }
 .jump-latest { align-self: center; flex-shrink: 0; margin: 0 0 10px; font-size: 11px; min-height: 30px; }
 .toast { position: fixed; bottom: 25px; left: calc(50% + var(--app-sidebar-width) / 2); transform: translateX(-50%); display: flex; align-items: center; gap: 9px; padding: 10px 12px 10px 15px; background: var(--cds-surface-popover); color: var(--cds-text-primary); box-shadow: var(--cds-shadow-popover); border-radius: 10px; font-size: 12px; z-index: 100; max-width: calc(100vw - 35px); line-height: 1.5; animation: content-enter 220ms var(--cds-ease-enter) both; }
 .toast > svg { color: var(--brand); }
@@ -368,7 +353,6 @@ button.notification-item:hover { background: var(--cds-fill-ghost-hover); }
 /* Keep primary Chinese labels comfortable at normal desktop zoom. */
 @media (min-width: 601px) {
   .nav-item { font-size: 13px; }
-  .nav-caption { font-size: 11px; }
   .section-heading h2 { font-size: 15px; }
   .suggestions > button > span, .expert-grid strong, .home-deal-copy strong { font-size: 12px; }
   .suggestions p, .expert-grid p, .home-deal-copy small { font-size: 11px; }

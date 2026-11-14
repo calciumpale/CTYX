@@ -27,7 +27,8 @@ test('full workbench opens projects, submits a GEO draft and guards material dra
   page.on('pageerror',e=>errors.push(e.message));
   const state=createSeed('2026-11-08T00:00:00Z');state.role='sales';state.viewer={name:'ZS',team:'招商',salesId:'sales-1'};
   const deal={...state.deals[0],id:'converted-project',name:'人工核实企业',projectName:'公开来源项目',dataOrigin:'research',contact:'',summary:'公开来源，客户需求待核实',needs:[],notes:[],amount:0,health:0,deadline:'2026-11-13T02:00:00Z',outcome:'open'};
-  state.deals=[];state.runs=[];
+  const recentQuery='核对园区项目的交付边界、申请条件和下一次跟进安排';
+  state.deals=[];state.runs=[{id:'recent-task',query:recentQuery,answer:'已整理待核对事项。',agentIds:[],steps:[],citations:[],mode:'live',createdAt:'2026-11-14T02:00:00Z',duration:100}];
   let reads=0;
   let geoProject;
   const geoActions=[];
@@ -80,6 +81,8 @@ test('full workbench opens projects, submits a GEO draft and guards material dra
   }
   await account.click();
   await sidebar.getByRole('button',{name:'退出登录',exact:true}).waitFor();
+  assert.equal(await sidebar.getByRole('button',{name:'搜索工作空间',exact:true,includeHidden:true}).count(),0);
+  assert.equal(await sidebar.getByRole('button',{name:'工作动态',exact:true,includeHidden:true}).count(),0);
   await sidebar.getByRole('button',{name:'切换深色主题',exact:true}).click();
   assert.deepEqual(await page.evaluate(()=>[document.documentElement.dataset.mode,localStorage.getItem('ctai-theme')]),['dark','dark']);
   const light=sidebar.getByRole('button',{name:'切换浅色主题',exact:true});
@@ -97,9 +100,30 @@ test('full workbench opens projects, submits a GEO draft and guards material dra
   const assistantDialog=page.getByRole('dialog',{name:'AI 营销助手',exact:true});
   await assistantDialog.getByRole('button',{name:'关闭',exact:true}).click();
 
-  const businessNames=await businessNav.getByRole('link').locator('span').allTextContents();
+  const businessNames=await businessNav.getByRole('link').locator('.sidebar-business-label').allTextContents();
   assert.deepEqual(businessNames.slice(0,2),['提醒','AI获客']);
   assert.equal(businessNames.indexOf('AI营销素材'),businessNames.indexOf('GEO')+1);
+  const businessLabels=await businessNav.getByRole('link').locator('.sidebar-business-label').evaluateAll(labels=>labels.map(label=>{
+   const {left,right}=label.getBoundingClientRect();
+   const leading=label.firstElementChild?.getBoundingClientRect();
+   const trailing=label.lastElementChild?.getBoundingClientRect();
+   return {label:label.textContent,left,right,textLeft:leading?.left,textRight:trailing?.right,justify:getComputedStyle(label).justifyContent};
+  }));
+  assert.equal(businessLabels.length,businessNames.length);
+  const [firstLabel]=businessLabels;
+  assert.ok(businessLabels.every(label=>Math.abs(label.left-firstLabel.left)<=1&&Math.abs(label.right-firstLabel.right)<=1),JSON.stringify(businessLabels));
+  assert.ok(businessLabels.every(label=>label.justify==='space-between'&&Math.abs(label.textLeft-label.left)<=1&&Math.abs(label.textRight-label.right)<=1),'labels distribute their text to both edges');
+  const recent=sidebar.getByRole('button',{name:recentQuery,exact:true});
+  assert.equal(await recent.getAttribute('title'),recentQuery);
+  const recentLabel=await recent.locator('.sidebar-recent-label').evaluate(label=>{
+   const {left,right}=label.getBoundingClientRect();
+   const {textOverflow,whiteSpace}=getComputedStyle(label);
+   const rightPadding=label.closest('button').getBoundingClientRect().right-right;
+   return {left,rightPadding,textOverflow,whiteSpace,truncated:label.scrollWidth>label.clientWidth};
+  });
+  assert.ok(Math.abs(recentLabel.left-firstLabel.left)<=1,JSON.stringify({recentLabel,firstLabel}));
+  assert.ok(recentLabel.rightPadding>=8,'the ellipsis leaves space before the row edge');
+  assert.deepEqual([recentLabel.textOverflow,recentLabel.whiteSpace,recentLabel.truncated],['ellipsis','nowrap',true]);
   for(const name of ['日程','合同','AI带练']) await businessNav.getByRole('link',{name,exact:true}).waitFor();
   const reminderLink=businessNav.getByRole('link',{name:/^提醒/});
   await reminderLink.click();
@@ -140,6 +164,8 @@ test('full workbench opens projects, submits a GEO draft and guards material dra
   assert.equal(await page.getByLabel('活动 / 主题',{exact:true}).inputValue(),'保留的活动主题');
   await page.setViewportSize({width:390,height:844});
   await page.waitForFunction(()=>document.querySelector('.sidebar').getBoundingClientRect().right<=1);
+  await page.locator('.topbar').getByRole('button',{name:'搜索工作空间',exact:true}).click();
+  await page.getByRole('dialog',{name:'搜索工作空间',exact:true}).getByRole('button',{name:'关闭',exact:true}).click();
   await page.getByRole('navigation',{name:'快捷导航',exact:true}).getByRole('button',{name:'提醒',exact:true}).waitFor();
   const shortcuts=await page.locator('.mobile-role-navigation button').evaluateAll(buttons=>buttons.map(button=>({width:button.getBoundingClientRect().width,labelHeight:button.querySelector('span').getBoundingClientRect().height})));
   assert.ok(shortcuts.every(button=>button.width>=44&&button.labelHeight<=20),JSON.stringify(shortcuts));

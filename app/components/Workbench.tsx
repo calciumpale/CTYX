@@ -63,7 +63,6 @@ export default function Workbench({member,onLogout}:{member:MemberSession;onLogo
   const [mobileMenu, setMobileMenu] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [search, setSearch] = useState('');
-  const [noticesOpen, setNoticesOpen] = useState(false);
   const accountMenu = useRef<HTMLDetailsElement>(null);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
@@ -133,7 +132,7 @@ export default function Workbench({member,onLogout}:{member:MemberSession;onLogo
         if (accountMenu.current) accountMenu.current.open = false;
         setSearchOpen(v => !v);
       }
-      if (e.key === 'Escape') { setMobileMenu(false); setNoticesOpen(false); }
+      if (e.key === 'Escape') setMobileMenu(false);
     };
     const onPointerDown = (e: PointerEvent) => {
       const menu = accountMenu.current;
@@ -172,13 +171,13 @@ export default function Workbench({member,onLogout}:{member:MemberSession;onLogo
     if(approvalBusy.current){notify('审批操作正在保存，请等待完成后离开。');return;}
     if(contractBusy.current){notify('合同正在导入、保存或初审，请等待完成后离开。');return;}
     if(trainingPending.current){notify('语音回应正在保存，请等待完成；失败时可在带练页直接重试。');return;}
-    const proceed=()=>{stopTrainingMedia.current?.();setView(next);setMeetingEmbed(false);setProspectingSection('screen');if(next==='deals')setNavigationKey(value=>value+1);setProjectIntent(intent||null);setFocusedDeal(id||null);setFocusedApprovalContract(contractId||null);setFocusedApprovalId(approvalId||null);const url=new URL(window.location.href);url.search=workspaceSearch(url.search,{view:next,...(next==='knowledge'||next==='talktracks'?{focus:id}:{dealId:id}),contractId,approvalId,intent});window.history.replaceState(null,'',url.href);setMobileMenu(false);setSearchOpen(false);setNoticesOpen(false);window.scrollTo({top:0,left:0,behavior:'auto'});};
-    const guardedProceed=()=>{if(prospectingGuard.current&&!prospectingGuard.current(proceed)){setMobileMenu(false);setSearchOpen(false);setNoticesOpen(false);return;}if(studioGuard.current&&!studioGuard.current(proceed)){setMobileMenu(false);setSearchOpen(false);setNoticesOpen(false);return;}proceed();};
+    const proceed=()=>{stopTrainingMedia.current?.();setView(next);setMeetingEmbed(false);setProspectingSection('screen');if(next==='deals')setNavigationKey(value=>value+1);setProjectIntent(intent||null);setFocusedDeal(id||null);setFocusedApprovalContract(contractId||null);setFocusedApprovalId(approvalId||null);const url=new URL(window.location.href);url.search=workspaceSearch(url.search,{view:next,...(next==='knowledge'||next==='talktracks'?{focus:id}:{dealId:id}),contractId,approvalId,intent});window.history.replaceState(null,'',url.href);setMobileMenu(false);setSearchOpen(false);window.scrollTo({top:0,left:0,behavior:'auto'});};
+    const guardedProceed=()=>{if(prospectingGuard.current&&!prospectingGuard.current(proceed)){setMobileMenu(false);setSearchOpen(false);return;}if(studioGuard.current&&!studioGuard.current(proceed)){setMobileMenu(false);setSearchOpen(false);return;}proceed();};
     if(projectDirty.current){pendingProjectLeave.current=guardedProceed;setLeaveProject(true);return;}
     if(approvalDirty.current){pendingApprovalLeave.current=guardedProceed;setLeaveApproval(true);return;}
     if(contractDirty.current){pendingContractLeave.current=guardedProceed;setLeaveContract(true);return;}
     guardedProceed();
-  }, [notify, view, member.role, setView, setProjectIntent, setFocusedDeal, setFocusedApprovalContract, setFocusedApprovalId, setMobileMenu, setSearchOpen, setNoticesOpen, setLeaveProject, setLeaveApproval, setLeaveContract]);
+  }, [notify, view, member.role, setView, setProjectIntent, setFocusedDeal, setFocusedApprovalContract, setFocusedApprovalId, setMobileMenu, setSearchOpen, setLeaveProject, setLeaveApproval, setLeaveContract]);
   const toggleTheme = () => { const next = theme === 'light' ? 'dark' : 'light'; setTheme(next); document.documentElement.dataset.mode = next; localStorage.setItem('ctai-theme', next); };
   const onAsk = useCallback((query: string, agentId?: AgentId, dealId?: string, talkTrackIds?:string[], priorRunIds?:string[]) => {
     if(member.role==='admin'){notify('请在搭建中心调试 Agent，销售助手由业务账号使用');return;}
@@ -237,7 +236,6 @@ export default function Workbench({member,onLogout}:{member:MemberSession;onLogo
   },[]);
   if (loading || !state || !routeReady) return <div className="loading-screen"><BrandMark /><h1>AI营销工作台</h1>{error ? <><p role="alert">{error}</p><button className="button secondary" onClick={() => void reload().catch(() => {})}>重新加载</button></> : <p><Loader2 size={16} className="spin" />正在加载…</p>}</div>;
   const candidates = state.skills.filter(s => s.status === 'candidate');
-  const noticeCount = (state.role === 'manager' ? candidates.length : 0) + Math.min(3, state.activities.length);
   const reminderCount = member.role === 'admin' ? 0 : deriveProjectReminders(state.deals, reminderNow, rules).counts.total
     + reminderApprovalTotal(member.role, approvalPendingCount, candidates.length);
   const props = { state, mutate, notify, onAsk };
@@ -272,8 +270,6 @@ export default function Workbench({member,onLogout}:{member:MemberSession;onLogo
             <ChevronDown size={14} aria-hidden="true" />
           </summary>
           <div className="sidebar-account-actions" id="workbench-account-actions">
-            <button type="button" onClick={() => { if (accountMenu.current) accountMenu.current.open = false; openSearch(); }}><Search size={15} />搜索工作空间</button>
-            <button type="button" onClick={() => { if (accountMenu.current) accountMenu.current.open = false; setMobileMenu(false); setNoticesOpen(true); }}><Bell size={15} />工作动态</button>
             <button type="button" onClick={toggleTheme}>{theme==='light'?<Moon size={15}/>:<Sun size={15}/>} {theme==='light'?'切换深色主题':'切换浅色主题'}</button>
             <button type="button" onClick={requestLogout} disabled={accountBusy}>{accountBusy?<Loader2 size={15} className="spin"/>:<LogOut size={15}/>}退出登录</button>
           </div>
@@ -283,14 +279,38 @@ export default function Workbench({member,onLogout}:{member:MemberSession;onLogo
       {navigation.length > 0 && <nav aria-label="业务导航">{navigation.map(item => {
         const Icon = item.icon;
         const current = section === item.id;
-        return <a key={item.id} {...linkProps(item.id)} className={`nav-item${current ? ' active' : ''}`} aria-current={current?'page':undefined}>
-          <Icon size={18} strokeWidth={1.7} /><span>{item.label}</span>
-          {item.id === 'reminders' && reminderCount > 0 && <small className="sidebar-reminder-count" aria-label={`${reminderCount} 项待处理提醒`}>{reminderCount > 99 ? '99+' : reminderCount}</small>}
-          {item.id === 'contracts' && approvalPendingCount > 0 && <small aria-label={`${approvalPendingCount} 项待审批`}>{approvalPendingCount>99?'99+':approvalPendingCount}</small>}
-          {item.id === 'knowledge' && member.role === 'manager' && candidates.length > 0 && <small>{candidates.length}</small>}
+        const badge = item.id === 'reminders' ? { count: reminderCount, label: '待处理提醒' }
+          : item.id === 'contracts' ? { count: approvalPendingCount, label: '待审批' }
+          : item.id === 'knowledge' && member.role === 'manager' ? { count: candidates.length, label: '待审核 Skill' } : null;
+        const countId = `sidebar-count-${item.id}`;
+        return <a key={item.id} {...linkProps(item.id)} className={`nav-item${current ? ' active' : ''}`} aria-current={current?'page':undefined}
+          aria-label={item.label} aria-describedby={badge?.count ? countId : undefined}>
+          <Icon size={18} strokeWidth={1.7} aria-hidden="true" />
+          <span className="sidebar-business-label" aria-hidden="true">
+            {(item.label.match(/AI|./gu) ?? []).map((token, index) => <span key={index}>{token}</span>)}
+          </span>
+          {badge && badge.count > 0 && <small id={countId} className={item.id === 'reminders' ? 'sidebar-reminder-count' : undefined}>
+            <span aria-hidden="true">{badge.count > 99 ? '99+' : badge.count}</span>
+            <span className="sr-only">{badge.count} 项{badge.label}</span>
+          </small>}
         </a>;
       })}</nav>}
-      {member.role!=='admin'&&<div className="sidebar-recent"><div className="nav-caption">{state.runs.length?'最近 AI 任务':'AI 任务记录'}<button className="icon-button" onClick={()=>navigate('runs')} aria-label="全部 AI 任务记录"><ChevronRight size={13}/></button></div>{state.runs.slice(0,3).map(run=><button key={run.id} onClick={()=>{if(member.role==='admin'){navigate('runs');return;}setConversation([run]);setFailedRequest(null);setChatError('');setChatOpen(true);setMobileMenu(false);}} title={run.query}><span/>{run.query}</button>)}</div>}
+      {member.role !== 'admin' && <div className="sidebar-recent">
+        <div className="nav-caption">
+          <span>{state.runs.length ? '最近 AI 任务' : 'AI 任务记录'}</span>
+          <button type="button" className="icon-button" onClick={() => navigate('runs')} aria-label="全部 AI 任务记录"><ChevronRight size={13} /></button>
+        </div>
+        {state.runs.slice(0, 3).map(run => <button type="button" key={run.id} onClick={() => {
+          setConversation([run]);
+          setFailedRequest(null);
+          setChatError('');
+          setChatOpen(true);
+          setMobileMenu(false);
+        }} title={run.query}>
+          <span className="sidebar-recent-marker" aria-hidden="true" />
+          <span className="sidebar-recent-label">{run.query}</span>
+        </button>)}
+      </div>}
       {managementNavigation.length > 0 && <nav className="sidebar-management" aria-label="系统管理导航">
         {managementNavigation.map(item => {
           const Icon = navigationIcons[item.id] ?? Home;
@@ -327,7 +347,6 @@ export default function Workbench({member,onLogout}:{member:MemberSession;onLogo
     {leaveApproval&&<DiscardChangesDialog title="审批内容尚未提交" onCancel={()=>{setLeaveApproval(false);pendingApprovalLeave.current=null;}} onDiscard={()=>{approvalDirty.current=false;setLeaveApproval(false);const proceed=pendingApprovalLeave.current;pendingApprovalLeave.current=null;proceed?.();}}/>}
     {leaveContract&&<DiscardChangesDialog title="合同草稿尚未保存" onCancel={()=>{setLeaveContract(false);pendingContractLeave.current=null;}} onDiscard={()=>{contractDirty.current=false;setLeaveContract(false);const proceed=pendingContractLeave.current;pendingContractLeave.current=null;proceed?.();}}/>}
     {searchOpen && <Overlay title="搜索工作空间" onClose={() => setSearchOpen(false)} className="search-dialog"><label className="modal-search"><Search size={19} /><input autoFocus placeholder="搜索项目、客户、知识或任务…" aria-label="搜索全部工作空间" value={search} onChange={e => setSearch(e.target.value)} /><kbd>ESC</kbd></label><div className="search-results">{!search.trim() ? <><p className="search-hint">快速前往</p>{navigation.filter(item=>item.id!=='reports'||state.role==='manager').map(n => { const Icon = n.icon; return <button className="search-result" key={n.id} onClick={() => navigate(n.id)}><Icon size={19} /><span><strong>{n.label}</strong></span><ArrowRight size={15} /></button>; })}</> : searchResults.length ? <><p className="search-hint">找到 {searchResults.length} 项结果</p>{searchResults.map((r, i) => <button key={`${r.type}-${r.id}-${i}`} className="search-result" onClick={() => { if (r.view === 'runs') { const run = state.runs.find(x => x.id === r.id); if (run) { setConversation([run]);setChatError('');setFailedRequest(null); setChatOpen(true); setSearchOpen(false); } } else { navigate(r.view, r.view === 'deals' ? r.id : undefined); } }}><span className="search-result-icon">{r.view === 'deals' ? <BriefcaseBusiness size={18} /> : r.view === 'runs' ? <Clock3 size={18} /> : r.view === 'schedule' ? <CalendarDays size={18} /> : <BookOpen size={18} />}</span><span><strong>{r.title}</strong><small>{r.type} · {r.subtitle}</small></span><ArrowRight size={15} /></button>)}</> : <div className="empty-state"><Search size={25} /><h3>没有找到“{search}”</h3><p>可以尝试客户名称、联系人或更短的关键词。</p></div>}</div></Overlay>}
-    {noticesOpen && <Overlay title="工作动态" onClose={() => setNoticesOpen(false)} className="notifications-dialog">{state.role === 'manager' && candidates.length > 0 && <button className="notification-item" onClick={() => navigate('knowledge')}><span className="notification-symbol"><BookOpen size={18} /></span><span><strong>{candidates.length} 项候选 Skill 待你审核</strong></span><ChevronRight size={16} /></button>}{state.activities.slice(0, 8).map(a => <div className="notification-item" key={a.id}><span className="notification-symbol"><Clock3 size={17} /></span><span><strong>{a.title}</strong><p>{a.detail}</p><small>{new Date(a.date).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</small></span></div>)}{noticeCount === 0 && <div className="empty-state"><Bell size={28} /><h3>现在没有新的动态</h3><p>完成任务后，相关记录会出现在这里。</p></div>}</Overlay>}
     {member.role !== 'admin' && !mobileMenu && !chatOpen && <button
       type="button" className="workbench-chat-launcher" aria-label="AI 营销助手" title="AI 营销助手"
       onClick={() => { setConversation([]); setFailedRequest(null); setChatError(''); setChatOpen(true); }}

@@ -7,7 +7,7 @@ import { preferredScrollBehavior } from '../lib/scroll-behavior';
 import { useChatScroll } from '../lib/use-chat-scroll';
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type FormEvent } from 'react';
-import { ArrowDown, ArrowLeft, ArrowUp, BookOpen, Building2, ChevronDown, FileText, Loader2, MoreHorizontal, PanelRight, Plus, Search, Sparkles, X } from 'lucide-react';
+import { ArrowDown, ArrowLeft, ArrowUp, BookOpen, Building2, ChevronDown, FileText, Loader2, MoreHorizontal, PanelLeftClose, PanelLeftOpen, PanelRight, Plus, Search, Sparkles, X } from 'lucide-react';
 import { AGENTS, STAGES, type AgentId, type CustomerProfile, type Deal, type Run, type View, type ViewProps } from '../lib/types';
 import type { MemberSession } from '../lib/member-types';
 import { buildCustomerChatRequest, companyDirectory, customerChatHistory, selectCompanyProject, selectInitialCustomerProject, type CustomerChatRequest, type CustomerDirectoryScope } from '../lib/customer-workspace';
@@ -54,6 +54,7 @@ export function CustomerWorkspace({ state, member, mutate, notify, initialDealId
   const archiveCount = state.deals.filter(item => item.archive).length;
   const [selectedId, setSelectedId] = useState<string | null>(() => selectInitialCustomerProject(companies, initialDealId));
   const [search, setSearch] = useState('');
+  const [directoryCollapsed, setDirectoryCollapsed] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const [mobilePanel, setMobilePanel] = useState<'directory' | 'chat' | 'profile'>(initialDealId ? 'chat' : 'directory');
@@ -254,14 +255,20 @@ export function CustomerWorkspace({ state, member, mutate, notify, initialDealId
     </div></details>
   </>;
 
-  return <div className={`customer-workspace${profileOpen ? ' cw-profile-open' : ''}`} data-mobile-panel={mobilePanel}>
+  const directoryToggleLabel = directoryCollapsed ? '展开企业目录' : '收起企业目录';
+  return <div className={`customer-workspace${profileOpen ? ' cw-profile-open' : ''}`} data-mobile-panel={mobilePanel} data-directory-collapsed={directoryCollapsed}>
     <aside className="cw-directory" aria-label="企业通讯录">
-      <header className="cw-directory-heading"><div><h1>项目跟进</h1><span>{companies.length} 家企业</span></div><button className="button ghost" aria-label="新建企业或项目" title="新建企业或项目" disabled={locked} onClick={() => openForm('create', true)}><Plus size={17} /></button></header>
-      <div className="cw-directory-scope" role="group" aria-label="企业目录范围"><button type="button" aria-pressed={directoryScope === 'active'} disabled={locked} onClick={() => switchDirectory('active')}>当前企业</button><button type="button" aria-pressed={directoryScope === 'archived'} disabled={locked} onClick={() => switchDirectory('archived')}>归档历史<span>{archiveCount}</span></button></div>
-      <div className="cw-directory-search"><label htmlFor={`${id}-search`}><Search size={15} /><span className="sr-only">搜索企业、项目或联系人</span></label><input id={`${id}-search`} placeholder="搜索企业、项目或联系人" value={search} onChange={event => setSearch(event.target.value)} /></div>
-      <nav className="cw-company-list" aria-label="可访问企业">{filtered.map(item => <button key={item.key} className={`cw-company${company?.key === item.key ? ' selected' : ''}`} aria-current={company?.key === item.key ? 'true' : undefined} disabled={locked} onClick={() => selectProject(selectCompanyProject(item, remembered.current[item.key] || (company?.key === item.key ? selectedId : null)))}><span className="cw-company-avatar" aria-hidden="true">{item.name.slice(0, 1)}</span><span className="cw-company-copy"><strong>{item.name}</strong><span>{item.projects.length > 1 ? `${item.projects.length} 个项目` : item.projects[0].dataOrigin === 'research' ? publicSourceLabel(item.projects[0]) : item.projects[0].contact || item.projects[0].industry || '待补充联系人'}</span></span>{item.projects.some(project => drafts[project.id]?.query || drafts[project.id]?.note || failures[project.id]) && <span className="cw-draft-dot" title="有未保存草稿" aria-label="有未保存草稿" />}</button>)}</nav>
-      {!filtered.length && <div className="cw-directory-empty"><Building2 size={24} /><p>{search ? '没有匹配的企业或项目' : directoryScope === 'archived' ? '暂无归档企业' : '暂无当前企业'}</p>{!search && <button className="button secondary" disabled={locked} onClick={() => openForm('create', true)}>新建企业</button>}</div>}
-      <footer className="cw-directory-footer">{directoryScope === 'archived' ? '历史资料与原项目链接继续保留' : member.role === 'sales' ? '显示你有权限访问的企业' : '显示当前团队可访问企业'}</footer>
+      <button type="button" className="button ghost cw-directory-toggle" aria-label={directoryToggleLabel} title={directoryToggleLabel} aria-expanded={!directoryCollapsed} aria-controls={`${id}-directory-content`} onClick={() => setDirectoryCollapsed(value => !value)}>
+        {directoryCollapsed ? <PanelLeftOpen size={18} aria-hidden="true" /> : <PanelLeftClose size={18} aria-hidden="true" />}
+      </button>
+      <div className="cw-directory-content" id={`${id}-directory-content`}>
+        <header className="cw-directory-heading"><div><h1>项目跟进</h1><span>{companies.length} 家企业</span></div><button className="button ghost" aria-label="新建企业或项目" title="新建企业或项目" disabled={locked} onClick={() => openForm('create', true)}><Plus size={17} /></button></header>
+        <div className="cw-directory-scope" role="group" aria-label="企业目录范围"><button type="button" aria-pressed={directoryScope === 'active'} disabled={locked} onClick={() => switchDirectory('active')}>当前企业</button><button type="button" aria-pressed={directoryScope === 'archived'} disabled={locked} onClick={() => switchDirectory('archived')}>归档历史<span>{archiveCount}</span></button></div>
+        <div className="cw-directory-search"><label htmlFor={`${id}-search`}><Search size={15} /><span className="sr-only">搜索企业、项目或联系人</span></label><input id={`${id}-search`} placeholder="搜索企业、项目或联系人" value={search} onChange={event => setSearch(event.target.value)} /></div>
+        <nav className="cw-company-list" aria-label="可访问企业">{filtered.map(item => <button key={item.key} className={`cw-company${company?.key === item.key ? ' selected' : ''}`} aria-current={company?.key === item.key ? 'true' : undefined} disabled={locked} onClick={() => selectProject(selectCompanyProject(item, remembered.current[item.key] || (company?.key === item.key ? selectedId : null)))}><span className="cw-company-avatar" aria-hidden="true">{item.name.slice(0, 1)}</span><span className="cw-company-copy"><strong>{item.name}</strong><span>{item.projects.length > 1 ? `${item.projects.length} 个项目` : item.projects[0].dataOrigin === 'research' ? publicSourceLabel(item.projects[0]) : item.projects[0].contact || item.projects[0].industry || '待补充联系人'}</span></span>{item.projects.some(project => drafts[project.id]?.query || drafts[project.id]?.note || failures[project.id]) && <span className="cw-draft-dot" title="有未保存草稿" aria-label="有未保存草稿" />}</button>)}</nav>
+        {!filtered.length && <div className="cw-directory-empty"><Building2 size={24} /><p>{search ? '没有匹配的企业或项目' : directoryScope === 'archived' ? '暂无归档企业' : '暂无当前企业'}</p>{!search && <button className="button secondary" disabled={locked} onClick={() => openForm('create', true)}>新建企业</button>}</div>}
+        <footer className="cw-directory-footer">{directoryScope === 'archived' ? '历史资料与原项目链接继续保留' : member.role === 'sales' ? '显示你有权限访问的企业' : '显示当前团队可访问企业'}</footer>
+      </div>
     </aside>
 
     <section className="cw-conversation" aria-label="企业 AI 对话">

@@ -56,7 +56,7 @@ test('full workbench opens projects, submits a GEO draft and guards material dra
     assert.deepEqual(request.postDataJSON(),{action:'search',query:'园区办公',mode:'bm25'});
     return route.fulfill({json:{hits:[{id:'chunk-2',title:'园区租赁指南',ordinal:2,libraryName:'招商资料',matchedText:'办公空间需核对租期与交付标准。'}],mode:'bm25',notice:null}});
    }
-   if(pathname==='/api/creative-studio')return route.fulfill({json:{projects:[],modelAvailable:false}});
+   if(pathname==='/api/content-factory')return route.fulfill({json:{campaigns:[],modelAvailable:false}});
    if(pathname==='/api/marketing-materials')return route.fulfill({json:{tasks:[],availability:{presentation:true,image:false,video:false}}});
    return route.fulfill({json:{pendingCount:0}});
   });
@@ -93,12 +93,12 @@ test('full workbench opens projects, submits a GEO draft and guards material dra
   assert.deepEqual(geoActions,['generate','check','save','submit']);
   assert.equal(await page.getByLabel('品牌',{exact:true}).isDisabled(),true);
   await businessNav.getByRole('link',{name:'AI营销素材',exact:true}).click();
-  await page.getByLabel('记录灵感').fill('保留的创作灵感');
+  await page.getByLabel('活动 / 主题',{exact:true}).fill('保留的活动主题');
   await businessNav.getByRole('link',{name:'项目跟进',exact:true}).click();
   await page.getByRole('dialog').waitFor();
   await page.getByRole('button',{name:'继续编辑',exact:true}).click();
   await page.getByRole('dialog').waitFor({state:'hidden'});
-  assert.equal(await page.getByLabel('记录灵感').inputValue(),'保留的创作灵感');
+  assert.equal(await page.getByLabel('活动 / 主题',{exact:true}).inputValue(),'保留的活动主题');
   await page.setViewportSize({width:390,height:844});
   await page.waitForFunction(()=>document.querySelector('.sidebar').getBoundingClientRect().right<=1);
   const shortcuts=await page.locator('.mobile-role-navigation button').evaluateAll(buttons=>buttons.map(button=>({width:button.getBoundingClientRect().width,labelHeight:button.querySelector('span').getBoundingClientRect().height})));

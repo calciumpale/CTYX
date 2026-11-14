@@ -20,7 +20,7 @@ const numericClaims = /(?:[¥￥]\s*\d[\d,.]*|\d[\d,.]*\s*(?:%|折|元|块钱|�
 const invalidOutput = () => new DomainError('模型没有返回可用的创作内容，请调整需求后重试', 502);
 const normalize = (text: string) => text.normalize('NFKC').toLowerCase().replace(/[\s,，]/g, '');
 
-function assertGroundedText(values: string[], source: string): void {
+export function assertGroundedText(values: string[], source: string): void {
   assertNoStudioOutputUrls(values);
   const evidence = new Set([...source.normalize('NFKC').matchAll(numericClaims)].map(match => normalize(match[0])));
   const unsupported = values.some(value => [...value.normalize('NFKC').matchAll(numericClaims)].some(match => !evidence.has(normalize(match[0]))));

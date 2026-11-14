@@ -1,15 +1,13 @@
 'use client';
 
 import { useEffect, useId, useState, type KeyboardEvent } from 'react';
-import { Clapperboard, Sparkles, UserRound } from 'lucide-react';
-import CreativeStudio from './CreativeStudio';
+import { Sparkles, UserRound } from 'lucide-react';
+import ContentFactory from './ContentFactory';
 import DigitalHumanWorkspace from './DigitalHumanWorkspace';
-import MomentsMaterials from './MomentsMaterials';
 import './marketing-materials.css';
 
 const sections = [
-  { id: 'creative', label: '创作与设计', Icon: Sparkles },
-  { id: 'moments', label: 'AI 朋友圈', Icon: Clapperboard },
+  { id: 'factory', label: 'AI 内容工厂', Icon: Sparkles },
   { id: 'digitalhuman', label: '数字人', Icon: UserRound },
 ] as const;
 type Section = typeof sections[number]['id'];
@@ -23,8 +21,8 @@ interface MaterialProps {
 
 export default function MarketingMaterials({ notify, onBusyChange, onDirtyChange }: MaterialProps) {
   const id = useId();
-  const [section, setSection] = useState<Section>('creative');
-  const [visited, setVisited] = useState<SectionFlags>({ creative: true });
+  const [section, setSection] = useState<Section>('factory');
+  const [visited, setVisited] = useState<SectionFlags>({ factory: true });
   const [busyBySection, setBusyBySection] = useState<SectionFlags>({});
   const [dirtyBySection, setDirtyBySection] = useState<SectionFlags>({});
   const busy = Object.values(busyBySection).some(Boolean);
@@ -66,11 +64,8 @@ export default function MarketingMaterials({ notify, onBusyChange, onDirtyChange
           disabled={busy} onClick={() => select(value)} onKeyDown={handleTabKey}><Icon size={15} aria-hidden="true" />{label}</button>)}
       </div>
     </header>
-    <div className="material-panel" role="tabpanel" id={`${id}-creative-panel`} aria-labelledby={`${id}-creative-tab`} hidden={section !== 'creative'}>
-      <CreativeStudio notify={notify} {...signals.creative} />
-    </div>
-    <div className="material-panel" role="tabpanel" id={`${id}-moments-panel`} aria-labelledby={`${id}-moments-tab`} hidden={section !== 'moments'}>
-      {visited.moments && <MomentsMaterials notify={notify} active={section === 'moments'} {...signals.moments} />}
+    <div className="material-panel" role="tabpanel" id={`${id}-factory-panel`} aria-labelledby={`${id}-factory-tab`} hidden={section !== 'factory'}>
+      <ContentFactory notify={notify} {...signals.factory} />
     </div>
     <div className="material-panel" role="tabpanel" id={`${id}-digitalhuman-panel`} aria-labelledby={`${id}-digitalhuman-tab`} hidden={section !== 'digitalhuman'}>
       {visited.digitalhuman && <DigitalHumanWorkspace notify={notify} active={section === 'digitalhuman'} {...signals.digitalhuman} />}

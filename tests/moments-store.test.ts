@@ -145,12 +145,13 @@ test('unattended daily execution saves copy before image work and can complete i
   assert.deepEqual(submissions, [pending.id]);
 });
 
-test('only the exact unattended maintenance POST skips member authentication', () => {
+test('retired Moments endpoints no longer admit member writes or unattended maintenance', () => {
   const path = 'https://workspace.example/api/moments-materials/maintenance';
-  assert.equal(memberRouteAccess(new Request(path, { method: 'POST' })), 'service');
+  assert.equal(memberRouteAccess(new Request(path, { method: 'POST' })), 'member');
   assert.equal(memberRouteAccess(new Request(path)), 'member');
   assert.equal(memberRouteAccess(new Request(path, { method: 'POST', headers: { 'oai-authenticated-user-id': 'tenant' } })), 'member');
-  assert.doesNotThrow(() => assertMemberApi('sales', '/api/moments-materials', 'POST'));
-  assert.throws(() => assertMemberApi('admin', '/api/moments-materials', 'POST'), { status: 403 });
+  for (const role of ['sales', 'manager', 'admin'] as const) {
+    assert.throws(() => assertMemberApi(role, '/api/moments-materials', 'POST'), { status: 403 });
+  }
   assert.throws(() => assertMemberApi('manager', '/api/moments-materials/maintenance', 'POST'), { status: 403 });
 });

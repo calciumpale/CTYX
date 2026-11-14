@@ -12,10 +12,11 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 const digitalHumanFixture="import React,{useEffect,useState} from 'react';export default function DigitalHumanWorkspace({onBusyChange,onDirtyChange}){const [value,setValue]=useState(''),[busy,setBusy]=useState(false);useEffect(()=>{onBusyChange?.(busy);return()=>onBusyChange?.(false);},[busy,onBusyChange]);useEffect(()=>{onDirtyChange?.(!!value.trim());return()=>onDirtyChange?.(false);},[value,onDirtyChange]);return <div className='digital-human-workspace'><label>数字人测试草稿<input value={value} onChange={e=>setValue(e.target.value)}/></label><button onClick={()=>setBusy(!busy)}>{busy?'结束数字人测试请求':'开始数字人测试请求'}</button></div>;}";
 
 const fixture=`import React from 'react';import {createRoot} from 'react-dom/client';import MarketingMaterials from '/app/components/MarketingMaterials.tsx';import MaterialConnectionSettings from '/app/components/MaterialConnectionSettings.tsx';import '/app/form-controls.css';createRoot(document.getElementById('root')).render(<><div style={{height:'100vh'}}><MarketingMaterials notify={()=>{}}/></div><MaterialConnectionSettings/></>);`;
+const studioFixture=`import React from 'react';import {createRoot} from 'react-dom/client';import CreativeStudio from '/app/components/CreativeStudio.tsx';import '/app/globals.css';import '/app/components/marketing-materials.css';createRoot(document.getElementById('root')).render(<div style={{height:'100dvh'}}><div className="material-workspace"><div className="material-panel"><CreativeStudio notify={()=>{}} /></div></div></div>);`;
 async function createFixture(source) {
   const cacheDir = await mkdtemp(path.join(tmpdir(), 'material-ui-vite-'));
   const server = await createServer({
-    resolve: { dedupe: ['react', 'react-dom'] }, cacheDir, optimizeDeps: { include: ['react', 'react-dom/client', 'react/jsx-runtime', 'react/jsx-dev-runtime', 'lucide-react'] },
+    resolve: { dedupe: ['react', 'react-dom'] }, cacheDir, optimizeDeps: { noDiscovery: true, include: ['react', 'react-dom/client', 'react/jsx-runtime', 'react/jsx-dev-runtime', 'lucide-react', 'fflate', 'react-markdown', 'remark-gfm'] },
     root, configFile: false, logLevel: 'error', plugins: [react(), {
       name: 'material-test-fixture',
       // This child boundary must resolve before Vite's existing-file resolver.
@@ -38,7 +39,7 @@ async function createFixture(source) {
 
 test('creative studio connects copy, design, saved versions, and independent template drafts', { timeout: 60000 }, async () => {
   const { chromium } = await import(pathToFileURL(path.join(root, 'tools/douyin-bridge/node_modules/playwright/index.mjs')).href);
-  const { server, origin, cacheDir } = await createFixture(fixture.replace('<MaterialConnectionSettings/>', ''));
+  const { server, origin, cacheDir } = await createFixture(studioFixture);
   let browser;
   try {
     browser = await chromium.launch({ headless: true });
@@ -91,7 +92,6 @@ test('creative studio connects copy, design, saved versions, and independent tem
       return route.fulfill({ json: { project } });
     });
     await page.goto(origin);
-    assert.equal(await page.getByRole('tab', { name: '创作与设计' }).getAttribute('aria-selected'), 'true');
     if (process.env.STUDIO_QA_ARTIFACT_DIR) {
       await page.getByRole('button', { name: '网页设计', exact: true }).waitFor();
       await page.screenshot({ path: path.join(process.env.STUDIO_QA_ARTIFACT_DIR, 'studio-home.png') });
@@ -111,7 +111,6 @@ test('creative studio connects copy, design, saved versions, and independent tem
     await page.getByRole('button', { name: '生成封面图片', exact: true }).click();
     await page.getByRole('alert').filter({ hasText: /fetch|请求/i }).waitFor();
     await page.reload();
-    await page.getByRole('tab', { name: '创作与设计' }).click();
     await page.getByRole('region', { name: '最近项目' }).getByRole('button', { name: /市集第一版/ }).click();
     await page.getByRole('button', { name: '生成封面图片', exact: true }).click();
     await page.getByText('封面图片：提交结果待核对', { exact: false }).waitFor();
@@ -155,7 +154,7 @@ test('creative studio connects copy, design, saved versions, and independent tem
 });
 
 
-test('retired generator gives way to the studio while historical pictures and video still open', { timeout: 60000 }, async () => {
+test('content factory preserves access to historical images, videos and admin connection settings', { timeout: 60000 }, async () => {
   const { chromium } = await import(pathToFileURL(path.join(root, 'tools/douyin-bridge/node_modules/playwright/index.mjs')).href);
   const { server, origin, cacheDir } = await createFixture(fixture);
   let browser;
@@ -175,9 +174,20 @@ test('retired generator gives way to the studio while historical pictures and vi
     const image = task('old-image', 'image', '已保存的园区封面', 'completed', [imageFile]);
     const video = task('old-video', 'video', '已保存的园区短片', 'saving');
     const deck = task('old-deck', 'presentation', '历史演示稿', 'completed');
+    const project = { id: 'old-studio', title: '园区海报早期稿', kind: 'poster', version: 3, updatedAt: date };
     const mediaWrites = [];
     let connectionWrites = 0;
-    await page.route('**/api/creative-studio', route => route.fulfill({ json: { projects: [], modelAvailable: false } }));
+    await page.route('**/api/content-factory', route => route.fulfill({ json: { campaigns: [], modelAvailable: false } }));
+    await page.route('**/api/creative-studio*', route => {
+      assert.equal(route.request().method(), 'GET');
+      const id = new URL(route.request().url()).searchParams.get('id');
+      if (!id) return route.fulfill({ json: { projects: [project], modelAvailable: false } });
+      assert.equal(id, project.id);
+      return route.fulfill({ json: { project: { ...project, document: {
+        title: project.title, kind: 'poster', brief: '', audience: '', channel: '', style: '', boards: [],
+        copy: { title: '园区周末海报', caption: '欢迎参加周末活动。', script: '', coverPrompt: '', shots: [] },
+      } } } });
+    });
     await page.route('**/api/marketing-materials', route => {
       if (route.request().method() === 'GET') return route.fulfill({ json: { tasks: [image, video, deck], availability: { image: false, video: false } } });
       const body = route.request().postDataJSON();
@@ -195,10 +205,12 @@ test('retired generator gives way to the studio while historical pictures and vi
       }, message: '已保存' } });
     });
     await page.goto(origin);
-    assert.deepEqual(await page.getByRole('tab').allTextContents(), ['创作与设计', 'AI 朋友圈', '数字人']);
-    assert.equal(await page.getByRole('tab', { name: '创作与设计' }).getAttribute('aria-selected'), 'true');
+    await page.getByRole('tab', { name: 'AI 内容工厂' }).waitFor();
+    assert.deepEqual(await page.getByRole('tab').allTextContents(), ['AI 内容工厂', '数字人']);
+    assert.equal(await page.getByRole('tab', { name: 'AI 内容工厂' }).getAttribute('aria-selected'), 'true');
     assert.equal(await page.getByLabel('输出类型').count(), 0);
-    await page.getByRole('button', { name: '素材库', exact: true }).click();
+    await page.getByRole('button', { name: '历史素材', exact: true }).click();
+    const history = page.getByRole('dialog', { name: '历史素材', exact: true });
     await page.getByRole('button', { name: /已保存的园区封面/ }).click();
     const detail = page.getByRole('article', { name: '素材详情' });
     await detail.getByRole('img').waitFor();
@@ -211,6 +223,12 @@ test('retired generator gives way to the studio while historical pictures and vi
     await detail.locator('video').waitFor();
     assert.equal(await detail.getByRole('link', { name: '下载短片.mp4' }).getAttribute('href'), videoFile.url);
     assert.deepEqual(mediaWrites, [{ action: 'refresh', taskId: 'old-video', version: 2 }]);
+    const creativeArchive = history.getByRole('region', { name: '历史创作' });
+    await creativeArchive.getByText(project.title, { exact: true }).waitFor();
+    const exportFile = page.waitForEvent('download');
+    await creativeArchive.getByRole('button', { name: '导出', exact: true }).click();
+    assert.equal((await exportFile).suggestedFilename(), '园区海报早期稿.txt');
+    await history.getByRole('button', { name: '关闭', exact: true }).click();
     const fieldHeights = () => page.locator('.material-connection input:not([type=checkbox]),.material-connection select').evaluateAll(
       fields => [...new Set(fields.map(field => Math.round(field.getBoundingClientRect().height)).filter(Boolean))],
     );
@@ -230,7 +248,7 @@ test('retired generator gives way to the studio while historical pictures and vi
   }
 });
 
-test('studio and digital human drafts survive tab changes and propagate the leave guard', { timeout: 60000 }, async () => {
+test('factory and digital human drafts survive tab changes and propagate the leave guard', { timeout: 60000 }, async () => {
   const source = `import React,{useState} from 'react';import {createRoot} from 'react-dom/client';import MarketingMaterials from '/app/components/MarketingMaterials.tsx';
   function Parent(){const [busy,setBusy]=useState(false),[dirty,setDirty]=useState(false);return <><output data-testid="material-state">{busy?'busy':dirty?'dirty':'clean'}</output><MarketingMaterials notify={()=>{}} onBusyChange={setBusy} onDirtyChange={setDirty}/></>};createRoot(document.getElementById('root')).render(<Parent/>);`;
   const { chromium } = await import(pathToFileURL(path.join(root, 'tools/douyin-bridge/node_modules/playwright/index.mjs')).href);
@@ -240,27 +258,28 @@ test('studio and digital human drafts survive tab changes and propagate the leav
     browser = await chromium.launch({ headless: true });
     const page = await browser.newPage();
     page.setDefaultTimeout(8000);
-    await page.route('**/api/creative-studio', route => route.fulfill({ json: { projects: [], modelAvailable: false } }));
+    await page.route('**/api/content-factory', route => route.fulfill({ json: { campaigns: [], modelAvailable: false } }));
     await page.route('**/api/marketing-materials', route => route.fulfill({ json: { tasks: [], availability: {} } }));
     await page.goto(origin);
     const state = value => page.getByTestId('material-state').filter({ hasText: value }).waitFor();
     await state('clean');
-    await page.getByLabel('记录灵感').fill('未完成的品牌构思');
+    const topic = page.getByLabel('活动 / 主题', { exact: true });
+    await topic.fill('未完成的品牌构思');
     await state('dirty');
-    const creative = page.getByRole('tab', { name: '创作与设计', exact: true });
+    const factory = page.getByRole('tab', { name: 'AI 内容工厂', exact: true });
     const digital = page.getByRole('tab', { name: '数字人', exact: true });
-    await creative.focus();
+    await factory.focus();
     await page.keyboard.press('End');
     await page.getByLabel('数字人测试草稿').fill('数字人草稿');
     await page.getByRole('button', { name: '开始数字人测试请求' }).click();
     await state('busy');
-    assert.equal(await creative.isDisabled(), true);
+    assert.equal(await factory.isDisabled(), true);
     await page.getByRole('button', { name: '结束数字人测试请求' }).click();
     await state('dirty');
     await digital.focus();
     await page.keyboard.press('Home');
-    assert.equal(await page.getByLabel('记录灵感').inputValue(), '未完成的品牌构思');
-    await page.getByLabel('记录灵感').fill('');
+    assert.equal(await topic.inputValue(), '未完成的品牌构思');
+    await topic.fill('');
     await state('dirty');
     await digital.click();
     assert.equal(await page.getByLabel('数字人测试草稿').inputValue(), '数字人草稿');

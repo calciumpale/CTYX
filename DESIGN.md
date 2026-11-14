@@ -1,35 +1,35 @@
 ---
 name: AI营销工作台
-description: 深靛紫导航与冷白分栏的销售工作台
+description: 深炭灰导航与浅灰白分栏的紧凑销售工作台
 colors:
-  primary: "#493bd0"
-  primary-hover: "#392ba9"
-  surface: "#feffff"
-  sidebar: "#201b43"
-  text: "#202340"
-  text-secondary: "#525775"
-  text-muted: "#626986"
-  border: "#dde0ef"
-  border-strong: "#bec4da"
-  hover: "#eeeffb"
-  selected: "#e9e5ff"
-  danger: "#a72d43"
-  success: "#20674f"
-  warning: "#86540e"
-  dark-primary: "#bfb2ff"
-  dark-primary-hover: "#d6cdff"
-  dark-surface: "#23243c"
-  dark-sidebar: "#171531"
-  dark-text: "#f2f1ff"
-  dark-text-secondary: "#c8c8e1"
-  dark-text-muted: "#b0b2d1"
-  dark-border: "#404260"
-  dark-border-strong: "#626589"
-  dark-hover: "#30314f"
-  dark-selected: "#403661"
-  dark-danger: "#ff9eaa"
-  dark-success: "#8ad9b7"
-  dark-warning: "#f1c582"
+  primary: "#25272a"
+  primary-hover: "#34393f"
+  surface: "#fff"
+  sidebar: "#242628"
+  text: "#25272a"
+  text-secondary: "#61666e"
+  text-muted: "#61666e"
+  border: "#e1e4e8"
+  border-strong: "#c8cdd4"
+  hover: "#eceff2"
+  selected: "#e4e7eb"
+  danger: "#bf3545"
+  success: "#287c52"
+  warning: "#9a650c"
+  dark-primary: "#eef1f5"
+  dark-primary-hover: "#d4dce6"
+  dark-surface: "#1d2126"
+  dark-sidebar: "#171a1e"
+  dark-text: "#f0f3f7"
+  dark-text-secondary: "#bac2ce"
+  dark-text-muted: "#a3adba"
+  dark-border: "#363e48"
+  dark-border-strong: "#505b68"
+  dark-hover: "#2d343d"
+  dark-selected: "#363e48"
+  dark-danger: "#f07888"
+  dark-success: "#72bd94"
+  dark-warning: "#d8b264"
 typography:
   headline:
     fontFamily: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif
@@ -140,26 +140,26 @@ components:
 
 ## Overview
 
-**Creative North Star: "靛紫导航，冷白工作面"**
+**Creative North Star: "紧凑中性工作台"**
 
-深靛紫主导航连接浅灰紫目录和冷白工作面，主操作、选中与键盘焦点共享靛紫色系。用紧凑列表、清楚的字重、完整细边框和柔和圆角，让内容和下一步操作成为视觉中心。
+采用用户提供的黑白灰分栏参考。深炭灰一级导航保留图标与中文名称，浅冷灰二级目录衔接白色主工作面；灰色选中态、单色图标、细分隔线与柔和圆角构成层级。沿用系统字体、短标题和紧凑列表，让客户、项目和下一步操作成为视觉中心。
 
 界面按销售、管理者、管理员的任务组织；默认展开当前工作，历史、配置和辅助解释按需披露。浅深主题共享语义角色，状态颜色只表达业务含义。
 
 **Key Characteristics:**
-- 冷白工作面与细分隔线
+- 中性表面与细分隔线
 - 紧凑工具栏、列表和按需展开的细节
 - 保留中文可读性、键盘焦点与移动触摸空间
 
 ## Colors
 
-主色为靛紫，冷白内容区与浅灰紫辅助区域分出层次；明暗两套值见 frontmatter。实现来源是 `app/cds-theme.css`，保留的 `--cds-*` 名称是现有组件的兼容接口。
+主色为深灰，白色内容区与浅灰侧栏构成中性底色；明暗两套值见 frontmatter。实现来源是 `app/cds-theme.css`，保留的 `--cds-*` 名称是现有组件的兼容接口。
 
 - **Primary：** `primary` 用于主操作；`primary-hover` 用于悬停。
 - **Neutral：** `surface` / `sidebar` 分开内容与导航；`text`、`text-secondary`、`text-muted` 表达信息层级；`border` / `border-strong`、`hover` / `selected` 表达边界与交互。
 - **Status：** `success`、`warning`、`danger` 表达结果与风险。项目截止日期、结果及用户自定义提醒保留对应业务色与文字标签。
 
-**The Semantic Color Rule.** 靛紫表达操作、选中及信息；绿色、琥珀色与红色表达成功、待处理与风险，并配文字说明。
+**The Semantic Color Rule.** 颜色用于成功、警告、危险和用户设置的项目提醒；普通导航、按钮与选中状态使用中性色。
 
 ## Typography
 
@@ -224,9 +224,7 @@ components:
 提醒及日程沿用紧凑中性 Operate 风格：日期与新建为主，类型筛选和周/月/列表切换为一组工具栏。电脑默认周视图，手机默认列表；日历网格独立横向滚动，页面不横向溢出。选中日期与事件通过背景、字重、图标和完整轮廓区分，不使用装饰性左色条。AI 日程助手按需展开，生成草稿、核对和保存保持清楚的操作边界。保留真实空态、保存失败恢复、并发冲突与草稿离开保护。
 
 
-## 2026-11-08 视觉参考归档
-
-以下为旧版记录；当前以本页顶部的靛紫冷白规范为准。
+## 2026-11-08 视觉参考更新
 
 样式调整前的功能版本已在私有GitHub仓库保存为v1.2，提交a89484d88f82ca99d679ec95296bf895cb48d6b0。
 

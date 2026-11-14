@@ -3,6 +3,8 @@
 import { isMatchingChatRun } from '../lib/chat-request';
 import { upsertChatProgressStep, type ChatProgressStep } from '../lib/chat-progress';
 import { publicSourceLabel, salesReportEligible } from '../lib/sales-project-eligibility';
+import { preferredScrollBehavior } from '../lib/scroll-behavior';
+import { useChatScroll } from '../lib/use-chat-scroll';
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type FormEvent } from 'react';
 import { ArrowDown, ArrowLeft, ArrowUp, BookOpen, Building2, ChevronDown, FileText, Loader2, MoreHorizontal, PanelRight, Plus, Search, Sparkles, X } from 'lucide-react';
@@ -74,15 +76,13 @@ export function CustomerWorkspace({ state, member, mutate, notify, initialDealId
   const [stage, setStage] = useState('');
   const [outcome, setOutcome] = useState('open');
   const [confirmed, setConfirmed] = useState(false);
-  const [showLatest, setShowLatest] = useState(false);
   const localBusy = useRef(false), childBusy = useRef({ intake: false, assessment: false });
   const dirtyRef = useRef(false), lastInitial = useRef(initialDealId);
   const remembered = useRef<Record<string, string>>({});
   const scopeSelection = useRef<Partial<Record<CustomerDirectoryScope, string>>>({});
   const menu = useRef<HTMLDetailsElement>(null);
   const assessment = useRef<HTMLDivElement>(null);
-  const dialog = useRef<HTMLDialogElement>(null), composer = useRef<HTMLTextAreaElement>(null), stream = useRef<HTMLDivElement>(null);
-  const followLatest = useRef(true);
+  const dialog = useRef<HTMLDialogElement>(null), composer = useRef<HTMLTextAreaElement>(null);
   const deal = state.deals.find(item => item.id === selectedId);
   const currentInsight = deal && !assessmentBusy && salesIntelligenceIsCurrent(deal) ? deal.intelligence?.latest?.insight : undefined;
   const intentGrade = currentInsight?.grade;
@@ -100,6 +100,8 @@ export function CustomerWorkspace({ state, member, mutate, notify, initialDealId
   const allRuns = useMemo(() => [...new Map([...state.runs, ...returnedRuns].map(run => [run.id, run])).values()], [state.runs, returnedRuns]);
   const history = useMemo(() => customerChatHistory(allRuns, selectedId), [allRuns, selectedId]);
   const failure = selectedId ? failures[selectedId] : undefined;
+  const scrollKey = `${mobilePanel}:${history.map(run => run.id).join('|')}:${pending?.query ?? ''}:${chatProgress.map(step => `${step.id}:${step.status}`).join('|')}:${failure?.error ?? ''}`;
+  const { containerRef: stream, markUserInput, onScroll, showJump, jumpToLatest, resumeFollowing } = useChatScroll(scrollKey, selectedId ?? undefined);
   const formValue = JSON.stringify(mode === 'profile' ? customerFields : mode === 'lifecycle' ? { stage, outcome, confirmed } : { ...fields, ...(mode === 'create' && member.role === 'manager' ? { ownerId: createOwnerId } : {}) });
   const formDirty = !!mode && (formBaseline ? formValue !== formBaseline : mode === 'create' && formValue !== JSON.stringify({ ...fieldsFor(), ...(member.role === 'manager' ? { ownerId: 'manager' } : {}) }));
   const dirty = Object.values(drafts).some(value => value.query.length > 0 || value.note.length > 0) || Object.keys(failures).length > 0 || intakeDirty || formDirty;
@@ -136,18 +138,12 @@ export function CustomerWorkspace({ state, member, mutate, notify, initialDealId
     if (initialDealId === selectedId) return;
     if (!isBusy() && !mode) {
       const scope = state.deals.some(item => item.id === initialDealId && item.archive) ? 'archived' : 'active';
-      setDirectoryScope(scope); setSelectedId(selectInitialCustomerProject(companyDirectory(state.deals, scope), initialDealId)); setMobilePanel(initialDealId ? 'chat' : 'directory'); followLatest.current = true;
+      setDirectoryScope(scope); setSelectedId(selectInitialCustomerProject(companyDirectory(state.deals, scope), initialDealId)); setMobilePanel(initialDealId ? 'chat' : 'directory');
     }
   }, [initialDealId, state.deals, mode, selectedId]);
   useEffect(() => {
     if (initialIntent === 'followup' && selectedId) { setMobilePanel('chat'); composer.current?.focus(); }
   }, [initialIntent, selectedId]);
-  const historyKey = history.map(run => run.id).join('|');
-  useEffect(() => {
-    if (!followLatest.current) return;
-    const frame = requestAnimationFrame(() => { const element = stream.current; if (element) element.scrollTop = element.scrollHeight; setShowLatest(false); });
-    return () => cancelAnimationFrame(frame);
-  }, [selectedId, historyKey, pending, chatProgress, failure]);
 
   const updateDraft = (values: Partial<Draft>, target = selectedId) => { if (target) setDrafts(current => ({ ...current, [target]: { ...(current[target] || emptyDraft()), ...values } })); };
   const selectProject = (target: string | null) => {
@@ -156,7 +152,7 @@ export function CustomerWorkspace({ state, member, mutate, notify, initialDealId
     if (!target || !state.deals.some(item => item.id === target)) return;
     const ownerCompany = companies.find(item => item.projects.some(project => project.id === target));
     if (ownerCompany) remembered.current[ownerCompany.key] = target;
-    followLatest.current = true; setSelectedId(target); setMobilePanel('chat'); setError('');
+    setSelectedId(target); setMobilePanel('chat'); setError('');
   };
   const switchDirectory = (scope: CustomerDirectoryScope) => {
     if (scope === directoryScope || isBusy()) return;
@@ -164,7 +160,7 @@ export function CustomerWorkspace({ state, member, mutate, notify, initialDealId
     if (selectedId) scopeSelection.current[directoryScope] = selectedId;
     const next = companyDirectory(state.deals, scope);
     const preferred = scopeSelection.current[scope];
-    setDirectoryScope(scope); setSelectedId(selectInitialCustomerProject(next, preferred) || selectInitialCustomerProject(next)); setError(''); followLatest.current = true;
+    setDirectoryScope(scope); setSelectedId(selectInitialCustomerProject(next, preferred) || selectInitialCustomerProject(next)); setError('');
   };
   const openForm = (target: NonNullable<FormMode>, newCompany = false) => {
     if (isBusy()) return;
@@ -199,14 +195,14 @@ export function CustomerWorkspace({ state, member, mutate, notify, initialDealId
         ? { dealId: targetId, version, customerProfile: customerFields }
         : { ...fields, amount: fields.amount.trim() ? Number(fields.amount) : 0, deadline: deadlineFromInput(fields.deadline), needs: fields.needs.split('\n').map(value => value.trim()).filter(Boolean), ...(mode !== 'create' ? { dealId: targetId, version } : member.role === 'manager' ? { ownerId: createOwnerId } : {}) });
       setMode(null); setIntakeDirty(false); notify(mode === 'create' ? '企业项目已创建' : '资料已保存');
-      if (result.dealId && mode === 'create') { setDirectoryScope('active'); followLatest.current = true; setSelectedId(result.dealId); setMobilePanel('chat'); }
+      if (result.dealId && mode === 'create') { setDirectoryScope('active'); setSelectedId(result.dealId); setMobilePanel('chat'); }
     } catch (cause) { setError(cause instanceof Error ? cause.message : '保存失败，请重试。'); }
     finally { finish(); }
   };
   const send = async (request: CustomerChatRequest) => {
     if (!request.query.trim() || !state.deals.some(item => item.id === request.dealId) || !begin()) return;
     // Capture the request once: retries keep both the exact text and the historical context IDs.
-    setPending(request); setChatProgress([]); followLatest.current = true;
+    setPending(request); setChatProgress([]); resumeFollowing();
     setFailures(current => { const next = { ...current }; delete next[request.dealId]; return next; });
     try {
       const result = await mutate('chat', { ...request }, step => setChatProgress(current => upsertChatProgressStep(current, step)));
@@ -264,7 +260,9 @@ export function CustomerWorkspace({ state, member, mutate, notify, initialDealId
       {deal ? <>
         <header className="cw-chat-header"><button className="button ghost cw-mobile-back" aria-label="返回企业通讯录" disabled={locked} onClick={() => setMobilePanel('directory')}><ArrowLeft size={17} /></button><div className="cw-chat-title"><h2>{company?.name || deal.name}</h2><div>{company && company.projects.length > 1 ? <label className="cw-project-select"><span className="sr-only">选择企业项目</span><select value={deal.id} disabled={locked} onChange={event => selectProject(event.target.value)}>{company.projects.map(project => <option key={project.id} value={project.id}>{project.projectName || project.name}</option>)}</select></label> : <span>{deal.projectName || '企业项目'}</span>}{deal.archive && <span className="cw-stage">已归档</span>}{deal.dataOrigin === 'research' && <span className="cw-stage">{publicSourceLabel(deal)}</span>}<span className="cw-stage">{deal.stage}{deal.outcome === 'won' ? ' · 已成单' : deal.outcome === 'lost' ? ' · 已结束' : ''}</span></div></div><div className="cw-header-actions">{member.role !== 'admin' && <AgentMemoryButton key={deal.id} project={{ id: deal.id, label: deal.projectName || deal.name }} disabled={locked} />}<button className="button ghost" aria-label="查看客户资料" title="客户资料与销售分析" aria-expanded={isMobile ? mobilePanel === 'profile' : profileOpen} aria-controls={`${id}-insights`} disabled={locked} onClick={() => { setProfileOpen(value => isMobile || !value); setMobilePanel('profile'); }}><PanelRight size={17} /><span>客户资料</span></button><details className="cw-actions" ref={menu} onKeyDown={event => { if (event.key === 'Escape') { event.currentTarget.open = false; event.currentTarget.querySelector('summary')?.focus(); } }}><summary aria-label="项目操作" title="项目操作"><MoreHorizontal size={18} /></summary><div><button disabled={locked} onClick={() => openForm('edit')}>编辑项目资料</button><button disabled={locked} onClick={() => openForm('profile')}>编辑客户画像</button><button disabled={locked} onClick={() => openForm('create')}>为此企业新增项目</button><button disabled={locked} onClick={() => openForm('lifecycle')}>推进阶段与结果</button>{onNavigate && <button disabled={locked} onClick={() => navigate('contracts')}>查看项目合同</button>}</div></details></div></header>
         {deal.archive && <div className="cw-record-status" role="status"><strong>归档历史</strong><p>{fullDate(deal.archive.at)} · {deal.archive.reason}。历史对话与资料继续保留。</p></div>}
-        <div className="cw-chat-stream" ref={stream} tabIndex={0} aria-label="当前项目对话历史" onScroll={() => { const element = stream.current; if (!element) return; followLatest.current = element.scrollHeight - element.scrollTop - element.clientHeight < 100; setShowLatest(!followLatest.current); }}>
+        <div className="cw-chat-stream" ref={stream} tabIndex={0} aria-label="当前项目对话历史" onScroll={onScroll} onWheel={markUserInput} onTouchMove={markUserInput} onKeyDown={event => {
+          if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key) && event.target === event.currentTarget) markUserInput();
+        }}>
           {!history.length && !pending && <div className="cw-chat-welcome"><div className="cw-welcome-mark"><Sparkles size={24} /></div><h3>{deal.dataOrigin === 'research' && !salesReportEligible(deal) ? '了解' : '一起推进'}{company?.name || deal.name}</h3><p>{deal.dataOrigin === 'research' && !salesReportEligible(deal) ? '先核对公开资料、适用场景与负责部门，记录实际沟通后再补充客户事实。' : '结合当前项目的资料，梳理需求、准备沟通和确认下一步。'}</p><div>{[{ label: '梳理客户需求', query: '请结合当前项目资料梳理客户需求、决策人及待确认信息', agent: 'insight' }, { label: '准备下一次沟通', query: '请为当前项目准备下一次沟通的议程、开场和需确认的问题', agent: 'strategy' }, { label: '分析推进重点', query: '请分析当前项目的推进重点、风险和下一步行动', agent: 'opportunity' }].map(item => <button className="button secondary" key={item.agent} disabled={locked} onClick={() => { updateDraft({ query: item.query, agent: item.agent as AgentId }); composer.current?.focus(); }}>{item.label}</button>)}</div></div>}
           {history.map(run => <article className="cw-chat-turn" key={run.id}>
             <div className="cw-user-message">{run.query}</div>
@@ -288,7 +286,7 @@ export function CustomerWorkspace({ state, member, mutate, notify, initialDealId
           {failure && <div className="cw-failed" role="alert"><p className="cw-failed-query">{failure.request.query}</p><p>{failure.error}</p><button className="button secondary" disabled={locked} onClick={() => void send(failure.request)}>重试本次问题</button><button className="button ghost" disabled={locked} onClick={() => setFailures(current => { const next = { ...current }; delete next[deal.id]; return next; })}>关闭错误提示</button></div>}
         </div>
         <div className="cw-composer-dock">
-          {showLatest && <button className="button secondary cw-jump" onClick={() => { followLatest.current = true; stream.current?.scrollTo({ top: stream.current.scrollHeight, behavior: 'smooth' }); setShowLatest(false); }}><ArrowDown size={14} />最新消息</button>}
+          {showJump && <button className="button secondary cw-jump" onClick={jumpToLatest}><ArrowDown size={14} />最新消息</button>}
           <form className="cw-composer" onSubmit={submitChat}>
             <label htmlFor={`${id}-query`} className="sr-only">向 AI 询问当前项目</label>
             <textarea ref={composer} id={`${id}-query`} value={draft.query} onChange={event => updateDraft({ query: event.target.value })} disabled={locked} maxLength={6000} rows={1} placeholder="询问当前项目…" aria-describedby={`${id}-composer-note`} onKeyDown={event => { if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} />
@@ -305,7 +303,7 @@ export function CustomerWorkspace({ state, member, mutate, notify, initialDealId
         <button className="button ghost cw-mobile-back" aria-label="返回项目对话" disabled={locked} onClick={() => setMobilePanel('chat')}><ArrowLeft size={17} /></button>
         <h2>客户资料</h2>
         {deal && <button type="button" className="button secondary cw-intent-summary" aria-controls={`${id}-assessment`} title="查看 AI 销售分析" onClick={() => {
-          assessment.current?.scrollIntoView({ block: 'start' });
+          assessment.current?.scrollIntoView({ block: 'start', behavior: preferredScrollBehavior() });
           assessment.current?.focus({ preventScroll: true });
         }}>
           <span>{intentLabel}</span>
@@ -326,7 +324,7 @@ export function CustomerWorkspace({ state, member, mutate, notify, initialDealId
     </aside>
 
     {mode && <dialog className="cw-dialog" ref={dialog} aria-labelledby={`${id}-form-title`} onCancel={event => { event.preventDefault(); closeForm(); }}><header><h2 id={`${id}-form-title`}>{mode === 'create' ? '新建企业项目' : mode === 'edit' ? '编辑项目资料' : mode === 'profile' ? '编辑客户画像' : '推进阶段与结果'}</h2><button className="button ghost" aria-label="关闭资料编辑" disabled={locked} onClick={closeForm}><X size={18} /></button></header>
-      {mode === 'create' && <details className="cw-intake-option"><summary>用 AI 录入客户信息<ChevronDown size={14} /></summary><ProjectIntake state={state} mutate={mutate} notify={notify} onBusyChange={onIntakeBusy} onDirtyChange={onIntakeDirty} onCreated={target => { setIntakeDirty(false); if (formDirty) { notify('AI 项目已创建，手动录入草稿仍保留；可以继续保存为另一项目，或取消编辑。'); return; } setMode(null); setDirectoryScope('active'); followLatest.current = true; setSelectedId(target); setMobilePanel('chat'); }} /></details>}
+      {mode === 'create' && <details className="cw-intake-option"><summary>用 AI 录入客户信息<ChevronDown size={14} /></summary><ProjectIntake state={state} mutate={mutate} notify={notify} onBusyChange={onIntakeBusy} onDirtyChange={onIntakeDirty} onCreated={target => { setIntakeDirty(false); if (formDirty) { notify('AI 项目已创建，手动录入草稿仍保留；可以继续保存为另一项目，或取消编辑。'); return; } setMode(null); setDirectoryScope('active'); setSelectedId(target); setMobilePanel('chat'); }} /></details>}
       {mode !== 'lifecycle' ? <form onSubmit={saveForm} aria-busy={locked}><fieldset disabled={locked}>{mode === 'profile' ? <div className="cw-form-grid">{profileLabels.map(([key, label]) => <label className="cw-wide" key={key} htmlFor={`${id}-profile-${key}`}>{label}<textarea id={`${id}-profile-${key}`} rows={2} maxLength={2000} value={customerFields[key]} onChange={event => setCustomerFields({ ...customerFields, [key]: event.target.value })} /></label>)}</div> : fieldsForm(mode === 'create')}</fieldset>{error && <p className="cw-error" role="alert">{error}</p>}<footer><button className="button ghost" type="button" disabled={locked} onClick={closeForm}>取消</button><button className="button primary" disabled={locked || (mode !== 'profile' && (!fields.name.trim() || !fields.projectName.trim()))}>{busy ? <Loader2 size={15} className="spin" /> : null}{mode === 'create' ? '创建项目' : '保存资料'}</button></footer></form> : deal && <div className="cw-lifecycle"><p>当前项目：{deal.projectName || deal.name} · {deal.owner}</p><label htmlFor={`${id}-lifecycle-stage`}>推进阶段<select id={`${id}-lifecycle-stage`} disabled={locked} value={stage} onChange={event => { setStage(event.target.value); setConfirmed(false); }}>{STAGES.map(value => <option key={value}>{value}</option>)}</select></label><label htmlFor={`${id}-outcome`}>项目结果<select id={`${id}-outcome`} disabled={locked} value={outcome} onChange={event => { setOutcome(event.target.value); setConfirmed(false); }}><option value="open">继续推进</option><option value="won">确认成单</option><option value="lost">结束未成单项目</option></select></label><label className="cw-confirm"><input type="checkbox" checked={confirmed} disabled={locked} onChange={event => setConfirmed(event.target.checked)} />我已核实客户事实，确认手动更新此项目</label>{error && <p className="cw-error" role="alert">{error}</p>}<footer><button className="button secondary" disabled={locked || !formTarget || !confirmed || stage === deal.stage} onClick={async () => { if (formTarget && await perform('deal_stage', { ...formTarget, stage, confirmed: true }, '阶段已更新')) setMode(null); }}>更新阶段</button><button className="button primary" disabled={locked || !formTarget || !confirmed || outcome === (deal.outcome || 'open')} onClick={async () => { if (formTarget && await perform('deal_outcome', { ...formTarget, outcome, confirmed: true }, '项目结果已更新')) setMode(null); }}>确认结果</button></footer></div>}
     </dialog>}
     {confirmManualSave && <Overlay className="confirmation-dialog" title="AI 录入草稿尚未保存" onClose={() => setConfirmManualSave(false)}><p>继续创建手动项目将放弃尚未提交的 AI 录入原话。</p><div className="contract-leave-actions"><button data-dialog-initial-focus="true" className="button secondary" onClick={() => setConfirmManualSave(false)}>继续编辑</button><button className="button primary" onClick={() => { setConfirmManualSave(false); void saveForm(undefined, true); }}>放弃 AI 草稿并创建项目</button></div></Overlay>}

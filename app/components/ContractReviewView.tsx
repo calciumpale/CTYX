@@ -4,6 +4,7 @@ import { useEffect, useId, useMemo, useRef, useState, type ChangeEvent, type Key
 import { AlertCircle, ArrowLeft, Check, ChevronDown, ClipboardCheck, Copy, FileCheck2, FileText, History, Loader2, Pencil, Plus, Save, ShieldCheck, Upload, X } from 'lucide-react';
 import { CONTRACT_TYPES, type ContractDocument, type ContractFinding, type ContractFindingStatus, type ContractKind, type ContractParty, type ContractRiskLevel } from '../lib/contract-types';
 import { importContractFile } from '../lib/contract-import';
+import { preferredScrollBehavior } from '../lib/scroll-behavior';
 import type { View, ViewProps } from '../lib/types';
 import './studio.css';
 import './contract-review.css';
@@ -120,12 +121,17 @@ export function ContractReviewView({ state, mutate, notify, initialDealId, initi
   };
   const selectFinding = (finding: ContractFinding, locate = true) => {
     setSelectedFindingId(finding.id);
-    if (!locate) { if (window.matchMedia('(max-width: 900px)').matches) detailPanel.current?.scrollIntoView({ block: 'start' }); return; }
+    if (!locate) {
+      if (window.matchMedia('(max-width: 900px)').matches) {
+        requestAnimationFrame(() => detailPanel.current?.scrollIntoView({ block: 'start', behavior: preferredScrollBehavior() }));
+      }
+      return;
+    }
     setEditing(false);
     requestAnimationFrame(() => {
       const targets = sourcePanel.current?.querySelectorAll<HTMLElement>('[data-finding-ids]');
       const target = [...(targets ?? [])].find(element => element.dataset.findingIds?.split(' ').includes(finding.id));
-      target?.scrollIntoView({ block: 'center', behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+      target?.scrollIntoView({ block: 'center', behavior: preferredScrollBehavior() });
     });
   };
   const setFindingStatus = async (finding: ContractFinding, status: ContractFindingStatus) => {

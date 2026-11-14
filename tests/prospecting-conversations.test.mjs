@@ -217,7 +217,7 @@ test('conversation settings preserve drafts, save the loaded enabled state, and 
     await transcript.evaluate(el => { el.dispatchEvent(new WheelEvent('wheel')); el.scrollTop = 0; el.dispatchEvent(new Event('scroll')); });
     await page.getByRole('button', { name: '查看最新消息', exact: true }).waitFor();
     await page.getByRole('button', { name: '查看最新消息', exact: true }).click();
-    assert.ok(await transcript.evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight < 50));
+    await page.waitForFunction(el => el.scrollHeight - el.scrollTop - el.clientHeight < 50, await transcript.elementHandle());
     const captureDir = process.env.PROSPECT_UI_CAPTURE_DIR;
     if (captureDir) { await mkdir(captureDir, { recursive: true }); await page.screenshot({ path: path.join(captureDir, 'chat-desktop.png'), fullPage: true }); }
     await page.getByRole('button', { name: /已退订客户/ }).click();
@@ -339,7 +339,7 @@ test('verification waits stay one reply while legacy unsent attempts remain insp
     assert.equal(await waiting.getByRole('button').count(), 0);
     assert.equal(await transcript.evaluate(el => el.scrollTop), 0, 'Waiting-state refresh must preserve manual scrolling');
     await page.getByRole('button', { name: '查看最新消息', exact: true }).click();
-    assert.ok(await transcript.evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight < 50));
+    await page.waitForFunction(el => el.scrollHeight - el.scrollTop - el.clientHeight < 50, await transcript.elementHandle());
     const captureDir = process.env.PROSPECT_UI_CAPTURE_DIR;
     if (captureDir) { await mkdir(captureDir, { recursive: true }); await page.screenshot({ path: path.join(captureDir, 'chat-waiting-desktop.png'), fullPage: true }); }
     await page.setViewportSize({ width: 390, height: 844 });

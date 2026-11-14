@@ -30,7 +30,7 @@ function json(response, value) {
 
 const line = event => `${JSON.stringify(event)}\n`;
 
-test('project chat and the assistant show live progress before applying one final answer', { timeout: 60000 }, async t => {
+test('project chat and the assistant show live progress and preserve the project reading position', { timeout: 60000 }, async t => {
   const cacheDir = await mkdtemp(path.join(tmpdir(), 'workbench-chat-progress-'));
   let state = createSeed(now);
   state.role = 'sales';
@@ -52,7 +52,7 @@ test('project chat and the assistant show live progress before applying one fina
     const body = JSON.parse((await Array.fromAsync(request.setEncoding('utf8'))).join(''));
     const gate = gates.get(body.payload?.query);
     posts.push({ method: request.method, action: body.action, query: body.payload?.query, dealId: body.payload?.dealId, accept: request.headers.accept });
-    assert.ok(gate, 'only the two fixture questions may call chat');
+    assert.ok(gate, 'only fixture questions may call chat');
     response.writeHead(200, { 'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-store' });
     response.flushHeaders();
     response.write(line({ type: 'step', step: lookup }));
@@ -81,6 +81,8 @@ test('project chat and the assistant show live progress before applying one fina
     });
     await server.listen();
     browser = await chromium.launch({ headless: true });
+    const projectUrl = `${server.resolvedUrls.local[0]}?view=deals&deal=${dealId}`;
+    const openProject = page => page.goto(projectUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
 
     for (const surface of ['项目对话', 'AI 营销助手']) {
       await t.test(surface, async () => {
@@ -91,7 +93,7 @@ test('project chat and the assistant show live progress before applying one fina
         const gate = { lookup: Promise.withResolvers(), generation: Promise.withResolvers(), answer: `${surface}测试的最终模型回复。` };
         gates.set(query, gate);
         try {
-          await page.goto(`${server.resolvedUrls.local[0]}?view=deals&deal=${dealId}`);
+          await openProject(page);
           if (!project) await page.getByRole('button', { name: 'AI 营销助手', exact: true }).click();
           const view = project ? page.locator('[aria-label="当前项目对话历史"]') : page.getByRole('dialog', { name: 'AI 营销助手' });
           const composer = project ? page.getByRole('textbox', { name: '向 AI 询问当前项目' }) : view.getByRole('textbox', { name: '描述你的任务' });
@@ -132,7 +134,74 @@ test('project chat and the assistant show live progress before applying one fina
         }
       });
     }
-    assert.equal(posts.length, 2);
+
+    for (const reducedMotion of ['no-preference', 'reduce']) {
+      await t.test(`项目对话：${reducedMotion} 时返回最新消息`, async () => {
+        state = { ...state, runs: Array.from({ length: 12 }, (_, index) => ({
+          id: `history-${index}`, query: `历史问题 ${index}`, answer: `这是第 ${index} 条历史回答。`, dealId,
+          agentIds: ['insight'], steps: [], citations: [], mode: 'live',
+          createdAt: new Date(Date.parse(now) - (12 - index) * 60000).toISOString(), duration: 128,
+        })) };
+        const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, reducedMotion });
+        page.setDefaultTimeout(6000);
+        const query = `项目滚动测试 ${reducedMotion}`;
+        const gate = { lookup: Promise.withResolvers(), generation: Promise.withResolvers(), answer: `项目滚动测试的最终答复 ${reducedMotion}` };
+        gates.set(query, gate);
+        try {
+          await openProject(page);
+          const history = page.locator('[aria-label="当前项目对话历史"]');
+          const scroller = await history.elementHandle();
+          const waitForBottom = () => page.waitForFunction(element => element.scrollHeight - element.clientHeight - element.scrollTop < 2, scroller);
+          const waitForLayout = () => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+          const latest = page.getByRole('button', { name: '最新消息', exact: true });
+          const progress = history.getByRole('list', { name: '处理步骤' });
+          await waitForBottom();
+          assert.ok(await history.evaluate(element => element.scrollHeight - element.clientHeight > 240), 'the fixture history overflows');
+          await history.evaluate(element => {
+            const scrollTo = element.scrollTo.bind(element);
+            element.dataset.scrollBehaviors = '';
+            element.scrollTo = (...args) => {
+              element.dataset.scrollBehaviors += `${args[0]?.behavior ?? 'default'},`;
+              scrollTo(...args);
+            };
+          });
+
+          await page.getByRole('textbox', { name: '向 AI 询问当前项目' }).fill(query);
+          await page.getByRole('button', { name: '发送当前项目问题' }).click();
+          await progress.getByText(lookup.detail, { exact: true }).waitFor();
+          await waitForBottom();
+          assert.doesNotMatch(await history.getAttribute('data-scroll-behaviors'), /smooth/, 'following a live update does not animate');
+
+          await history.focus();
+          await page.keyboard.press('Home');
+          await page.waitForFunction(element => element.scrollTop < 2, scroller);
+          await latest.waitFor();
+          gate.lookup.resolve();
+          await progress.getByText(generation.detail, { exact: true }).waitFor();
+          await waitForLayout();
+          assert.ok(await history.evaluate(element => element.scrollTop < 2), 'progress leaves the older messages in view');
+
+          gate.generation.resolve();
+          await history.getByText(gate.answer, { exact: true }).waitFor();
+          await waitForLayout();
+          assert.ok(await history.evaluate(element => element.scrollTop < 2), 'the final answer leaves the older messages in view');
+
+          await history.evaluate(element => { element.dataset.scrollBehaviors = ''; });
+          await latest.focus();
+          await page.keyboard.press('Enter');
+          await waitForBottom();
+          await latest.waitFor({ state: 'hidden' });
+          const behavior = reducedMotion === 'reduce' ? 'instant' : 'smooth';
+          assert.equal(await history.getAttribute('data-scroll-behaviors'), `${behavior},`);
+          assert.equal(await history.evaluate(element => document.activeElement === element), true, 'the keyboard returns to the transcript');
+        } finally {
+          gate.lookup.resolve();
+          gate.generation.resolve();
+          await page.close();
+        }
+      });
+    }
+    assert.equal(posts.length, 4);
   } finally {
     await browser?.close();
     await server?.close();

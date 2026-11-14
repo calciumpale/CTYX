@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { Archive, BadgeCheck, CalendarDays, Check, Clipboard, Download, FileText, Image, ListPlus, Loader2, Plus, RefreshCw, Sparkles, Trash2, Users, Video } from 'lucide-react';
 import { Overlay } from './CoreViews';
+import { preferredScrollBehavior } from '../lib/scroll-behavior';
 import type FactoryHistory from './FactoryHistory';
 import { studioColor, studioLayerStyle } from '../lib/creative-studio-geometry';
 import type { StudioBoard } from '../lib/creative-studio-types';
@@ -54,6 +55,7 @@ export default function ContentFactory({ notify, onBusyChange, onDirtyChange }: 
   const generationInFlight = useRef(false);
   const campaignRead = useRef<AbortController | null>(null);
   const campaignWriteRevision = useRef(0);
+  const channelResults = useRef<HTMLElement>(null);
   const mounted = useRef(false);
   const channelIds = useId();
   const reviewNoteId = useId();
@@ -360,12 +362,16 @@ export default function ContentFactory({ notify, onBusyChange, onDirtyChange }: 
           <button className="button primary" type="submit" disabled={busy || ready === false || !brief.topic.trim() || !brief.channels.length}>
             {operation === 'generate' ? <Loader2 size={16} className="spin" /> : <Sparkles size={16} />}生成全套内容
           </button>
+          {generated && <button className="button secondary cf-view-results" type="button" onClick={() => {
+            channelResults.current?.focus({ preventScroll: true });
+            channelResults.current?.scrollIntoView({ block: 'start', behavior: preferredScrollBehavior() });
+          }}>查看生成结果</button>}
           {ready === false && <p>请先在服务连接中配置并启用大模型。 <button type="button" className="button ghost" disabled={reading || busy} onClick={() => void refresh()}>刷新连接状态</button></p>}
           {operation === 'generate' && <p role="status">正在生成所选渠道的内容…</p>}
         </div>
       </form>
       <div className="cf-output">
-        <section className="cf-results cf-panel" aria-label="渠道文案">
+        <section className="cf-results cf-panel" ref={channelResults} tabIndex={-1} aria-label="渠道文案">
           <div className="cf-panel-head">
             <div><h3><FileText size={16} />渠道文案</h3>{generated && <p>{generated.copy.length} 份文案 · {generated.posters.length} 版海报 · 最近生成 {dateLabel(generated.generatedAt)}</p>}</div>
             {copy && <button className="button secondary" disabled={busy || !canQueueCopy} onClick={() => void copyText(copy)}><Clipboard size={15} />复制</button>}

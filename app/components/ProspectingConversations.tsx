@@ -244,14 +244,7 @@ export function ProspectingConversations({ campaignId, active, view, blocked, pa
   const verificationRecords = messages.filter(isVerificationRecord);
   const latestOutbound = messages.findLast(message => message.direction === 'outbound');
   const transcriptKey = `${active && view === 'chat' ? selectedId : ''}:${messages.map(message => `${message.id}:${message.status}`).join('|')}`;
-  const { containerRef, markUserInput, onScroll, showJump, jumpToLatest } = useChatScroll(transcriptKey);
-  const previousConversation = useRef('');
-  useEffect(() => {
-    if (!active || view !== 'chat' || previousConversation.current === selectedId) return;
-    previousConversation.current = selectedId;
-    const frame = requestAnimationFrame(jumpToLatest);
-    return () => cancelAnimationFrame(frame);
-  }, [active, jumpToLatest, selectedId, view]);
+  const { containerRef, markUserInput, onScroll, showJump, jumpToLatest } = useChatScroll(transcriptKey, selectedId);
   const draft = drafts[selectedId] || '';
   const mutationBlocked = blocked || Boolean(busy);
   const settingsError = policyError(policyDraft);
@@ -436,7 +429,7 @@ export function ProspectingConversations({ campaignId, active, view, blocked, pa
             <div className="prospect-chat-tools">
               <ProspectingMemory memory={conversation.taskMemory} conversationId={conversation.id} tasks={snapshot?.memoryTasks || []}
                 editable={Boolean(campaignId && conversation.campaignId === campaignId && conversation.memoryEditable !== false && conversation.status !== 'closed')}
-                busy={mutationBlocked || !active} resetKey={resetKey} onDirtyChange={setMemoryDirty}
+                busy={mutationBlocked || !active} resetKey={resetKey} onDirtyChange={setMemoryDirty} onInspectSource={markUserInput}
                 onEdit={edit => execute('chatMemoryEdit', { conversationId: conversation.id, ...edit })}
                 onSwitch={(targetCampaignId, bindingVersion) => execute('chatSwitchTask', { conversationId: conversation.id, targetCampaignId, version: conversation.version, bindingVersion }, () => onCampaignChange?.(targetCampaignId))} />
               <div className="prospect-chat-learning">

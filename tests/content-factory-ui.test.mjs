@@ -216,11 +216,28 @@ test('content factory edits channel copy, saves the publication queue, and expor
       assert.equal(await title.inputValue(), expected);
     }
 
+    const viewResults = page.getByRole('button', { name: '查看生成结果', exact: true });
+    assert.equal(await viewResults.isVisible(), false, 'the result shortcut is hidden on desktop');
     const artifacts = process.env.CONTENT_FACTORY_QA_ARTIFACT_DIR;
     if (artifacts) await page.screenshot({ path: path.join(artifacts, 'content-factory-desktop.png'), animations: 'disabled' });
     await page.setViewportSize({ width: 390, height: 844 });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
     if (artifacts) await page.screenshot({ path: path.join(artifacts, 'content-factory-mobile.png'), animations: 'disabled' });
+    await viewResults.waitFor();
+    const resultSection = page.getByRole('region', { name: '渠道文案', exact: true });
+    await resultSection.evaluate(section => {
+      const scrollIntoView = section.scrollIntoView.bind(section);
+      section.scrollIntoView = options => {
+        section.dataset.requestedScroll = JSON.stringify({ block: options.block, behavior: options.behavior });
+        scrollIntoView(options);
+      };
+    });
+    const requestsBeforeShortcut = requests.length;
+    await viewResults.click();
+    assert.deepEqual(JSON.parse(await resultSection.getAttribute('data-requested-scroll')), { block: 'start', behavior: 'smooth' });
+    assert.equal(await resultSection.evaluate(section => section === document.activeElement), true);
+    assert.equal(await wechatTab.getAttribute('aria-selected'), 'true');
+    assert.equal(requests.length, requestsBeforeShortcut);
     await page.getByRole('button', { name: /^发布队列/ }).click();
     await queue.getByText(editedTitle, { exact: true }).waitFor();
     if (artifacts) await page.screenshot({ path: path.join(artifacts, 'content-factory-mobile-queue.png'), animations: 'disabled' });

@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import { StudioRequestError, studioRequest } from '../lib/creative-studio-client';
 import { emptyGeoDocument, GEO_STATUS_LABELS, type GeoArticle, type GeoBrief, type GeoDocument, type GeoObservation, type GeoProject, type GeoQuality, type GeoStatus, type GeoSummary } from '../lib/geo-types';
 import type { MemberSession } from '../lib/member-types';
+import { preferredScrollBehavior } from '../lib/scroll-behavior';
 import GeoKnowledgePicker from './GeoKnowledgePicker';
 import './geo-workspace.css';
 
@@ -192,6 +193,11 @@ export default function GEOWorkspace({ member, notify, onDirtyChange, onBusyChan
   useEffect(() => { onDirtyChange?.(dirty); }, [dirty, onDirtyChange]);
   useEffect(() => { onBusyChange?.(busy); }, [busy, onBusyChange]);
   useEffect(() => () => { onDirtyChange?.(false); onBusyChange?.(false); }, [onDirtyChange, onBusyChange]);
+  useEffect(() => {
+    if (checked && checked.document === draft) {
+      qualityRef.current?.scrollIntoView({ block: 'nearest', behavior: preferredScrollBehavior() });
+    }
+  }, [checked, draft]);
 
   function applyProject(next: GeoProject) {
     setProject(next);
@@ -306,7 +312,6 @@ export default function GEOWorkspace({ member, notify, onDirtyChange, onBusyChan
       const { quality } = await postGeo<{ quality: GeoQuality }>({ action: 'check', document: draft });
       if (!mounted.current) return;
       setChecked({ document: draft, quality });
-      qualityRef.current?.scrollIntoView({ block: 'nearest' });
     });
   }
 

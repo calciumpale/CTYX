@@ -2,6 +2,7 @@
 
 import { useEffect, useId, useState } from 'react';
 import { ChevronDown } from 'lucide-react';
+import { preferredScrollBehavior } from '../lib/scroll-behavior';
 import type { TaskMemoryEvent, TaskMemoryFact, TaskMemoryView } from '../lib/prospecting-memory-types';
 import './prospecting-memory.css';
 
@@ -14,6 +15,7 @@ type Props = {
   editable: boolean;
   busy: boolean;
   resetKey: number;
+  onInspectSource: () => void;
   onEdit: (edit: Edit) => Promise<boolean>;
   onSwitch: (target: string, bindingVersion: number) => Promise<boolean>;
   onDirtyChange: (dirty: boolean) => void;
@@ -30,14 +32,17 @@ function eventLabel(event: TaskMemoryEvent) {
 const historical = (fact: TaskMemoryFact) => ['retracted', 'superseded', 'ignored'].includes(fact.status);
 function date(value: string) { return Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleString('zh-CN', { year: 'numeric', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }) : '时间待确认'; }
 export function prospectMessageId(id: string) { return `prospect-message-${id}`; }
-function jumpToSource(id: string) {
+function jumpToSource(id: string, onInspectSource: () => void) {
   const target = document.getElementById(prospectMessageId(id));
   if (!target) return false;
+  onInspectSource();
   const details = target.closest('details'); if (details) details.open = true;
-  target.scrollIntoView({ block: 'center', behavior: 'instant' }); target.focus({ preventScroll: true }); return true;
+  target.scrollIntoView({ block: 'center', behavior: preferredScrollBehavior() });
+  target.focus({ preventScroll: true });
+  return true;
 }
 
-export function ProspectingMemory({ memory, tasks, conversationId, editable, busy, resetKey, onEdit, onSwitch, onDirtyChange }: Props) {
+export function ProspectingMemory({ memory, tasks, conversationId, editable, busy, resetKey, onInspectSource, onEdit, onSwitch, onDirtyChange }: Props) {
   const prefix = useId();
   // Keep drafts for each task reception even when another conversation is selected.
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
@@ -62,7 +67,7 @@ export function ProspectingMemory({ memory, tasks, conversationId, editable, bus
     if (await onEdit({ factId, operation, sessionVersion, bindingVersion, ...(operation === 'correct' ? { value: value.trim() } : {}) })) clearDraft();
     else setFeedback('保存未完成，草稿已保留。请核对最新记忆后重试。');
   }
-  function source(id: string) { setFeedback(jumpToSource(id) ? '' : '来源消息不在当前已加载记录中，原文与时间保留如下。'); }
+  function source(id: string) { setFeedback(jumpToSource(id, onInspectSource) ? '' : '来源消息不在当前已加载记录中，原文与时间保留如下。'); }
   function renderFact(fact: TaskMemoryFact) {
     return <li key={fact.id} className="prospect-memory-fact">
       <div className="prospect-memory-fact-head"><strong>{labels[fact.key]}</strong><span>{statuses[fact.status]}</span></div>

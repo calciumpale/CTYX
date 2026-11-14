@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useId, useRef, useState } from 'react';
-import { Check, ChevronDown, CircleAlert, FileAudio, Loader2, Play, RotateCcw } from 'lucide-react';
+import { BookmarkPlus, Check, ChevronDown, CircleAlert, FileAudio, Loader2, Play, RotateCcw } from 'lucide-react';
 import type { SpeechResult, SpeechTranscriptionJob } from '../lib/speech-types';
 import './speech-recognition.css';
 
@@ -20,7 +20,14 @@ async function readJob(response: Response): Promise<SpeechTranscriptionJob | nul
   return body.job ?? null;
 }
 
-function TranscriptContent({ result, onSeek }: { result: SpeechResult; onSeek?: (seconds: number) => void }) {
+export type RecordingQuoteSelection = { jobId: string; segmentIndex: number };
+type QuoteControls = {
+  onQuote?: (job: SpeechTranscriptionJob, segmentIndex: number) => void;
+  quotePending?: RecordingQuoteSelection | null;
+  isQuoteSaved?: (job: SpeechTranscriptionJob, segmentIndex: number) => boolean;
+};
+
+function TranscriptContent({ result, job, onSeek, onQuote, quotePending, isQuoteSaved }: QuoteControls & { result: SpeechResult; job: SpeechTranscriptionJob; onSeek?: (seconds: number) => void }) {
   const [visible, setVisible] = useState(12);
   const labels = new Map(result.speakers.map(speaker => [speaker.id, speaker.label]));
   const speakerLabel = (speaker: string) => labels.get(speaker) || (speaker === 'unknown' ? (result.diarization ? '重叠或未能区分的讲话人' : '未区分讲话人') : '未标记讲话人');
@@ -28,7 +35,11 @@ function TranscriptContent({ result, onSeek }: { result: SpeechResult; onSeek?: 
     <div className="recording-transcript-meta"><span>{timeLabel(result.durationSeconds)} 录音</span><span>{result.diarization ? `${result.speakers.length} 位讲话人` : '未区分讲话人'}</span><span>{result.text.length.toLocaleString('zh-CN')} 字</span></div>
     {result.segments.length ? <><ol className="recording-transcript-segments" aria-label="按讲话人分段的录音转写">{result.segments.slice(0, visible).map((segment, index) => <li key={`${segment.start}-${segment.end}-${index}`}>
       {onSeek ? <button type="button" className="recording-transcript-time" onClick={() => onSeek(segment.start)} aria-label={`从 ${timeLabel(segment.start)} 播放录音`} title="从此处回听"><Play size={11} fill="currentColor" />{timeLabel(segment.start)}</button> : <time className="recording-transcript-time">{timeLabel(segment.start)}</time>}
-      <div><div className="recording-segment-heading"><strong>{speakerLabel(segment.speaker)}</strong><time>{timeLabel(segment.start)}–{timeLabel(segment.end)}</time></div><p>{segment.text}</p></div>
+      <div><div className="recording-segment-heading"><strong>{speakerLabel(segment.speaker)}</strong><time>{timeLabel(segment.start)}–{timeLabel(segment.end)}</time></div><p>{segment.text}</p>
+        {onQuote && segment.text.trim() && <button type="button" className="speech-text-button recording-quote-add" disabled={!!quotePending || isQuoteSaved?.(job, index)} onClick={() => onQuote(job, index)}>
+          {quotePending?.jobId === job.id && quotePending.segmentIndex === index ? <><Loader2 size={13} className="spin" aria-hidden="true" />收藏中…</> : isQuoteSaved?.(job, index) ? <><Check size={13} aria-hidden="true" />已收藏</> : <><BookmarkPlus size={13} aria-hidden="true" />收藏为金句</>}
+        </button>}
+      </div>
     </li>)}</ol>{visible < result.segments.length && <button type="button" className="speech-text-button recording-transcript-more" onClick={() => setVisible(current => current + 25)}><ChevronDown size={15} />继续展开转写 <span>已显示 {Math.min(visible, result.segments.length)} / {result.segments.length} 段</span></button>}</> : <p className="recording-transcript-plain">{result.text || '这段录音未识别出有效文字。'}</p>}
     <details className="recording-transcript-original"><summary>识别原文与纠偏记录<span>{result.corrections.length ? `${result.corrections.reduce((sum, item) => sum + item.count, 0)} 处纠偏` : '未触发纠偏'}</span><ChevronDown size={14} /></summary><div>
       {result.corrections.length > 0 && <ul className="recording-corrections" aria-label="热词纠偏记录">{result.corrections.map((item, index) => <li key={`${item.from}-${item.to}-${index}`}><del>{item.from}</del><span aria-hidden="true">→</span><strong>{item.to}</strong><small>{item.count} 处</small></li>)}</ul>}
@@ -37,7 +48,7 @@ function TranscriptContent({ result, onSeek }: { result: SpeechResult; onSeek?: 
   </div>;
 }
 
-export function RecordingTranscript({ dealId, recordingId, onSeek }: { dealId: string; recordingId: string; onSeek?: (seconds: number) => void }) {
+export function RecordingTranscript({ dealId, recordingId, onSeek, onQuote, quotePending, isQuoteSaved }: QuoteControls & { dealId: string; recordingId: string; onSeek?: (seconds: number) => void }) {
   const id = useId();
   const [job, setJob] = useState<SpeechTranscriptionJob | null>(null);
   const [loading, setLoading] = useState(true);
@@ -109,7 +120,7 @@ export function RecordingTranscript({ dealId, recordingId, onSeek }: { dealId: s
     <header className="recording-transcript-heading"><h4 id={`${id}-title`}><FileAudio size={16} />录音转写</h4>{loading && !job ? <span className="recording-transcript-status"><Loader2 size={13} className="spin" />读取状态…</span> : status && <span className="recording-transcript-status" role="status">{active ? <Loader2 size={13} className="spin" /> : job?.status === 'completed' ? <Check size={13} /> : <CircleAlert size={13} />}{status}</span>}{!loading && !active && <button type="button" className="speech-button speech-button-secondary recording-transcript-start" disabled={starting} onClick={() => void start()}>{starting ? <Loader2 size={14} className="spin" /> : job ? <RotateCcw size={14} /> : <FileAudio size={14} />}{starting ? '正在提交…' : job?.status === 'completed' ? '按最新设置重转' : job?.status === 'failed' ? '重新转写' : '转写录音'}</button>}</header>
     {active && <div className="recording-transcript-progress" role="status"><progress max={100} value={Math.max(0, Math.min(100, job.progress))} aria-label="录音转写进度" /><p>{job.message || (job.status === 'queued' ? '录音已进入队列，识别结果将在这里更新。' : '正在识别录音，结果将在这里更新。')}</p><span>原录音已保存。后台继续识别，重新打开时同步到项目。</span></div>}
     {job?.status === 'failed' && <p className="recording-transcript-failed" role="alert">{job.message || '本次转写未完成，原录音仍保留，请重试。'}</p>}
-    {job?.status === 'completed' && job.result && <><p className="recording-transcript-link">{job.linked ? '已关联项目' : job.message || '转写已完成，正在关联到项目。'}</p><TranscriptContent key={job.id} result={job.result} onSeek={onSeek} /></>}
+    {job?.status === 'completed' && job.result && <><p className="recording-transcript-link">{job.linked ? '已关联项目' : job.message || '转写已完成，正在关联到项目。'}</p><TranscriptContent key={job.id} result={job.result} job={job} onSeek={onSeek} onQuote={onQuote} quotePending={quotePending} isQuoteSaved={isQuoteSaved} /></>}
     {job?.status === 'completed' && !job.result && <p className="recording-transcript-failed" role="alert">转写已完成，但结果暂未返回。请重新读取状态。</p>}
     {error && <div className="recording-transcript-error" role="alert"><CircleAlert size={15} /><div><p>{error}</p><button type="button" className="speech-text-button" disabled={starting || loading} onClick={() => { setError(''); setLoading(true); setRefresh(value => value + 1); }}><RotateCcw size={13} />重新读取状态</button></div></div>}
   </div>;

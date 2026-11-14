@@ -1,6 +1,6 @@
 'use client';
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
-import { ArrowDown, ArrowRight, Bell, BookOpen, BriefcaseBusiness, CalendarDays, Check, ChevronDown, ChevronRight, CircleAlert, ClipboardCheck, Clock3, ExternalLink, GitBranch, Globe2, Home, Loader2, LogOut, Menu, MessageSquare, Moon, PanelLeftClose, Presentation, Search, Settings, ShieldCheck, Sun, Users, Video, Workflow, X } from 'lucide-react';
+import { ArrowDown, ArrowRight, Bell, BookOpen, BriefcaseBusiness, CalendarDays, Check, ChevronDown, ChevronRight, CircleAlert, ClipboardCheck, Clock3, ExternalLink, FileAudio, GitBranch, Globe2, Home, Loader2, LogOut, Menu, MessageSquare, Moon, PanelLeftClose, Presentation, Search, Settings, ShieldCheck, Sun, Users, Video, Workflow, X } from 'lucide-react';
 import { useWorkbench } from '../lib/api';
 import { useChatScroll } from '../lib/use-chat-scroll';
 import { upsertChatProgressStep, type ChatProgressStep } from '../lib/chat-progress';
@@ -12,6 +12,7 @@ import { BrandMark, Composer, DiscardChangesDialog, Overlay, shortDate } from '.
 import { ContractCenter } from './ContractCenter';
 import { SalesDailyReport } from './SalesDailyReport';
 import { CustomerWorkspace } from './CustomerWorkspace';
+import { RecordingUploadView } from './RecordingUploadView';
 import { AgentMemoryButton } from './AgentMemoryPanel';
 import { RunsView, SettingsView, TrainingView } from './StudioViews';
 import { BuilderStudio } from './BuilderStudio';
@@ -32,14 +33,14 @@ import GEOWorkspace from './GEOWorkspace';
 import './workbench-sidebar.css';
 
 const navigationIcons: Partial<Record<View, typeof Home>> = {
-  home:Home, deals:BriefcaseBusiness, reminders:Bell, schedule:CalendarDays, meetings:Video, prospecting:Search, geo:Globe2, materials:Presentation,
+  home:Home, deals:BriefcaseBusiness, recordings:FileAudio, reminders:Bell, schedule:CalendarDays, meetings:Video, prospecting:Search, geo:Globe2, materials:Presentation,
   knowledge:BookOpen, training:MessageSquare, approvals:ClipboardCheck, contracts:ClipboardCheck,
   members:Users, rules:ShieldCheck, settings:Settings, studio:Workflow, runs:Clock3,
 };
 
 export default function Workbench({member,onLogout}:{member:MemberSession;onLogout:()=>Promise<void>}) {
   const navigation=workspaceNavigation(member.role).map(item=>({...item,icon:navigationIcons[item.id]??Home}));
-  const { state, loading, error, mutate, reload } = useWorkbench();
+  const { state, loading, error, mutate, reload, uploadFollowup } = useWorkbench();
   const { rules } = useBusinessSettings();
   const [reminderNow, setReminderNow] = useState(() => Date.now());
   useEffect(() => {
@@ -329,6 +330,7 @@ export default function Workbench({member,onLogout}:{member:MemberSession;onLogo
         {view==='reminders'&&member.role!=='admin'&&<ReminderWorkspace state={state} member={member} pendingApprovals={approvalPendingCount} pendingSkills={candidates.length} now={reminderNow} onNavigate={navigate} onRefresh={async () => { await Promise.all([reload(), loadPendingApprovals()]); setReminderNow(Date.now()); }}/>}
         {view==='schedule'&&member.role!=='admin'&&<ScheduleWorkspace state={state} member={member} notify={notify} onNavigate={navigate} onBusyChange={onProjectBusy} onDirtyChange={onProjectDirty}/>}
         {view==='deals'&&member.role!=='admin'&&<CustomerWorkspace member={member} {...props} onReload={reload} onBusyChange={onProjectBusy} onDirtyChange={onProjectDirty} onNavigate={navigate} initialDealId={focusedDeal} initialIntent={projectIntent} onSelectedDealChange={onSelectedDealChange}/>}
+        {view==='recordings'&&member.role!=='admin'&&<RecordingUploadView state={state} uploadFollowup={uploadFollowup} notify={notify} initialDealId={focusedDeal} onNavigateProject={id=>navigate('deals',id)} onBusyChange={onProjectBusy} onDirtyChange={onProjectDirty}/>}
         {(view==='contracts'||view==='approvals')&&member.role!=='admin'&&<ContractCenter {...props} initialTab={view==='approvals'?'approvals':'contracts'} initialDealId={focusedDeal} initialContractId={focusedApprovalContract} initialApprovalId={focusedApprovalId} onNavigate={navigate} onReloadWorkspace={reload} onBusyChange={view==='approvals'?onApprovalBusy:onContractBusy} onDirtyChange={view==='approvals'?onApprovalDirty:onContractDirty} pendingCount={approvalPendingCount}/>}
         {view==='training'&&member.role!=='admin'&&<TrainingView {...props} onPendingChange={onTrainingPendingChange} onMediaStopReady={onTrainingMediaReady}/>}
 

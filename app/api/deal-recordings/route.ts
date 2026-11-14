@@ -32,7 +32,7 @@ export async function POST(request:Request):Promise<Response> {
     let transcription:Awaited<ReturnType<ReturnType<typeof createSpeechTranscriptionService>['start']>>|undefined;
     if(recording){try{transcription=await createSpeechTranscriptionService(env as Cloudflare.Env,{load:loadWorkspace,save:saveWorkspace}).start(userId,role,input.dealId,recording.id,siteOrigin,false,readMemberSalesScope(request));}catch{/* A transcription failure never discards the committed recording. */}}
     try{result.state=projectState(await refreshSalesProject(userId,input.dealId,siteOrigin),role,readMemberSalesScope(request));}catch{/* Derivative analysis cannot turn an already saved recording into a failed upload. */}
-    return Response.json({...result,...(transcription?{transcription}:{}),message:transcription?.status==='failed'?`录音及跟进记录已保存；${transcription.message}`:transcription?'录音及跟进记录已保存，转写任务已提交':result.message},{headers:responseHeaders});
+    return Response.json({...result,...(recording?{recording}:{}),...(transcription?{transcription}:{}),message:transcription?.status==='failed'?`录音及跟进记录已保存；${transcription.message}`:transcription?'录音及跟进记录已保存，转写任务已提交':result.message},{headers:responseHeaders});
   }catch(error){return failure(error);}
 }
 async function read(request:Request,head=false):Promise<Response> {

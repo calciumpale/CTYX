@@ -7,7 +7,7 @@ interface WorkspacePage {
   section?: WorkspaceSection;
 }
 
-export type WorkspaceSection = 'reminders' | 'prospecting' | 'geo' | 'materials' | 'deals' | 'schedule' | 'contracts' | 'training' | 'knowledge';
+export type WorkspaceSection = 'reminders' | 'prospecting' | 'geo' | 'materials' | 'deals' | 'recordings' | 'schedule' | 'contracts' | 'training' | 'knowledge';
 export type ProspectingSection = 'create' | 'screen' | 'handoff' | 'web';
 
 // One registry owns page names, frontend access, and navigation order.
@@ -15,6 +15,7 @@ export type ProspectingSection = 'create' | 'screen' | 'handoff' | 'web';
 const pages: Record<View, WorkspacePage> = {
   home: { title:'概览', roles:['sales','manager','admin'], section:'deals' },
   deals: { title:'项目跟进', roles:['sales','manager'], section:'deals' },
+  recordings: { title:'上传录音', roles:['sales','manager'], section:'recordings' },
   reminders: { title:'提醒', roles:['sales','manager'], section:'reminders' },
   schedule: { title:'日程', roles:['sales','manager'], section:'schedule' },
   meetings: { title:'会议', roles:['sales','manager','admin'], section:'deals' },
@@ -44,8 +45,8 @@ export function workspaceTitle(view: View, role: MemberRole): string {
 }
 
 export function workspaceNavigation(role: MemberRole): Array<{id:View;label:string;mobileLabel?:string}> {
-  const mobile: Partial<Record<View,string>>={prospecting:'获客',materials:'素材',deals:'项目',training:'带练'};
-  return (['reminders','prospecting','geo','materials','deals','schedule','contracts','training','knowledge'] as const)
+  const mobile: Partial<Record<View,string>>={prospecting:'获客',materials:'素材',deals:'项目',recordings:'录音',training:'带练'};
+  return (['reminders','prospecting','geo','materials','deals','recordings','schedule','contracts','training','knowledge'] as const)
     .filter(id => canOpenWorkspaceView(role,id))
     .map(id => ({id,label:workspaceTitle(id,role),...(mobile[id]?{mobileLabel:mobile[id]}:{})}));
 }
@@ -92,7 +93,7 @@ export function readWorkspaceRoute(search: string, role: MemberRole): WorkspaceR
   const contractId = identifier(params.get('contract'));
   const approvalId = identifier(params.get('approval'));
   const focus = identifier(params.get('focus'));
-  if (['deals','meetings','contracts','approvals'].includes(view) && dealId) route.dealId = dealId;
+  if (['deals','recordings','meetings','contracts','approvals'].includes(view) && dealId) route.dealId = dealId;
   if ((view === 'contracts'||view==='approvals') && contractId) route.contractId = contractId;
   if (view === 'approvals' && approvalId) route.approvalId = approvalId;
   if ((view === 'knowledge' || view === 'talktracks') && focus) route.focus = focus;

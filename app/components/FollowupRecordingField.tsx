@@ -2,8 +2,9 @@
 
 import { useEffect, useId, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { ArrowDownToLine, AudioLines, Loader2, Upload, X } from 'lucide-react';
+import type { SpeechTranscriptionJob } from '../lib/speech-types';
 import type { FollowupRecording } from '../lib/types';
-import { RecordingTranscript } from './RecordingTranscript';
+import { RecordingTranscript, type RecordingQuoteSelection } from './RecordingTranscript';
 import './followup-recordings.css';
 
 const MAX_RECORDING_BYTES = 20 * 1024 * 1024;
@@ -80,9 +81,30 @@ export function FollowupRecordingField({ file, onChange, disabled = false, child
   </div>;
 }
 
-export function FollowupRecordingPlayer({ dealId, recording }: { dealId: string; recording: FollowupRecording }) {
+export function FollowupRecordingPlayer({ dealId, recording, onQuote, quotePending, isQuoteSaved, sourcePosition }: {
+  dealId: string;
+  recording: FollowupRecording;
+  onQuote?: (job: SpeechTranscriptionJob, segmentIndex: number) => void;
+  quotePending?: RecordingQuoteSelection | null;
+  isQuoteSaved?: (job: SpeechTranscriptionJob, segmentIndex: number) => boolean;
+  sourcePosition?: { seconds: number } | null;
+}) {
   const audio = useRef<HTMLAudioElement>(null);
   const src = `/api/deal-recordings?dealId=${encodeURIComponent(dealId)}&id=${encodeURIComponent(recording.id)}`;
+  useEffect(() => {
+    const element = audio.current;
+    if (!element || !sourcePosition || !Number.isFinite(sourcePosition.seconds)) return;
+    const seekToQuote = () => {
+      try { element.currentTime = Math.min(element.duration || Infinity, Math.max(0, sourcePosition.seconds)); }
+      catch { /* The player still allows manual playback when seeking is unsupported. */ }
+    };
+    if (element.readyState > 0) seekToQuote();
+    else {
+      element.addEventListener('loadedmetadata', seekToQuote, { once: true });
+      element.load();
+    }
+    return () => element.removeEventListener('loadedmetadata', seekToQuote);
+  }, [sourcePosition]);
   const seek = (seconds: number) => {
     const element = audio.current;
     if (!element) return;
@@ -92,6 +114,6 @@ export function FollowupRecordingPlayer({ dealId, recording }: { dealId: string;
   return <section className="followup-recording-card followup-recording-saved" aria-label="已保存的跟进录音">
     <div className="followup-recording-file"><AudioLines size={17} /><div><strong title={recording.name}>{recording.name}</strong><span>{fileSize(recording.size)}</span></div><a className="followup-recording-download" href={src} download={recording.name} aria-label={`下载录音：${recording.name}`}><ArrowDownToLine size={14} /><span>下载</span></a></div>
     <RecordingAudio src={src} name={recording.name} audioRef={audio} />
-    <RecordingTranscript dealId={dealId} recordingId={recording.id} onSeek={seek} />
+    <RecordingTranscript dealId={dealId} recordingId={recording.id} onSeek={seek} onQuote={onQuote} quotePending={quotePending} isQuoteSaved={isQuoteSaved} />
   </section>;
 }

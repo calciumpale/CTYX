@@ -44,6 +44,7 @@ export function assertMemberApi(role:MemberRole,pathname:string,method:string):v
   if(path==='/api/workspace-members'){if(role==='admin'&&['GET','POST','PATCH'].includes(verb))return;return denied();}
   if(path==='/api/speech-settings'){if(verb==='GET'||verb==='POST'&&role!=='sales')return;return denied();}
   if(path==='/api/sales-reports'){if(role==='manager'&&['GET','POST'].includes(verb))return;return denied();}
+  if(path==='/api/recording-quotes'){if(role!=='admin'&&['GET','POST','DELETE'].includes(verb))return;return denied();}
   if(['/api/deal-recordings','/api/recording-transcriptions','/api/training-voice'].includes(path)){if(role!=='admin'&&['GET','HEAD','POST','DELETE'].includes(verb))return;return denied();}
   return denied();
 }

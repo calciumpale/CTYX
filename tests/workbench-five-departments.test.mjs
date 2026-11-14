@@ -27,6 +27,24 @@ test('full workbench opens projects, submits a GEO draft and guards material dra
   page.on('pageerror',e=>errors.push(e.message));
   const state=createSeed('2026-11-08T00:00:00Z');state.role='sales';state.viewer={name:'ZS',team:'招商',salesId:'sales-1'};
   const deal={...state.deals[0],id:'converted-project',name:'人工核实企业',projectName:'公开来源项目',dataOrigin:'research',contact:'',summary:'公开来源，客户需求待核实',needs:[],notes:[],amount:0,health:0,deadline:'2026-11-13T02:00:00Z',outcome:'open'};
+  const wav=Buffer.alloc(44+7*16000);
+  wav.write('RIFF',0); wav.writeUInt32LE(wav.length-8,4); wav.write('WAVEfmt ',8); wav.writeUInt32LE(16,16);
+  wav.writeUInt16LE(1,20); wav.writeUInt16LE(1,22); wav.writeUInt32LE(8000,24); wav.writeUInt32LE(16000,28);
+  wav.writeUInt16LE(2,32); wav.writeUInt16LE(16,34); wav.write('data',36); wav.writeUInt32LE(wav.length-44,40);
+  const recording={id:'fixture-audio',name:'项目跟进.wav',size:wav.length,mimeType:'audio/wav'};
+  const recordedNote='本地测试跟进备注';
+  const speakers=[{id:'speaker-1',label:'讲话人 1'},{id:'speaker-2',label:'讲话人 2'}];
+  const segments=[
+   {start:0,end:3,speaker:speakers[0].id,text:'先核对交付清单。'},
+   {start:3,end:7,speaker:speakers[1].id,text:'请把物业要求写进周五的方案。'},
+  ];
+  const transcriptText=segments.map(segment=>segment.text).join('\n');
+  const job={id:'fixture-transcript',dealId:deal.id,recordingId:recording.id,status:'completed',linked:true,progress:100,message:'',createdAt:'2026-11-14T02:00:00Z',updatedAt:'2026-11-14T02:00:00Z',result:{text:transcriptText,rawText:transcriptText,segments,speakers,diarization:true,durationSeconds:7,model:'fixture',hotwordVersion:1,corrections:[]}};
+  const savedQuote={id:'fixture-quote',dealId:deal.id,projectName:deal.projectName,recordingId:recording.id,recordingName:recording.name,speaker:speakers[1].label,start:3,end:7,text:segments[1].text,createdAt:job.createdAt,canDelete:true};
+  const quoteRequests=[];
+  const removedQuotes=[];
+  let quotes=[];
+  let uploads=0;
   const recentQuery='核对园区项目的交付边界、申请条件和下一次跟进安排';
   state.deals=[];state.runs=[{id:'recent-task',query:recentQuery,answer:'已整理待核对事项。',agentIds:[],steps:[],citations:[],mode:'live',createdAt:'2026-11-14T02:00:00Z',duration:100}];
   let reads=0;
@@ -34,8 +52,46 @@ test('full workbench opens projects, submits a GEO draft and guards material dra
   const geoActions=[];
   const article={title:'如何核对园区办公条件',summary:'提前核对园区交付条件。',markdown:'## 交付条件\n核对租期与交付标准 [1]。',faq:[{question:'要核对什么？',answer:'租期与交付标准 [1]。'}]};
   await page.route('**/api/**',async route=>{
-   const request=route.request(),pathname=new URL(request.url()).pathname;
+   const request=route.request(),url=new URL(request.url()),pathname=url.pathname;
    if(pathname==='/api/workbench'){reads++;return route.fulfill({json:{...state,revision:reads,deals:reads>1?[deal]:[]}});}
+   if(pathname==='/api/deal-recordings'){
+    if(request.method()!=='POST'){
+     const range=request.headers().range?.match(/^bytes=(\d+)-(\d*)$/);
+     const start=range?Number(range[1]):0;
+     const end=range?.[2]?Math.min(Number(range[2]),wav.length-1):wav.length-1;
+     const media=wav.subarray(start,end+1);
+     const headers={'Accept-Ranges':'bytes','Content-Length':String(media.length)};
+     if(range) headers['Content-Range']=`bytes ${start}-${end}/${wav.length}`;
+     return route.fulfill({status:range?206:200,contentType:'audio/wav',headers,body:media});
+    }
+    uploads++;
+    const body=await new Response(request.postDataBuffer(),{headers:{'Content-Type':request.headers()['content-type']}}).formData();
+    assert.equal(body.get('dealId'),deal.id);
+    assert.equal(body.get('text'),recordedNote);
+    assert.equal(body.get('audio').name,recording.name);
+    assert.equal(body.get('audio').size,wav.length);
+    deal.notes=[{id:'fixture-audio-note',text:recordedNote,author:'ZS',date:job.createdAt,recording}];
+    return route.fulfill({json:{state:{...state,revision:++reads,deals:[deal]},recording,message:'录音已保存'}});
+   }
+   if(pathname==='/api/recording-transcriptions'){
+    assert.equal(request.method(),'GET');
+    assert.equal(url.searchParams.get('dealId'),deal.id);
+    assert.equal(url.searchParams.get('id'),recording.id);
+    return route.fulfill({json:{job}});
+   }
+   if(pathname==='/api/recording-quotes'){
+    if(request.method()==='GET') return route.fulfill({json:{quotes}});
+    if(request.method()==='DELETE'){
+     const id=url.searchParams.get('id');
+     removedQuotes.push(id);
+     quotes=quotes.filter(quote=>quote.id!==id);
+     return route.fulfill({json:{ok:true}});
+    }
+    assert.equal(request.method(),'POST');
+    quoteRequests.push(request.postDataJSON());
+    quotes=[savedQuote];
+    return route.fulfill({json:{quote:savedQuote}});
+   }
    if(pathname==='/api/web-prospects')return route.fulfill({json:{tasks:[],leads:[{id:'lead',taskId:'search',version:2,status:'qualified',projectId:deal.id,sourceUrl:'https://example.com/public',title:'人工核实企业公开资料',excerpt:'公开摘要',platform:'other',query:'餐饮',region:'嘉兴',regionMatch:'unverified',retrievedAt:'2026-11-08T00:00:00Z'}]}});
    if(pathname==='/api/geo'){
     if(request.method()==='GET')return route.fulfill({json:{projects:[],modelAvailable:true}});
@@ -103,6 +159,7 @@ test('full workbench opens projects, submits a GEO draft and guards material dra
   const businessNames=await businessNav.getByRole('link').locator('.sidebar-business-label').allTextContents();
   assert.deepEqual(businessNames.slice(0,2),['提醒','AI获客']);
   assert.equal(businessNames.indexOf('AI营销素材'),businessNames.indexOf('GEO')+1);
+  assert.equal(businessNames.indexOf('上传录音'),businessNames.indexOf('项目跟进')+1);
   const businessLabels=await businessNav.getByRole('link').locator('.sidebar-business-label').evaluateAll(labels=>labels.map(label=>{
    const {left,width}=label.getBoundingClientRect();
    const textRange=document.createRange();
@@ -135,6 +192,53 @@ test('full workbench opens projects, submits a GEO draft and guards material dra
   await reminders.getByRole('button',{name:'打开项目',exact:true}).click();
   await page.locator('.cw-chat-title h2').getByText(deal.name,{exact:true}).waitFor();
   assert.equal(new URL(page.url()).searchParams.get('deal'),deal.id);
+  const recordingsLink=businessNav.getByRole('link',{name:'上传录音',exact:true});
+  await recordingsLink.click();
+  await page.getByRole('heading',{name:'上传录音',exact:true}).waitFor();
+  assert.equal(new URL(page.url()).searchParams.get('view'),'recordings');
+  assert.equal(await recordingsLink.getAttribute('aria-current'),'page');
+  await page.getByRole('combobox',{name:'关联项目',exact:true}).selectOption(deal.id);
+  await page.getByRole('textbox',{name:'跟进备注',exact:false}).fill(recordedNote);
+  const recordingInput=page.getByLabel('选择跟进录音文件',{exact:true});
+  const saveRecording=page.getByRole('button',{name:'保存到项目',exact:true});
+  assert.match(await recordingInput.getAttribute('accept'),/\.wav/);
+  assert.equal(await saveRecording.isDisabled(),true);
+  await recordingInput.setInputFiles({name:'错误格式.txt',mimeType:'text/plain',buffer:Buffer.from('fixture')});
+  await page.getByRole('alert').getByText(/请选择.*音频/).waitFor();
+  assert.equal(await saveRecording.isDisabled(),true);
+  assert.equal(uploads,0);
+  await recordingInput.setInputFiles({name:recording.name,mimeType:recording.mimeType,buffer:wav});
+  await saveRecording.click();
+  await page.getByRole('heading',{name:'录音已保存',exact:true}).waitFor();
+  assert.equal(uploads,1);
+  const turns=page.getByRole('list',{name:'按讲话人分段的录音转写',exact:true}).getByRole('listitem');
+  await turns.nth(1).getByText(segments[1].text,{exact:true}).waitFor();
+  assert.deepEqual(await turns.locator('.recording-segment-heading > strong').allTextContents(),speakers.map(speaker=>speaker.label));
+  await turns.nth(1).getByRole('button',{name:'收藏为金句',exact:true}).click();
+  await turns.nth(1).getByRole('button',{name:'已收藏',exact:true}).waitFor();
+  const quotesTab=page.getByRole('tab',{name:'金句广场',exact:true});
+  await quotesTab.click();
+  const square=page.getByRole('region',{name:'金句广场',exact:true});
+  await square.getByText(savedQuote.text,{exact:true}).waitFor();
+  assert.equal(await square.getByText(savedQuote.speaker,{exact:false}).isVisible(),true);
+  assert.deepEqual(quoteRequests,[{dealId:deal.id,recordingId:recording.id,jobId:job.id,segmentIndex:1}]);
+  await square.getByRole('button',{name:'打开录音',exact:true}).click();
+  assert.equal(await page.getByRole('tab',{name:'录音转写',exact:true}).getAttribute('aria-selected'),'true');
+  const audio=page.locator('.followup-recording-saved audio');
+  await audio.waitFor();
+  await page.waitForFunction(() => Math.abs(document.querySelector('.followup-recording-saved audio')?.currentTime - 3)<0.05,undefined,{timeout:5000});
+  await turns.nth(1).getByText(segments[1].text,{exact:true}).waitFor();
+  await quotesTab.click();
+  const removeQuote=square.getByRole('button',{name:'移除金句',exact:true});
+  await removeQuote.click();
+  const removeDialog=page.getByRole('dialog',{name:'移除金句',exact:true});
+  await removeDialog.getByRole('button',{name:'取消',exact:true}).click();
+  assert.deepEqual(removedQuotes,[]);
+  assert.equal(await square.getByText(savedQuote.text,{exact:true}).isVisible(),true);
+  await removeQuote.click();
+  await removeDialog.getByRole('button',{name:'确认移除',exact:true}).click();
+  await square.getByText('暂无金句',{exact:true}).waitFor();
+  assert.deepEqual(removedQuotes,[savedQuote.id]);
   await businessNav.getByRole('link',{name:'GEO',exact:true}).click();
   await page.locator('.geo-workspace').waitFor();
   assert.equal(new URL(page.url()).searchParams.get('view'),'geo');
@@ -166,7 +270,10 @@ test('full workbench opens projects, submits a GEO draft and guards material dra
   await page.waitForFunction(()=>document.querySelector('.sidebar').getBoundingClientRect().right<=1);
   await page.locator('.topbar').getByRole('button',{name:'搜索工作空间',exact:true}).click();
   await page.getByRole('dialog',{name:'搜索工作空间',exact:true}).getByRole('button',{name:'关闭',exact:true}).click();
-  await page.getByRole('navigation',{name:'快捷导航',exact:true}).getByRole('button',{name:'提醒',exact:true}).waitFor();
+  const mobileNav=page.getByRole('navigation',{name:'快捷导航',exact:true});
+  await mobileNav.getByRole('button',{name:'提醒',exact:true}).waitFor();
+  const shortcutNames=await mobileNav.getByRole('button').evaluateAll(buttons=>buttons.map(button=>button.getAttribute('aria-label')));
+  assert.equal(shortcutNames.indexOf('上传录音'),shortcutNames.indexOf('项目跟进')+1);
   const shortcuts=await page.locator('.mobile-role-navigation button').evaluateAll(buttons=>buttons.map(button=>({width:button.getBoundingClientRect().width,labelHeight:button.querySelector('span').getBoundingClientRect().height})));
   assert.ok(shortcuts.every(button=>button.width>=44&&button.labelHeight<=20),JSON.stringify(shortcuts));
   await page.screenshot({path:'.superpowers/sdd/2026-11-08-five-departments/artifacts/workbench-material-mobile.png'});

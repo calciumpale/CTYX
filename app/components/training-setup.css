@@ -66,24 +66,29 @@
 .training-profile-editor-scroll { flex: 1; }
 @supports not selector(::details-content) {
   .training-profile-editor-scroll { max-block-size: 104px; }
-  .training-setup-person:has(.training-setup-voice) .training-profile-editor-scroll { max-block-size: 68px; }
 }
 .training-profile-editor-scroll:focus-visible, .training-profile-review-scroll:focus-visible { outline: 2px solid var(--cds-clay); outline-offset: -2px; }
 .training-profile-editor-scroll .training-profile-form { margin-top: 9px; }
 .training-profile-editor-scroll .training-profile-error, .training-profile-review-scroll .training-profile-error { margin: 8px 0; }
 .training-setup .training-profile-fields, .training-setup .training-profile-background { grid-template-columns: minmax(0, 1fr); }
 .training-setup .training-profile-advanced { margin-bottom: 0; }
-.training-setup-voice { flex: none; border-top: 1px solid var(--cds-border); margin-top: 5px; padding-top: 8px; }
+.training-setup-voice { min-width: 0; margin-top: 8px; }
 .training-setup-voice .training-voice-select { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px; max-width: none; }
 .training-setup-voice .training-voice-select > span { width: auto; }
 .training-setup-voice .training-voice-select select { min-width: 0; max-width: 100%; }
 .studio-training-view .training-setup-help { display: flex; align-items: flex-start; gap: 6px; margin: 0; color: var(--cds-text-secondary); font-size: 12px; line-height: 1.65; }
 .training-setup-help svg { flex: none; margin-top: 2px; }
+.training-setup-voice .training-setup-help { flex-wrap: wrap; align-items: center; gap: 0 6px; }
+.training-setup-voice .training-setup-help > span { min-width: 0; overflow-wrap: anywhere; }
+.training-setup-voice .training-setup-help > button { padding-inline: 6px; }
 
 .training-setup-mode .training-mode-switch { align-self: flex-start; max-width: 100%; flex-wrap: wrap; }
 .training-setup-mode .training-mode-switch > button,
 .training-setup-mode .training-transport-switch > button { min-height: var(--control-height); }
-.training-setup-mode .training-transport-switch { flex-wrap: wrap; margin: 10px 0 0; }
+.training-setup-mode .training-transport-switch { align-self: flex-start; flex-wrap: wrap; gap: 4px; margin: 8px 0 0; border: 0; }
+.training-setup-mode .training-transport-switch > button { padding: 0 8px; border: 0; border-radius: var(--control-radius); color: var(--cds-text-secondary); font-size: 12px; }
+.training-setup-mode .training-transport-switch > button:is(:hover:not(:disabled), [aria-pressed="true"]) { background: var(--cds-fill-ghost-selected); color: var(--cds-text-primary); }
+.training-setup-mode .training-transport-switch > button[aria-pressed="true"] { font-weight: 550; }
 .studio-training-view .training-setup-start .training-profile-heading h3 { margin: 0; color: var(--cds-text-primary); font-size: 14px; line-height: 1.5; }
 .training-setup-start .training-profile-preview { margin-top: 10px; padding: 12px 0 0; }
 .training-setup-start .training-profile-person { margin-bottom: 13px; }

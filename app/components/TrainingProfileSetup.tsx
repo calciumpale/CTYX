@@ -130,11 +130,11 @@ export function TrainingProfileSetup({ scenario, voice, busy, error, modelConnec
           </form>
         </div>
       </details>
-      {voiceSelection && <div className="training-setup-voice">{voiceSelection}</div>}
     </section>
     <section className="training-setup-card training-setup-mode" aria-labelledby={`${id}-mode-heading`}>
       <h2 id={`${id}-mode-heading`}>选陪练方式</h2>
       {modeSelection}
+      {voiceSelection && <div className="training-setup-voice">{voiceSelection}</div>}
     </section>
     <section className="training-setup-card training-setup-start" aria-labelledby={`${id}-start-heading`}>
       <h2 id={`${id}-start-heading`}>开始陪练</h2>

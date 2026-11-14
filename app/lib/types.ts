@@ -6,7 +6,7 @@ import type { TrainingProfile } from './training-profile.ts';
 import type { TrainingDimensionId } from './training-evaluation.ts';
 
 export type Role = 'sales' | 'manager';
-export type View = 'home' | 'deals' | 'reminders' | 'schedule' | 'training' | 'knowledge' | 'talktracks' | 'contracts' | 'approvals' | 'reports' | 'studio' | 'runs' | 'settings' | 'members' | 'rules' | 'meetings' | 'prospecting' | 'geo' | 'materials';
+export type View = 'home' | 'deals' | 'recordings' | 'reminders' | 'schedule' | 'training' | 'knowledge' | 'talktracks' | 'contracts' | 'approvals' | 'reports' | 'studio' | 'runs' | 'settings' | 'members' | 'rules' | 'meetings' | 'prospecting' | 'geo' | 'materials';
 export type AgentId = 'insight' | 'strategy' | 'opportunity' | 'risk' | 'coach';
 export const AGENTS: {id: AgentId; name: string; description: string; starter: string}[] = [
   {id:'insight',name:'AI 客户洞察',description:'读懂客户，找到沟通的切入点',starter:'帮我梳理当前项目的客户需求和关键决策人'},
@@ -34,6 +34,6 @@ export interface TrainingFeedback { id?: TrainingDimensionId; label:string; scor
 export interface TrainingSession {id:string;scenario:string;customer:string;profile?:TrainingProfile;mode?:'demo'|'live';messages:{role:'user'|'assistant';content:string;replySuggestion?:string}[];status:'active'|'completed';voiceTurnIds?:string[];score?:number;evaluationMode?:'live'|'rubric';feedback?:TrainingFeedback[];createdAt:string;}
 export interface Activity {id:string;title:string;detail:string;date:string;type:string;}
 export interface WorkbenchState {salesOwners?:{salesId:string;displayName:string}[];contracts?:ContractDocument[];transcripts?:CallTranscript[];talkTracks?:TalkTrack[];feedbackJobs?:FeedbackJob[];talkTrackUsages?:TalkTrackUsage[];talkTrackPolicy?:TalkTrackPolicy;revision:number;role:Role;viewer:{name:string;team:string;salesId:string};dataMode:'example';model:{connected:boolean;name:string};deals:Deal[];skills:Skill[];knowledge:Knowledge[];workflows:Workflow[];runs:Run[];trainingSessions:TrainingSession[];activities:Activity[];}
-export interface ApiResult {intake?:{status:'needs_info'|'duplicate';question?:string;draft?:IntakeExtraction;existing?:{id:string;name:string;projectName:string}[]};contractId?:string;state:WorkbenchState;run?:Run;session?:TrainingSession;dealId?:string;message?:string;}
+export interface ApiResult {recording?:FollowupRecording;intake?:{status:'needs_info'|'duplicate';question?:string;draft?:IntakeExtraction;existing?:{id:string;name:string;projectName:string}[]};contractId?:string;state:WorkbenchState;run?:Run;session?:TrainingSession;dealId?:string;message?:string;}
 export type Mutate = (action:string,payload?:Record<string,unknown>,onChatProgress?:(step:import('./chat-progress.ts').ChatProgressStep)=>void) => Promise<ApiResult>;
 export interface ViewProps {state:WorkbenchState;mutate:Mutate;notify:(message:string)=>void;onAsk:(query:string,agentId?:AgentId,dealId?:string,talkTrackIds?:string[])=>void;}

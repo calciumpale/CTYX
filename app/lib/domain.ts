@@ -14,8 +14,9 @@ import type { TalkTrack } from './talktrack-types.ts';
 import { AGENTS, STAGES } from './types.ts';
 import type { AgentId, ApiResult, CompanyProfile, CustomerProfile, Deal, FlowNode, FollowupRecording, Knowledge, PublishedWorkflow, Role, Run, Skill, TraceStep, TrainingSession, WorkbenchState, Workflow } from './types.ts';
 import { defaultTrainingProfile, validateTrainingProfile } from './training-profile.ts';
-import { demoTrainingGenerate } from './training-dialogue.ts';
+import { demoTrainingGenerate, type TrainingGenerationOutput } from './training-dialogue.ts';
 import type { TrainingGenerationInput } from './training-dialogue.ts';
+import { evaluateTraining, type TrainingEvaluator } from './training-evaluation.ts';
 import type { AgentMemoryContext } from './agent-memory-types.ts';
 import { CUSTOMER_DEMAND_INSTRUCTION, CUSTOMER_INSIGHT_INSTRUCTION, CUSTOMER_RECORD_INSTRUCTION, customerDemandEvidence, customerInsightEvidence, formatCustomerDemand, formatCustomerEvidenceQuote, formatCustomerInsightResult, formatCustomerRecordResult, isCustomerDemandFollowup, isCustomerDemandQuestion, isCustomerInsightQuestion, isCustomerProfileRefreshRequest, isCustomerProfileRequest, isCustomerRecordFollowup, isCustomerRecordQuestion, supportsDemand, type CustomerInsightEvidence } from './customer-insight.ts';
 import { isPropertyQuestion, parsePropertyPageRequest } from './property-query.ts';
@@ -37,7 +38,7 @@ type StoredState=WorkbenchState & {_access?:Record<string,string>;_workflowRuns?
 type GenerationKnowledge=Knowledge & {applicability?:string[]};
 export interface GenerationInput {salesScope?:SalesScope;query:string;agentId:AgentId;projectApprovals?:ProjectApprovalContext[];deal?:Deal;deals:Deal[];knowledge:GenerationKnowledge[];instruction?:string;previous?:string;history?:{query:string;answer:string}[];contractReviews?:{title:string;reviewedAt?:string;analysis:ContractAnalysis}[];purpose?:'chat'|'workflow';customerInsightEvidence?:CustomerInsightEvidence[];publicCompanyEvidence?:CustomerInsightEvidence[];agentMemory?:AgentMemoryContext;}
 export interface GenerationOutput {answer:string;mode:'demo'|'live';modelName?:string;groundingRejected?:boolean;evidenceIds?:string[];}
-export interface ActionContext {onChatProgress?:(step:ChatProgressStep)=>void;requireNarrative?:boolean;searchCompanyExpansion?:(company:Pick<Deal,'name'>)=>Promise<CompanyProfile>;searchCompanyRecords?:typeof searchCompanyRecords;searchCompanyPenalties?:(company:Pick<Deal,'name'>,query:string)=>Promise<Awaited<ReturnType<typeof searchJinghaiCompanyPenalties>>|undefined>;salesScope?:SalesScope;salesOwners?:SalesOwner[];prepareKnowledge?:(request:KnowledgeAgentRequest,scope?:{knowledgeIds:string[];knowledge:Knowledge[]})=>Promise<KnowledgePreparedContext>;actorName?:string;extractIntake?:(text:string)=>Promise<IntakeExtraction>;now?:string;generate?:(input:GenerationInput)=>Promise<GenerationOutput>;generateInsight?:(input:GenerationInput)=>Promise<GenerationOutput>;trainingGenerate?:(input:TrainingGenerationInput)=>Promise<GenerationOutput>;enrichCompany?:(deal:Deal)=>Promise<CompanyProfile>;trustedRecording?:FollowupRecording;reviewContract?:(document:ContractDocument,deal:Deal)=>Promise<ContractAnalysis>;contractModelName?:string;approveTalkTrack?:(track:TalkTrack)=>Promise<void>;retrieveTalkTracks?:(query:string)=>Promise<TalkTrack[]>;retrieveManagedKnowledge?:(query:string)=>Promise<Knowledge[]>;recallAgentMemory?:(query:string,projectId?:string)=>Promise<AgentMemoryContext|undefined>;}
+export interface ActionContext {onChatProgress?:(step:ChatProgressStep)=>void;requireNarrative?:boolean;searchCompanyExpansion?:(company:Pick<Deal,'name'>)=>Promise<CompanyProfile>;searchCompanyRecords?:typeof searchCompanyRecords;searchCompanyPenalties?:(company:Pick<Deal,'name'>,query:string)=>Promise<Awaited<ReturnType<typeof searchJinghaiCompanyPenalties>>|undefined>;salesScope?:SalesScope;salesOwners?:SalesOwner[];prepareKnowledge?:(request:KnowledgeAgentRequest,scope?:{knowledgeIds:string[];knowledge:Knowledge[]})=>Promise<KnowledgePreparedContext>;actorName?:string;extractIntake?:(text:string)=>Promise<IntakeExtraction>;now?:string;generate?:(input:GenerationInput)=>Promise<GenerationOutput>;generateInsight?:(input:GenerationInput)=>Promise<GenerationOutput>;trainingGenerate?:(input:TrainingGenerationInput)=>Promise<TrainingGenerationOutput>;trainingEvaluate?:TrainingEvaluator;enrichCompany?:(deal:Deal)=>Promise<CompanyProfile>;trustedRecording?:FollowupRecording;reviewContract?:(document:ContractDocument,deal:Deal)=>Promise<ContractAnalysis>;contractModelName?:string;approveTalkTrack?:(track:TalkTrack)=>Promise<void>;retrieveTalkTracks?:(query:string)=>Promise<TalkTrack[]>;retrieveManagedKnowledge?:(query:string)=>Promise<Knowledge[]>;recallAgentMemory?:(query:string,projectId?:string)=>Promise<AgentMemoryContext|undefined>;}
 const agentIds=new Set(AGENTS.map(item=>item.id));
 const nodeTypes=new Set(['start','intent','knowledge','agent','review','output']);
 const managerActions=new Set(['skill_review','knowledge_add','workflow_save','workflow_publish','workflow_review']);
@@ -924,21 +925,11 @@ function trimRunHistory(state:StoredState) {
   if(state._workflowRuns)for(const id of Object.keys(state._workflowRuns))if(!state.runs.some(run=>run.id===id))delete state._workflowRuns[id];
 }
 
-function trainingFeedback(session:TrainingSession):NonNullable<TrainingSession['feedback']> {
-  const replies=session.messages.filter(item=>item.role==='user').map(item=>item.content);
-  const rubric=[
-    {label:'需求追问',patterns:[/为什么|原因|顾虑|担心/,/预算|成本|金额/,/时间|开业|装修|什么时候/,/需求|优先|比较|谁|决策/],suggestion:'用开放问题确认装修周期、预算与决策标准。'},
-    {label:'共情倾听',patterns:[/理解|了解|明白/,/您|贵司/,/顾虑|担心|考虑|重视/,/确认|听起来|是否|对吗/],suggestion:'先复述客户最在意的条件，再给出回应。'},
-    {label:'价值表达',patterns:[/总成本|整体|长期|比较/,/交付|装修|客流|配套|通勤|空间/,/方案|选择|对比|安排/,/依据|清单|数据|核算|书面/],suggestion:'比较整体成本和交付价值，并说明需要补充的依据。'},
-    {label:'推进动作',patterns:[/明天|周|今天|下午|上午|日期|下次/,/确认|约|沟通|一起/,/整理|发送|提供|提交|清单/,/负责人|我会|我们|我来/],suggestion:'约定明确时间、责任人和可交付的下一步。'},
-    {label:'合规边界',patterns:[/审批|审核|授权/,/需要|核实|核对|确认/,/政策|合同|条件|书面/,/不能|不得|不承诺|以.*为准|还需要/],suggestion:'明确未审批条件不可承诺，说明审批与书面反馈路径。'},
-  ];
-  return rubric.map(item=>{const matched=replies.find(reply=>item.patterns.some(pattern=>pattern.test(reply)));const joined=replies.join('\n');let score=item.patterns.filter(pattern=>pattern.test(joined)).length*5;if(item.label==='合规边界'&&/我保证|肯定能批|直接给您|不用审批/.test(joined))score=0;return {label:item.label,score,evidence:matched?`规则演示依据：“${matched.slice(0,160)}”${score===0?'；检测到越权保证表达。':''}`:'本次尚无符合该维度关键词的回答，规则无法确认。',suggestion:item.suggestion};});
-}
-async function trainingResponse(input:TrainingGenerationInput,context:ActionContext):Promise<GenerationOutput> {
-  const generated=context.trainingGenerate?await context.trainingGenerate(structuredClone(input)):demoTrainingGenerate(input);
+async function trainingResponse(input:TrainingGenerationInput,context:ActionContext):Promise<TrainingGenerationOutput> {
+  const generated=context.trainingGenerate?await context.trainingGenerate({ ...structuredClone(input), messages: input.messages.map(({role,content}) => ({role,content})) }):demoTrainingGenerate(input);
   if(!generated||typeof generated.answer!=='string'||!generated.answer.trim()||generated.answer.length>2000||!['live','demo'].includes(generated.mode))fail('客户回复格式或长度异常，请重试',502);
-  return {...generated,answer:generated.answer.trim()};
+  const suggestion = typeof generated.replySuggestion === 'string' ? generated.replySuggestion.trim() : '';
+  return {...generated,answer:generated.answer.trim(),replySuggestion:suggestion.length <= 240 && suggestion ? suggestion : undefined};
 }
 
 /** Returns an unfiltered canonical state; only projectState may be sent to a client. */
@@ -1081,7 +1072,7 @@ async function executeActionInternal(original:WorkbenchState,role:Role,action:st
       const scenario=text(payload.scenario,'训练场景',1000);
       let profile;try {profile=validateTrainingProfile(payload.profile);}catch(error){fail(error instanceof TypeError?error.message:'客户画像格式不正确');}
       const opening=await trainingResponse({scenario,profile,messages:[]},context);
-      session={id:uid('training'),scenario,profile,mode:opening.mode,customer:`${profile.name} · ${profile.role}`,messages:[{role:'assistant',content:opening.answer}],status:'active',createdAt:now};
+      session={id:uid('training'),scenario,profile,mode:opening.mode,customer:`${profile.name} · ${profile.role}`,messages:[{role:'assistant',content:opening.answer,...(opening.replySuggestion ? { replySuggestion:opening.replySuggestion } : {})}],status:'active',createdAt:now};
       state.trainingSessions.unshift(session);mark(state,session.id,role);message=opening.mode==='live'?'客户对练已开始':'演示对练已开始';break;
     }
     case 'training_reply': {
@@ -1093,12 +1084,16 @@ async function executeActionInternal(original:WorkbenchState,role:Role,action:st
       const profile=session.profile??defaultTrainingProfile(session.scenario);
       const messages:TrainingSession['messages']=[...session.messages,{role:'user',content:answer}];
       const response=await trainingResponse({scenario:session.scenario,profile,messages},context);
-      session.mode=response.mode;session.messages=[...messages,{role:'assistant',content:response.answer}];
+      session.mode=response.mode;session.messages=[...messages,{role:'assistant',content:response.answer,...(response.replySuggestion ? { replySuggestion:response.replySuggestion } : {})}];
       if(voiceTurnId)session.voiceTurnIds=[...(session.voiceTurnIds??[]),voiceTurnId];message='客户已回应';break;
     }
     case 'training_finish': {
       session=find(state.trainingSessions,payload.sessionId,'训练');owned(state,session.id,role);if(session.status!=='active')fail('本次训练已经结束',409);
-      session.status='completed';session.feedback=trainingFeedback(session);session.score=session.feedback.reduce((total,item)=>total+item.score,0);activity(state,role,'培训复盘已生成',`${session.scenario} · 规则演示评分${session.score}/100；不代表真实能力或业绩预测。`,'training',now);message='规则演示复盘已保存';break;
+      const review=await evaluateTraining(session,context.trainingEvaluate);
+      Object.assign(session,review,{status:'completed'});
+      const scoring=review.evaluationMode==='live'?'AI 评价':'规则评价';
+      activity(state,role,'带练复盘已生成',`${session.scenario} · ${scoring} ${review.score}/100。`,'training',now);
+      message='带练复盘已保存';break;
     }
     default:fail('不支持的操作');
   }

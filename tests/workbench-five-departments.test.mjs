@@ -104,15 +104,15 @@ test('full workbench opens projects, submits a GEO draft and guards material dra
   assert.deepEqual(businessNames.slice(0,2),['提醒','AI获客']);
   assert.equal(businessNames.indexOf('AI营销素材'),businessNames.indexOf('GEO')+1);
   const businessLabels=await businessNav.getByRole('link').locator('.sidebar-business-label').evaluateAll(labels=>labels.map(label=>{
-   const {left,right}=label.getBoundingClientRect();
-   const leading=label.firstElementChild?.getBoundingClientRect();
-   const trailing=label.lastElementChild?.getBoundingClientRect();
-   return {label:label.textContent,left,right,textLeft:leading?.left,textRight:trailing?.right,justify:getComputedStyle(label).justifyContent};
+   const {left,width}=label.getBoundingClientRect();
+   const textRange=document.createRange();
+   textRange.selectNodeContents(label);
+   return {left,width,textWidth:textRange.getBoundingClientRect().width,segments:label.childElementCount};
   }));
   assert.equal(businessLabels.length,businessNames.length);
   const [firstLabel]=businessLabels;
-  assert.ok(businessLabels.every(label=>Math.abs(label.left-firstLabel.left)<=1&&Math.abs(label.right-firstLabel.right)<=1),JSON.stringify(businessLabels));
-  assert.ok(businessLabels.every(label=>label.justify==='space-between'&&Math.abs(label.textLeft-label.left)<=1&&Math.abs(label.textRight-label.right)<=1),'labels distribute their text to both edges');
+  assert.ok(businessLabels.every(label=>Math.abs(label.left-firstLabel.left)<=1),JSON.stringify(businessLabels));
+  assert.ok(businessLabels.every(label=>label.segments===0&&Math.abs(label.width-label.textWidth)<=1),'labels keep normal spacing');
   const recent=sidebar.getByRole('button',{name:recentQuery,exact:true});
   assert.equal(await recent.getAttribute('title'),recentQuery);
   const recentLabel=await recent.locator('.sidebar-recent-label').evaluate(label=>{

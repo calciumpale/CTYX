@@ -1,0 +1,73 @@
+.training-setup {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  align-items: start;
+}
+
+.training-setup-card {
+  min-width: 0;
+  padding: clamp(16px, 2vw, 22px);
+  border: 1px solid var(--cds-border);
+  border-radius: var(--cds-panel-radius);
+  background: var(--cds-surface-2);
+}
+
+.studio-training-view .training-setup-card > h2 {
+  margin: 0 0 14px;
+  color: var(--cds-text-primary);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.training-setup .studio-scenario-grid { grid-template-columns: minmax(0, 1fr); gap: 5px; }
+.training-setup .studio-scenario { min-height: var(--control-height); padding: 6px 9px; }
+.training-setup .studio-scenario > svg { color: var(--cds-text-primary); }
+.training-setup .studio-scenario:not(.studio-scenario-selected) { border-color: transparent; }
+
+.training-setup-person .training-profile-person { margin-bottom: 8px; }
+.training-setup-person .training-profile-avatar { width: 38px; height: 38px; color: var(--cds-text-secondary); }
+.training-setup-person .training-profile-person strong { font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
+.training-setup-person .training-profile-person small { margin-inline-start: 5px; color: var(--cds-text-secondary); font-size: 12px; font-weight: 400; }
+.training-setup .training-profile-editor { min-width: 0; }
+.training-setup .training-profile-editor > summary {
+  display: flex;
+  align-items: center;
+  width: fit-content;
+  min-height: var(--control-height);
+  gap: 7px;
+  list-style: none;
+  color: var(--cds-text-primary);
+  font-size: 13px;
+  cursor: pointer;
+}
+.training-profile-editor > summary::-webkit-details-marker { display: none; }
+.training-profile-editor[open] > summary svg { transform: rotate(180deg); }
+.training-setup .training-profile-fields, .training-setup .training-profile-background { grid-template-columns: minmax(0, 1fr); }
+.training-setup .training-profile-advanced { margin-bottom: 0; }
+.training-setup-voice { border-top: 1px solid var(--cds-border); margin-top: 5px; padding-top: 11px; }
+.training-setup-voice .training-voice-select { display: grid; gap: 6px; }
+.training-setup-voice .training-voice-select select { min-width: 0; max-width: 100%; }
+.studio-training-view .training-setup-help { display: flex; align-items: flex-start; gap: 6px; margin: 0; color: var(--cds-text-secondary); font-size: 12px; line-height: 1.65; }
+.training-setup-help svg { flex: none; margin-top: 2px; }
+
+.training-setup-mode .training-mode-switch { max-width: 100%; flex-wrap: wrap; }
+.training-setup-mode .training-mode-switch > button,
+.training-setup-mode .training-transport-switch > button { min-height: var(--control-height); }
+.training-setup-mode .training-transport-switch { flex-wrap: wrap; margin: 10px 0 0; }
+.studio-training-view .training-setup-start .training-profile-heading h3 { margin: 0; color: var(--cds-text-primary); font-size: 14px; line-height: 1.5; }
+.training-setup-start .training-profile-preview { margin-top: 10px; padding: 12px 0 0; }
+.training-setup-start .training-profile-person { margin-bottom: 13px; }
+.studio-training-view .training-setup-start .training-profile-person h3 { font-size: 14px; }
+.training-setup-start .training-profile-ready { padding: 11px 0; }
+.training-setup-start .training-profile-actions { flex-wrap: wrap; gap: 6px 8px; padding-top: 9px; }
+.training-setup-start .training-profile-actions .studio-btn { min-height: var(--control-height); }
+
+.studio-training-view .studio-aside-heading h2 { color: var(--cds-text-primary); }
+.studio-training-view .studio-training-aside { min-height: 0; }
+.studio-training-view .studio-training-aside .studio-empty { min-height: 150px; }
+
+@media (max-width: 600px) {
+  .training-setup { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+}

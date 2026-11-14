@@ -69,6 +69,27 @@ test('customer details header shows the current intent score and links to the ex
     await header.getByRole('heading', { name: '客户资料' }).waitFor();
     assert.match(await header.innerText(), /尚未评估/);
 
+    const editProject = page.getByRole('button', { name: '编辑', exact: true });
+    const projectDialog = page.getByRole('dialog', { name: '编辑项目资料', exact: true });
+    await editProject.click();
+    const centered = () => projectDialog.evaluate(dialog => {
+      const rect = dialog.getBoundingClientRect();
+      return Math.abs(rect.left + rect.width / 2 - innerWidth / 2) <= 1
+        && Math.abs(rect.top + rect.height / 2 - innerHeight / 2) <= 1;
+    });
+    assert.equal(await centered(), true);
+    await page.setViewportSize({ width: 1384, height: 480 });
+    assert.equal(await centered(), true);
+    assert.equal(await projectDialog.evaluate(dialog => dialog.scrollHeight > dialog.clientHeight), true);
+    await projectDialog.getByRole('button', { name: '保存资料', exact: true }).scrollIntoViewIfNeeded();
+    assert.equal(await projectDialog.getByRole('button', { name: '保存资料', exact: true }).evaluate(button => {
+      const dialog = button.closest('dialog');
+      return button.getBoundingClientRect().bottom <= dialog.getBoundingClientRect().bottom;
+    }), true);
+    await page.keyboard.press('Escape');
+    await projectDialog.waitFor({ state: 'hidden' });
+    await page.setViewportSize({ width: 1440, height: 900 });
+
     const directory = page.getByRole('complementary', { name: '企业通讯录', exact: true });
     const collapseDirectory = directory.getByRole('button', { name: '收起企业目录', exact: true });
     const restoreDirectory = directory.getByRole('button', { name: '展开企业目录', exact: true });

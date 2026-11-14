@@ -286,9 +286,7 @@ export default function Workbench({member,onLogout}:{member:MemberSession;onLogo
         return <a key={item.id} {...linkProps(item.id)} className={`nav-item${current ? ' active' : ''}`} aria-current={current?'page':undefined}
           aria-label={item.label} aria-describedby={badge?.count ? countId : undefined}>
           <Icon size={18} strokeWidth={1.7} aria-hidden="true" />
-          <span className="sidebar-business-label" aria-hidden="true">
-            {(item.label.match(/AI|./gu) ?? []).map((token, index) => <span key={index}>{token}</span>)}
-          </span>
+          <span className="sidebar-business-label" aria-hidden="true">{item.label}</span>
           {badge && badge.count > 0 && <small id={countId} className={item.id === 'reminders' ? 'sidebar-reminder-count' : undefined}>
             <span aria-hidden="true">{badge.count > 99 ? '99+' : badge.count}</span>
             <span className="sr-only">{badge.count} 项{badge.label}</span>

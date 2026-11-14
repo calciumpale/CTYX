@@ -16,11 +16,15 @@ type TrainingVoiceControlsProps = {
   onUseText: () => void;
 };
 
+export function TrainingBrowserVoiceSelect({ voice, disabled = false }: { voice: TrainingVoiceControlsProps['voice']; disabled?: boolean }) {
+  const chineseVoices = voice.voices.filter(item => /^(zh|cmn)(-|_|$)/i.test(item.lang));
+  const selectedVoice = chineseVoices.some(item => item.id === voice.selectedVoice) ? voice.selectedVoice : '';
+  return <label className="training-voice-select"><span>客户音色</span><select aria-label="客户中文音色" disabled={disabled || !voice.ready || !voice.outputSupported} value={selectedVoice} onChange={event => voice.setVoice(event.target.value)}><option value="">浏览器默认中文音色</option>{chineseVoices.map(item => <option key={item.id} value={item.id}>{item.name} · {item.lang}{item.local ? ' · 本机' : ''}</option>)}</select></label>;
+}
+
 export function TrainingVoiceControls({ voice, customer, hasSession, active, busy, autoSpeak, onAutoSpeakChange, onStartListening, onCancelListening, onUseText }: TrainingVoiceControlsProps) {
   const capturing = voice.phase === 'requesting' || voice.phase === 'listening' || voice.phase === 'stopping';
   const playing = voice.phase === 'preparing-speech' || voice.phase === 'speaking';
-  const chineseVoices = voice.voices.filter(item => /^(zh|cmn)(-|_|$)/i.test(item.lang));
-  const selectedVoice = chineseVoices.some(item => item.id === voice.selectedVoice) ? voice.selectedVoice : '';
   const status = !voice.ready
     ? { title: '正在检查语音能力', detail: '稍候即可查看此浏览器支持的语音功能。' }
     : busy
@@ -56,7 +60,7 @@ export function TrainingVoiceControls({ voice, customer, hasSession, active, bus
     </div>
     {(capturing || voice.interimTranscript) && <div className="training-voice-transcript" role="status" aria-live="polite"><span><span />实时识别 · 完成后自动发送</span><p>{voice.interimTranscript || (voice.phase === 'requesting' ? '等待麦克风权限…' : voice.phase === 'stopping' ? '正在确认最后一句…' : '正在听，请开始说话…')}</p></div>}
     <div className="training-voice-preferences">
-      <label className="training-voice-select"><span>客户音色</span><select aria-label="客户中文音色" disabled={!voice.ready || !voice.outputSupported} value={selectedVoice} onChange={event => voice.setVoice(event.target.value)}><option value="">浏览器默认中文音色</option>{chineseVoices.map(item => <option key={item.id} value={item.id}>{item.name} · {item.lang}{item.local ? ' · 本机' : ''}</option>)}</select></label>
+      <TrainingBrowserVoiceSelect voice={voice} />
       <label className="training-voice-rate"><span>语速 <output>{voice.rate.toFixed(2)}×</output></span><input type="range" aria-label="客户播报语速" aria-valuetext={`${voice.rate.toFixed(2)} 倍速`} min="0.75" max="1.25" step="0.05" value={voice.rate} disabled={!voice.ready || !voice.outputSupported} onChange={event => voice.setRate(Number(event.target.value))} /></label>
       <label className="training-voice-auto"><input type="checkbox" checked={autoSpeak} disabled={!voice.ready || !voice.outputSupported} onChange={event => onAutoSpeakChange(event.target.checked)} /><span>客户自动播报</span></label>
       <button type="button" className="studio-btn studio-btn-ghost training-voice-stop" disabled={!playing} onClick={voice.stopSpeaking}><Square size={12} />停止播报</button>

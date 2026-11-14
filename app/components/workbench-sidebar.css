@@ -64,17 +64,10 @@
 .sidebar-account-actions button:hover { background: var(--nav-hover); }
 .sidebar-account-actions svg { flex: none; color: var(--nav-muted); }
 .sidebar-account :is(summary, button):focus-visible { outline: 2px solid var(--nav-text); outline-offset: -2px; }
-.sidebar .nav-item { gap: 9px; padding-inline: 10px; }
+.sidebar .nav-item { gap: 8px; padding-inline: 10px; }
 .sidebar .nav-item > svg { flex: none; }
 .sidebar .nav-item > span { min-width: 0; }
-.sidebar nav[aria-label="业务导航"] .nav-item {
-  display: grid;
-  grid-template-columns: 18px 78px minmax(0, 1fr);
-  column-gap: 8px;
-  padding-inline: 10px 6px;
-}
-.sidebar nav[aria-label="业务导航"] .nav-item > small { margin-inline: 0; justify-self: end; padding-inline: 3px; font-variant-numeric: tabular-nums; }
-.sidebar-business-label { display: flex; justify-content: space-between; align-items: center; white-space: nowrap; }
+.sidebar-business-label { white-space: nowrap; }
 .sidebar-recent .nav-caption {
   display: flex;
   align-items: center;

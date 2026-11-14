@@ -3,6 +3,7 @@ import type {IntakeExtraction} from './project-intake-types.ts';
 import type { ContractDocument } from './contract-types.ts';
 import type { CallTranscript, TalkTrack, FeedbackJob, TalkTrackUsage, TalkTrackPolicy } from './talktrack-types.ts';
 import type { TrainingProfile } from './training-profile.ts';
+import type { TrainingDimensionId } from './training-evaluation.ts';
 
 export type Role = 'sales' | 'manager';
 export type View = 'home' | 'deals' | 'reminders' | 'schedule' | 'training' | 'knowledge' | 'talktracks' | 'contracts' | 'approvals' | 'reports' | 'studio' | 'runs' | 'settings' | 'members' | 'rules' | 'meetings' | 'prospecting' | 'geo' | 'materials';
@@ -29,7 +30,8 @@ export interface PublishedWorkflow {name:string;description:string;kind?:'agent'
 export interface Workflow {id:string;name:string;description:string;kind?:'agent'|'workflow';status:'draft'|'published';nodes:FlowNode[];edges:FlowEdge[];version:number;updatedAt:string;published?:PublishedWorkflow;}
 export interface TraceStep {id:string;title:string;agent?:AgentId;nodeId?:string;input?:string;output?:string;detail:string;duration:number;status:'success'|'warning'|'error'|'skipped';}
 export interface Run {id:string;query:string;answer:string;agentIds:AgentId[];steps:TraceStep[];citations:{id:string;title:string;excerpt:string}[];mode:'demo'|'live';answerSource?:'property-records'|'evidence-boundary';propertyQuery?:import('./property-query.ts').PropertyQuery;createdAt:string;duration:number;dealId?:string;workflowId?:string;status?:'completed'|'paused'|'failed'|'rejected';workflowVersion?:number;workflowSource?:'draft'|'published';awaitingNodeId?:string;review?:{reviewer:string;decision:'approve'|'reject';note:string;date:string};}
-export interface TrainingSession {id:string;scenario:string;customer:string;profile?:TrainingProfile;mode?:'demo'|'live';messages:{role:'user'|'assistant';content:string}[];status:'active'|'completed';voiceTurnIds?:string[];score?:number;feedback?:{label:string;score:number;evidence:string;suggestion:string}[];createdAt:string;}
+export interface TrainingFeedback { id?: TrainingDimensionId; label:string; score:number; maxScore?:number; evidence:string; suggestion:string; }
+export interface TrainingSession {id:string;scenario:string;customer:string;profile?:TrainingProfile;mode?:'demo'|'live';messages:{role:'user'|'assistant';content:string;replySuggestion?:string}[];status:'active'|'completed';voiceTurnIds?:string[];score?:number;evaluationMode?:'live'|'rubric';feedback?:TrainingFeedback[];createdAt:string;}
 export interface Activity {id:string;title:string;detail:string;date:string;type:string;}
 export interface WorkbenchState {salesOwners?:{salesId:string;displayName:string}[];contracts?:ContractDocument[];transcripts?:CallTranscript[];talkTracks?:TalkTrack[];feedbackJobs?:FeedbackJob[];talkTrackUsages?:TalkTrackUsage[];talkTrackPolicy?:TalkTrackPolicy;revision:number;role:Role;viewer:{name:string;team:string;salesId:string};dataMode:'example';model:{connected:boolean;name:string};deals:Deal[];skills:Skill[];knowledge:Knowledge[];workflows:Workflow[];runs:Run[];trainingSessions:TrainingSession[];activities:Activity[];}
 export interface ApiResult {intake?:{status:'needs_info'|'duplicate';question?:string;draft?:IntakeExtraction;existing?:{id:string;name:string;projectName:string}[]};contractId?:string;state:WorkbenchState;run?:Run;session?:TrainingSession;dealId?:string;message?:string;}

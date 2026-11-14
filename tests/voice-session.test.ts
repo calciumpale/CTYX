@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { gatewayConfiguration, signVoiceSession } from '../app/lib/voice-session.ts';
+import * as voiceSession from '../app/lib/voice-session.ts';
+const { gatewayConfiguration, signVoiceSession } = voiceSession;
 import {unzlibSync} from 'fflate';
 
 test('gateway config refuses insecure or credential-bearing production URLs and weak secrets', () => {
@@ -31,4 +32,49 @@ test('voice tokens are expiring, session-bound HS256 signatures without exposing
   assert.equal(claims.exp-claims.iat,300);assert.ok(claims.jti);assert.ok(!token.includes(secret));
   const key=await crypto.subtle.importKey('raw',new TextEncoder().encode(secret),{name:'HMAC',hash:'SHA-256'},false,['verify']);
   assert.equal(await crypto.subtle.verify('HMAC',key,Buffer.from(signature,'base64url'),new TextEncoder().encode(`${header}.${body}`)),true);
+});
+
+test('catalog reads the current gateway handshake without opening audio or exposing a ticket', async () => {
+  let sent: { type: string; token: string } | undefined;
+  let closed = 0;
+  const socket = new EventTarget() as EventTarget & { accept(): void; send(value: string): void; close(): void };
+  socket.accept = () => {};
+  socket.send = value => {
+    sent = JSON.parse(value);
+    queueMicrotask(() => socket.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({
+      type: 'session.ready', sampleRate: 24000, voices: [{ id: 'zh-real', name: '配置音色', lang: 'zh-CN', secret: 'not-for-client' }], defaultVoice: 'zh-real',
+    }) })));
+  };
+  socket.close = () => { closed++; };
+  const result = await voiceSession.readGatewayVoiceCatalog(
+    { url: 'wss://voice.example.com/custom/ws', secret: 'x'.repeat(32) }, 'https://workspace.example.com', 'member-1',
+    async (url, init) => {
+      assert.equal(url, 'https://voice.example.com/custom/ws');
+      assert.equal(init.redirect, 'manual');
+      assert.equal(new Headers(init.headers).get('Origin'), 'https://workspace.example.com');
+      return { webSocket: socket };
+    },
+  );
+  assert.equal(closed, 1);
+  assert.equal(sent?.type, 'session.start');
+  const claims = JSON.parse(Buffer.from(sent!.token.split('.')[1], 'base64url').toString());
+  assert.match(claims.sessionId, /^catalog-[\da-f-]{36}$/);
+  assert.equal(claims.sub, 'member-1');
+  assert.equal(claims.exp - claims.iat, 20);
+  assert.deepEqual(result, { voices: [{ id: 'zh-real', name: '配置音色', lang: 'zh-CN' }], defaultVoice: 'zh-real' });
+});
+
+test('aborting a gateway catalog lookup closes the probe and discards its result', async () => {
+  const abort = new AbortController();
+  let closed = 0;
+  const socket = Object.assign(new EventTarget(), {
+    accept() {},
+    send() { abort.abort(); },
+    close() { closed++; },
+  });
+  await assert.rejects(voiceSession.readGatewayVoiceCatalog(
+    { url: 'wss://voice.example.com/ws', secret: 'x'.repeat(32) }, 'https://workspace.example.com', 'member-1',
+    async () => ({ webSocket: socket }), abort.signal,
+  ), /暂时无法提前读取实时音色/);
+  assert.equal(closed, 1);
 });

@@ -40,7 +40,7 @@ export function useDuplexVoice({ onFinal }: { onFinal: (final: DuplexVoiceFinal)
     };
   }, []);
 
-  const connect = useCallback((sessionId: string) => controllerRef.current?.connect(sessionId) ?? Promise.resolve(), []);
+  const connect = useCallback((sessionId: string, preferredVoice?: string) => controllerRef.current?.connect(sessionId, preferredVoice) ?? Promise.resolve(), []);
   const disconnect = useCallback(() => controllerRef.current?.disconnect(), []);
   const speak = useCallback((text: string, id: string) => controllerRef.current?.speak(text, id), []);
   const interrupt = useCallback(() => controllerRef.current?.interrupt(), []);

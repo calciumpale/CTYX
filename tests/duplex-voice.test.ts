@@ -101,6 +101,31 @@ test('prepares audio during the click and reports connected only after ready plu
   h.controller.dispose();
 });
 
+test('a gateway voice chosen before practice is applied to the first utterance', async () => {
+  const h = setup();
+  const promise = h.controller.connect('practice-1', 'zh-alt');
+  await tick();
+  h.socket.readyState = 1; h.socket.onopen?.();
+  h.message({ ...h.ready, voices: [...h.ready.voices, { id: 'zh-alt', name: '中文男声', lang: 'zh-CN' }] });
+  h.capture.resolve(); await promise;
+  assert.equal(h.controller.getSnapshot().selectedVoice, 'zh-alt');
+  h.controller.speak('你好', 'reply-1');
+  assert.equal(JSON.parse(h.sent.at(-1) as string).voice, 'zh-alt');
+});
+
+test('the live catalog supersedes a previously chosen voice that was removed', async () => {
+  const h = setup();
+  const promise = h.controller.connect('practice-1', 'removed-voice');
+  await tick();
+  h.socket.readyState = 1; h.socket.onopen?.();
+  h.message(h.ready);
+  h.capture.resolve(); await promise;
+  assert.equal(h.controller.getSnapshot().selectedVoice, 'zh-main');
+  assert.match(h.controller.getSnapshot().error ?? '', /所选音色已不可用/);
+  h.controller.speak('你好', 'reply-2');
+  assert.equal(JSON.parse(h.sent.at(-1) as string).voice, 'zh-main');
+});
+
 test('barge in flushes output and rejects late audio while the microphone continuously streams', async () => {
   const h = setup(); await h.connected();
   h.controller.speak('客户回答', 'reply-1');

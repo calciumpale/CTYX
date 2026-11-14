@@ -2,7 +2,7 @@ import {readMemberSalesScope} from '../../lib/member-policy.ts';
 import { env } from 'cloudflare:workers';
 import { DomainError } from '../../lib/domain.ts';
 import { readRole, readWorkbench, requireUserId } from '../../lib/server.ts';
-import { gatewayConfiguration, signVoiceSession } from '../../lib/voice-session.ts';
+import { gatewayConfiguration, readGatewayVoiceCatalog, signVoiceSession } from '../../lib/voice-session.ts';
 import {createSpeechSettingsStore} from '../../lib/speech-settings.ts';
 
 export const dynamic='force-dynamic';
@@ -12,8 +12,20 @@ function failure(error:unknown):Response {
 }
 export async function GET(request:Request):Promise<Response> {
   try {
-    requireUserId(request);
-    const configuration=gatewayConfiguration(env as Cloudflare.Env,new URL(request.url).origin);
+    const userId=requireUserId(request);
+    const url=new URL(request.url);
+    const configuration=gatewayConfiguration(env as Cloudflare.Env,url.origin);
+    if(url.searchParams.get('catalog')==='1'){
+      const origin=request.headers.get('origin');
+      if((origin&&origin!==url.origin)||request.headers.get('sec-fetch-site')==='cross-site')throw new DomainError('只允许从当前站点读取音色',403);
+      if(!configuration)return Response.json({configured:false,voices:[],defaultVoice:''},{headers});
+      try {
+        const catalog=await readGatewayVoiceCatalog(configuration,url.origin,userId,undefined,request.signal);
+        return Response.json({configured:true,...catalog},{headers});
+      } catch {
+        return Response.json({configured:true,voices:[],defaultVoice:''},{headers});
+      }
+    }
     return Response.json({configured:!!configuration,message:configuration?'自部署网关已配置，连接后检查实时状态':'尚未连接自部署语音网关'},{headers});
   } catch(error){return failure(error);}
 }

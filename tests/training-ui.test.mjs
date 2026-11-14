@@ -85,37 +85,67 @@ test('training uses four setup cards, optional coaching tips and a six-dimension
     page.setDefaultTimeout(6000);
     const unexpected = [];
     const errors = [];
+    let voiceCatalogRequests = 0;
     page.on('pageerror', error => errors.push(error.message));
     await page.route('**/*', route => {
       const request = route.request();
       const url = new URL(request.url());
-      if (url.origin === origin && url.pathname === '/api/training-voice' && request.method() === 'GET') return route.fulfill({ json: { configured: false } });
+      if (url.origin === origin && url.pathname === '/api/training-voice' && request.method() === 'GET') {
+        if (url.searchParams.get('catalog') !== '1') return route.fulfill({ json: { configured: true } });
+        voiceCatalogRequests += 1;
+        return route.fulfill({ json: { configured: true, voices: [
+          { id: 'zh-main', name: '中文音色一', lang: 'zh-CN' }, { id: 'zh-alt', name: '中文音色二', lang: 'zh-CN' },
+        ], defaultVoice: 'zh-main' } });
+      }
       if (url.origin === origin && !url.pathname.startsWith('/api/')) return route.continue();
       unexpected.push(`${request.method()} ${url.pathname}`);
       return route.abort();
     });
 
     await page.goto(origin, { waitUntil: 'domcontentloaded', timeout: 20000 });
-    const setupNames = ['选择剧本', '人物及音色', '选陪练方式', '开始陪练'];
+    const setupNames = ['选择剧本', '人物', '选陪练方式', '开始陪练'];
     const setupCards = setupNames.map(name => page.getByRole('region', { name, exact: true }));
     await page.getByRole('heading', { name: 'AI带练', exact: true }).waitFor();
     for (const card of setupCards) await card.waitFor();
     await page.getByRole('heading', { name: '练习记录及复盘', exact: true }).waitFor();
     const cardBounds = () => Promise.all(setupCards.map(card => card.boundingBox()));
-    const expectEqualCards = async (state) => {
+    const expectEqualCards = async state => {
       const bounds = await cardBounds();
       const [first] = bounds;
       assert.ok(bounds.every(card => Math.abs(card.width - first.width) <= 1 && Math.abs(card.height - first.height) <= 1),
         `${state} desktop cards share width and height: ${JSON.stringify(bounds)}`);
-      return first.height;
+      return bounds;
     };
-    const desktopHeight = await expectEqualCards('initial');
+    const initialCards = await expectEqualCards('initial');
+    const expectStableCards = async state => {
+      const bounds = await expectEqualCards(state);
+      assert.ok(bounds.every((card, index) => Math.abs(card.width - initialCards[index].width) <= 1 && Math.abs(card.height - initialCards[index].height) <= 1 && Math.abs(card.y - initialCards[index].y) <= 1),
+        `${state} preserves desktop card placement and dimensions: ${JSON.stringify(bounds)}`);
+    };
+    const headingSizes = await Promise.all(setupCards.map(card => card.getByRole('heading', { level: 2 }).evaluate(heading => parseFloat(getComputedStyle(heading).fontSize))));
+    assert.ok(headingSizes.every(size => size >= 16 && size <= 22), JSON.stringify(headingSizes));
+    const [, personCard, , startCard] = setupCards;
+    const previewButton = startCard.getByRole('button', { name: '预览并确认', exact: true });
+    const expectBottomAction = async button => {
+      await button.waitFor();
+      const [action, card] = await Promise.all([button.boundingBox(), startCard.boundingBox()]);
+      const gap = card.y + card.height - action.y - action.height;
+      assert.ok(gap >= 0 && gap <= 32, `the start action stays at the bottom of its card: ${gap}`);
+      assert.equal(await button.evaluate(element => {
+        const { x, y, width, height } = element.getBoundingClientRect();
+        return element.contains(document.elementFromPoint(x + width / 2, y + height / 2));
+      }), true, 'the pinned start action can receive a click');
+    };
+    await expectBottomAction(previewButton);
+
     await page.setViewportSize({ width: 390, height: 844 });
     const mobileCards = await cardBounds();
     assert.ok(mobileCards.every((card, index) => index === 0 || card.y >= mobileCards[index - 1].y + mobileCards[index - 1].height - 1), 'mobile setup cards stack in task order');
     assert.ok(Math.max(...mobileCards.map(card => card.height)) - Math.min(...mobileCards.map(card => card.height)) > 10, 'mobile cards size to their content');
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
     await page.setViewportSize({ width: 1440, height: 900 });
+    assert.doesNotMatch(await personCard.innerText(), /音色|语音/);
+    assert.equal(voiceCatalogRequests, 0, 'text setup does not need to look up voice choices');
 
     const price = page.getByRole('button', { name: /^价格与价值异议/ });
     const comparison = page.getByRole('button', { name: /^竞品比较/ });
@@ -130,20 +160,56 @@ test('training uses four setup cards, optional coaching tips and a six-dimension
     assert.equal(await textMode.getAttribute('aria-pressed'), 'true');
     await voiceMode.click();
     const voiceTransport = page.getByRole('group', { name: '语音连接方式', exact: true });
-    await voiceTransport.getByRole('button', { name: '实时语音', exact: true }).waitFor();
+    const realtime = voiceTransport.getByRole('button', { name: '实时语音', exact: true });
+    await realtime.waitFor();
+    const realtimeVoice = personCard.getByRole('combobox', { name: '网关客户音色', exact: true });
+    await realtimeVoice.waitFor();
+    assert.ok(voiceCatalogRequests >= 1);
+    assert.equal(await realtimeVoice.inputValue(), 'zh-main');
+    await realtimeVoice.selectOption('zh-alt');
+    assert.equal(await realtimeVoice.inputValue(), 'zh-alt');
+    await expectStableCards('real-time voice');
     await voiceTransport.getByRole('button', { name: '兼容模式', exact: true }).click();
-    await page.getByLabel('客户中文音色', { exact: true }).waitFor();
+    await personCard.getByLabel('客户中文音色', { exact: true }).waitFor();
+    assert.equal(await realtimeVoice.isVisible(), false);
+    await expectStableCards('compatible voice');
+    await realtime.click();
+    assert.equal(await realtimeVoice.inputValue(), 'zh-alt');
     await textMode.click();
     await voiceTransport.waitFor({ state: 'hidden' });
+    assert.doesNotMatch(await personCard.innerText(), /音色|语音/);
     await page.getByText('编辑客户画像', { exact: true }).click();
-    await setupCards[1].getByText('客户背景与决策条件', { exact: true }).click();
-    await setupCards[1].getByRole('textbox', { name: '客户称呼', exact: true }).waitFor();
-    assert.ok(await expectEqualCards('expanded profile') > desktopHeight, 'cards grow to fit the expanded profile');
+    await personCard.getByText('客户背景与决策条件', { exact: true }).click();
+    const profileEditor = personCard.getByRole('region', { name: '客户画像编辑', exact: true });
+    const nameField = profileEditor.getByRole('textbox', { name: '客户称呼', exact: true });
+    await nameField.waitFor();
+    await expectStableCards('expanded profile');
+    const expectInnerScroll = async region => assert.equal(await region.evaluate(scroll => {
+      const before = scroll.scrollTop;
+      scroll.scrollTop = scroll.scrollHeight;
+      const didScroll = /^(auto|scroll)$/.test(getComputedStyle(scroll).overflowY) && scroll.scrollTop > 0;
+      scroll.scrollTop = before;
+      return didScroll;
+    }), true, 'expanded profile scrolls within its card');
+    await expectInnerScroll(profileEditor);
     await page.getByRole('textbox', { name: '业务需求', exact: true }).fill('比较两处园区的办公成本。');
-    await page.getByRole('button', { name: '预览并确认', exact: true }).click();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expectInnerScroll(profileEditor);
+    assert.ok(Math.abs((await personCard.boundingBox()).height - mobileCards[1].height) <= 1, 'mobile person card stays bounded');
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, 'the expanded mobile profile fits the viewport width');
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
+    await previewButton.click();
     await page.getByRole('heading', { name: '确认客户画像', exact: true }).waitFor();
+    await expectStableCards('profile preview');
+    await expectInnerScroll(startCard.getByRole('region', { name: '客户画像预览', exact: true }));
     assert.deepEqual(await page.evaluate(() => window.trainingCalls), []);
-    const start = page.getByRole('button', { name: '开始陪练', exact: true });
+    const start = startCard.getByRole('button', { name: '开始陪练', exact: true });
+    await expectBottomAction(start);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await start.scrollIntoViewIfNeeded();
+    assert.ok(Math.abs((await startCard.boundingBox()).height - mobileCards[3].height) <= 1, 'mobile preview stays within the start card');
+    await expectBottomAction(start);
     await start.click();
     await page.getByText('我需要比较两个园区的费用。', { exact: true }).waitFor();
     const [startCall] = await page.evaluate(() => window.trainingCalls);

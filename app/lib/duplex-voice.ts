@@ -49,10 +49,8 @@ export interface DuplexVoiceEnvironment {
   clearTimeout?: (handle: unknown) => void;
 }
 
-interface VoiceConfiguration {
-  url: string; token: string; voices: DuplexVoiceOption[];
-  defaultVoice: string; outputSampleRate: number;
-}
+export type DuplexVoiceCatalog = { voices: DuplexVoiceOption[]; defaultVoice: string };
+type VoiceConfiguration = DuplexVoiceCatalog & { url: string; token: string; outputSampleRate: number };
 
 const CONNECT_TIMEOUT_MS = 15_000;
 const OUTPUT_TIMEOUT_MS = 180_000;
@@ -66,14 +64,19 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function validSampleRate(value: unknown): value is number {
   return typeof value === 'number' && Number.isInteger(value) && value >= 8_000 && value <= 48_000;
 }
-function voiceCatalog(value: Record<string, unknown>, allowEmpty = false): { voices: DuplexVoiceOption[]; defaultVoice: string } {
-  if (!Array.isArray(value.voices) || (!allowEmpty && !value.voices.length)) {
+export function parseDuplexVoiceCatalog(value: unknown, allowEmpty = false): DuplexVoiceCatalog {
+  if (!isRecord(value) || !Array.isArray(value.voices) || value.voices.length > 128 || (!allowEmpty && !value.voices.length)) {
     throw new Error('语音网关没有提供可用的音色。');
   }
+  const ids = new Set<string>();
   const voices = value.voices.map(voice => {
-    if (!isRecord(voice) || typeof voice.id !== 'string' || !voice.id || typeof voice.name !== 'string' || typeof voice.lang !== 'string') {
+    if (!isRecord(voice) || typeof voice.id !== 'string' || !voice.id.trim() || voice.id.length > 200 || ids.has(voice.id) ||
+      typeof voice.name !== 'string' || !voice.name.trim() || voice.name.length > 200 ||
+      typeof voice.lang !== 'string' || !voice.lang.trim() || voice.lang.length > 200 ||
+      (voice.description !== undefined && (typeof voice.description !== 'string' || voice.description.length > 500))) {
       throw new Error('语音网关音色列表格式无效。');
     }
+    ids.add(voice.id);
     return { id: voice.id, name: voice.name, lang: voice.lang, ...(typeof voice.description === 'string' ? { description: voice.description } : {}) };
   });
   if (typeof value.defaultVoice !== 'string' || (voices.length ? !voices.some(voice => voice.id === value.defaultVoice) : value.defaultVoice !== '')) {
@@ -92,7 +95,7 @@ function configuration(value: unknown, allowInsecureLoopback = false): VoiceConf
     throw new Error('语音网关必须使用不含凭据或参数的 WSS 安全连接。');
   }
   if (!validSampleRate(value.outputSampleRate)) throw new Error('语音网关音频格式无效。');
-  return { url: url.href, token: value.token, ...voiceCatalog(value, true), outputSampleRate: value.outputSampleRate };
+  return { url: url.href, token: value.token, ...parseDuplexVoiceCatalog(value, true), outputSampleRate: value.outputSampleRate };
 }
 
 function errorMessage(error: unknown): string {
@@ -119,7 +122,7 @@ export function createDuplexVoiceController(options: {
   const finalIds = new Set<string>();
   type Run = {
     audio: DuplexAudio; abort: AbortController; socket: DuplexSocket | null;
-    closed: boolean; ready: boolean; sampleRate: number;
+    closed: boolean; ready: boolean; sampleRate: number; preferredVoice: string;
     connectTimer: unknown; outputTimer: unknown;
     requestedId: string | null; currentId: string | null; finished: boolean;
     readyPromise: Promise<void>; markReady: () => void;
@@ -211,8 +214,13 @@ export function createDuplexVoiceController(options: {
         if (run.ready) return;
         if (!validSampleRate(message.sampleRate)) { fail(run, '语音网关音频采样率无效。'); return; }
         try {
-          const catalog = voiceCatalog(message);
-          update({ voices: catalog.voices, selectedVoice: catalog.defaultVoice });
+          const catalog = parseDuplexVoiceCatalog(message);
+          const preferredAvailable = catalog.voices.some(voice => voice.id === run.preferredVoice);
+          update({
+            voices: catalog.voices,
+            selectedVoice: preferredAvailable ? run.preferredVoice : catalog.defaultVoice,
+            error: run.preferredVoice && !preferredAvailable ? '所选音色已不可用，本次使用网关默认音色。' : null,
+          });
         } catch (error) { fail(run, errorMessage(error)); return; }
         run.sampleRate = message.sampleRate; run.ready = true; run.markReady();
         break;
@@ -258,7 +266,7 @@ export function createDuplexVoiceController(options: {
     if (active) release(active);
     update({ phase: 'idle', listening: false, inputActive: false, speaking: false, pendingPlayback: false, partial: '', voices: [], selectedVoice: '', error: null });
   }
-  async function connect(sessionId: string): Promise<void> {
+  async function connect(sessionId: string, preferredVoice = ''): Promise<void> {
     if (disposed) return;
     disconnect();
     if (!sessionId.trim()) { update({ phase: 'error', error: '请先选择一个训练会话。' }); return; }
@@ -270,7 +278,7 @@ export function createDuplexVoiceController(options: {
     if (finalSession !== sessionId) { finalSession = sessionId; finalIds.clear(); }
     let markReady!: () => void; let finish!: () => void;
     const run: Run = {
-      audio, abort: new AbortController(), socket: null, closed: false, ready: false, sampleRate: 24_000,
+      audio, abort: new AbortController(), socket: null, closed: false, ready: false, sampleRate: 24_000, preferredVoice,
       connectTimer: null, outputTimer: null, requestedId: null, currentId: null, finished: false,
       readyPromise: new Promise<void>(resolve => { markReady = resolve; }), markReady: () => markReady(),
       done: new Promise<void>(resolve => { finish = resolve; }), finish: () => finish(),
@@ -297,7 +305,7 @@ export function createDuplexVoiceController(options: {
       ]);
       if (!current(run)) return;
       clearTimer(run, 'connectTimer');
-      update({ phase: 'connected', listening: true, error: null });
+      update({ phase: 'connected', listening: true });
     };
     // The completion race makes Stop immediate even if a permission prompt remains open.
     await Promise.race([initialize().catch(error => fail(run, errorMessage(error))), run.done]);

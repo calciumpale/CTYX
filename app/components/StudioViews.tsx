@@ -18,9 +18,10 @@ import { EmbeddingSettings } from './EmbeddingSettings';
 import { MineruConnectionSettings } from './MineruConnectionSettings';
 import { CompanyConnectionSettings } from './CompanyConnectionSettings';
 import { SpeechRecognitionSettings } from './SpeechRecognitionSettings';
-import { DuplexVoiceControls } from './DuplexVoiceControls';
+import { DuplexVoiceControls, DuplexVoiceSelect } from './DuplexVoiceControls';
 import { useTrainingVoice } from '../lib/use-training-voice';
 import { useDuplexVoice } from '../lib/use-duplex-voice';
+import { parseDuplexVoiceCatalog, type DuplexVoiceCatalog } from '../lib/duplex-voice';
 import { createVoiceTurnQueue, type VoiceTurn, type VoiceQueueSnapshot } from '../lib/voice-turn-queue';
 import { type ApiResult, type Mutate, type Skill, type ViewProps } from '../lib/types';
 
@@ -86,6 +87,8 @@ export function TrainingView({ state, mutate, notify,onPendingChange,onMediaStop
   const [voiceTransport, setVoiceTransport] = useState<'duplex'|'browser'>('duplex');
   const [gatewayConfigured, setGatewayConfigured] = useState<boolean|null>(null);
   const [gatewayError, setGatewayError] = useState('');
+  const [gatewayCatalog, setGatewayCatalog] = useState<DuplexVoiceCatalog|null>(null);
+  const [preferredVoice, setPreferredVoice] = useState('');
   const [voiceQueue, setVoiceQueue] = useState<VoiceQueueSnapshot>({pending:0,failed:null,error:''});
   const [browserRevision,setBrowserRevision]=useState(0);
   const [autoSpeak, setAutoSpeak] = useState(true);
@@ -135,11 +138,23 @@ export function TrainingView({ state, mutate, notify,onPendingChange,onMediaStop
       await mutate('training_reply',{sessionId:turn.sessionId,text:turn.text,voiceTurnId:turn.id});
     };
   }, [sessionId, session?.status, interactionMode, busy,voiceTransport,mutate]);
-  useEffect(()=>{
-    const abort=new AbortController();
-    void fetch('/api/training-voice',{credentials:'same-origin',cache:'no-store',signal:abort.signal}).then(async response=>{const data=await response.json() as {configured?:boolean;error?:string};if(!response.ok)throw new Error(data.error||'无法检查语音服务配置');setGatewayConfigured(data.configured===true);}).catch(cause=>{if(!abort.signal.aborted){setGatewayConfigured(false);setGatewayError(cause instanceof Error?cause.message:'无法检查语音服务配置');}});
-    return()=>abort.abort();
-  },[]);
+  useEffect(() => {
+    if (interactionMode !== 'voice' || voiceTransport !== 'duplex' || gatewayCatalog !== null) return;
+    const abort = new AbortController();
+    void (async () => {
+      try {
+        const response = await fetch('/api/training-voice?catalog=1', { credentials: 'same-origin', cache: 'no-store', signal: abort.signal });
+        const data = await response.json() as { configured?: boolean; voices?: unknown; defaultVoice?: unknown; error?: string };
+        if (!response.ok) throw new Error(data.error || '无法检查语音服务配置');
+        if (abort.signal.aborted) return;
+        setGatewayConfigured(data.configured === true);
+        setGatewayCatalog(data.configured === true ? parseDuplexVoiceCatalog({ voices: data.voices ?? [], defaultVoice: data.defaultVoice ?? '' }, true) : { voices: [], defaultVoice: '' });
+      } catch {
+        if (!abort.signal.aborted) setGatewayCatalog({ voices: [], defaultVoice: '' });
+      }
+    })();
+    return () => abort.abort();
+  }, [interactionMode, voiceTransport, gatewayCatalog]);
   useEffect(() => {
     const invalidatePendingPlayback = () => { if (document.hidden) {playbackGeneration.current += 1;inputOwner.current=null;browserTranscript.current='';if(browserAutoStop.current)clearTimeout(browserAutoStop.current);browserAutoStop.current=null;} };
     document.addEventListener('visibilitychange', invalidatePendingPlayback);
@@ -215,7 +230,8 @@ export function TrainingView({ state, mutate, notify,onPendingChange,onMediaStop
   };
   const cancelListening = () => { inputOwner.current = null;browserTranscript.current=''; voice.cancelListening(); };
   const changeTransport=(transport:'duplex'|'browser')=>{if(voiceQueue.pending){notify('请先等待语音保存完成，失败时可直接重试。');return;}if(transport!==voiceTransport){stopVoice();setVoiceTransport(transport);setGatewayError('');}};
-  const connectDuplex=()=>{if(session?.status==='active'){setGatewayError('');if(lastMessage?.role==='assistant')autoSpokenMessages.current.delete(`${session.id}:${lastMessageIndex}:${lastMessage.content}`);void duplex.connect(session.id);}};
+  const presetVoice = gatewayCatalog?.voices.some(item => item.id === preferredVoice) ? preferredVoice : gatewayCatalog?.defaultVoice ?? '';
+  const connectDuplex=()=>{if(session?.status==='active'){setGatewayError('');if(lastMessage?.role==='assistant')autoSpokenMessages.current.delete(`${session.id}:${lastMessageIndex}:${lastMessage.content}`);void duplex.connect(session.id, preferredVoice || presetVoice);}};
   const playCustomer = (text: string, key: string) => {
     if(interactionMode==='voice'&&voiceTransport==='duplex'){
       if(duplex.phase!=='connected'||duplex.inputActive)return;
@@ -230,9 +246,17 @@ export function TrainingView({ state, mutate, notify,onPendingChange,onMediaStop
 
   const modeSelection = <div className="training-mode-switch" role="group" aria-label="陪练方式"><button type="button" disabled={busy} aria-pressed={interactionMode === 'text'} onClick={() => changeMode('text')}><MessageSquare size={15} aria-hidden="true" />文字陪练</button><button type="button" disabled={busy} aria-pressed={interactionMode === 'voice'} onClick={() => changeMode('voice')}><Mic size={15} aria-hidden="true" />语音陪练</button></div>;
   const transportSelection = <div className="training-transport-switch" role="group" aria-label="语音连接方式"><button type="button" disabled={busy} aria-pressed={voiceTransport === 'duplex'} onClick={() => changeTransport('duplex')}>实时语音</button><button type="button" disabled={busy} aria-pressed={voiceTransport === 'browser'} onClick={() => changeTransport('browser')}>兼容模式</button></div>;
-  const setupVoice = interactionMode === 'text' ? <p className="training-setup-help"><Volume2 size={15} aria-hidden="true" />切换到语音陪练后可选客户音色。</p>
+  const setupVoice = interactionMode === 'text' ? null
     : voiceTransport === 'browser' ? <TrainingBrowserVoiceSelect voice={voice} disabled={busy} />
-    : <p className="training-setup-help"><Volume2 size={15} aria-hidden="true" />{gatewayConfigured === null ? '正在检查语音服务配置。' : gatewayConfigured ? '开始陪练并连接后，可选择已部署的客户音色。' : '语音服务未连接，可使用兼容模式。'}</p>;
+    : gatewayCatalog?.voices.length ? <DuplexVoiceSelect voices={gatewayCatalog.voices} selectedVoice={presetVoice} onSelect={setPreferredVoice} disabled={busy} />
+    : <div className="training-setup-help">
+        <Volume2 size={15} aria-hidden="true" />
+        <span role="status">{!gatewayCatalog ? '正在读取实时音色。' : gatewayConfigured === false ? '语音服务未连接。' : '暂时无法提前读取实时音色。'}</span>
+        {gatewayCatalog && <>
+          <button type="button" className="studio-btn studio-btn-ghost" disabled={busy} onClick={() => setGatewayCatalog(null)}>重试读取</button>
+          <button type="button" className="studio-btn studio-btn-ghost" disabled={busy} onClick={() => changeTransport('browser')}>切换兼容模式</button>
+        </>}
+      </div>;
 
   return <section className="studio-view studio-training-view">
     <header className="studio-heading training-page-heading"><h1>AI带练</h1></header>
@@ -241,7 +265,7 @@ export function TrainingView({ state, mutate, notify,onPendingChange,onMediaStop
       <main className="studio-training-main">
         {session && <div className="training-interaction-bar"><strong>陪练方式</strong>{modeSelection}</div>}
         {interactionMode === 'text' && voice.error && <div className="training-voice-error training-voice-text-error" role="alert"><Info size={16} /><div><p>{voice.error}</p><span>文字回应仍可正常发送，也可稍后重新播放客户语音。</span></div><button type="button" className="studio-icon-button" onClick={voice.clearError} aria-label="关闭语音提示"><X size={15} /></button></div>}
-        {interactionMode === 'voice' && session && <>{transportSelection}{voiceTransport==='duplex'?<DuplexVoiceControls voice={duplex} configured={gatewayConfigured} configurationError={gatewayError} customer={session ? customerLabel(session.customer) : undefined} active={session?.status==='active'} pending={voiceQueue.pending} onConnect={connectDuplex} onUseBrowser={()=>changeTransport('browser')}/>:<TrainingVoiceControls voice={voice} customer={session ? customerLabel(session.customer) : undefined} hasSession={Boolean(session)} active={session?.status === 'active'} busy={busy||voiceQueue.pending>0} autoSpeak={autoSpeak} onAutoSpeakChange={enabled => { setAutoSpeak(enabled); if (!enabled) voice.stopSpeaking(); }} onStartListening={startListening} onCancelListening={cancelListening} onUseText={() => changeMode('text')} />}</>}
+        {interactionMode === 'voice' && session && <>{transportSelection}{voiceTransport==='duplex'?<DuplexVoiceControls voice={duplex} configured={gatewayConfigured} configurationError={gatewayError} customer={session ? customerLabel(session.customer) : undefined} active={session?.status==='active'} pending={voiceQueue.pending} onConnect={connectDuplex} onUseBrowser={()=>changeTransport('browser')} catalog={gatewayCatalog?.voices ?? []} preferredVoice={presetVoice} onVoiceChange={setPreferredVoice} />:<TrainingVoiceControls voice={voice} customer={session ? customerLabel(session.customer) : undefined} hasSession={Boolean(session)} active={session?.status === 'active'} busy={busy||voiceQueue.pending>0} autoSpeak={autoSpeak} onAutoSpeakChange={enabled => { setAutoSpeak(enabled); if (!enabled) voice.stopSpeaking(); }} onStartListening={startListening} onCancelListening={cancelListening} onUseText={() => changeMode('text')} />}</>}
         {voiceQueue.failed&&<div className="training-voice-error" role="alert"><Info size={16}/><div><p>语音暂未保存：{voiceQueue.error}</p><p>「{voiceQueue.failed.text}」</p><button type="button" onClick={()=>queueRef.current?.retry()}>直接重试保存</button><button type="button" style={{marginLeft:16}} onClick={()=>queueRef.current?.reset()}>舍弃全部待保存语音</button></div></div>}
         {!session ? <div className="training-setup" aria-busy={busy}>
           <section className="training-setup-card training-setup-script" aria-label="选择剧本">

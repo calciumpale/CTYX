@@ -61,6 +61,7 @@ test('full workbench opens projects, submits a GEO draft and guards material dra
    return route.fulfill({json:{pendingCount:0}});
   });
   await page.goto(server.resolvedUrls.local[0]+'?view=prospecting&section=web');
+  await page.getByText('公开摘要',{exact:true}).click();
   await page.getByRole('button',{name:'打开已建项目',exact:true}).waitFor();
   await page.screenshot({path:'.superpowers/sdd/2026-11-08-five-departments/artifacts/workbench-web-desktop.png'});
   await page.getByRole('button',{name:'打开已建项目',exact:true}).click();

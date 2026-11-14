@@ -42,7 +42,7 @@ export default function Workbench({member,onLogout}:{member:MemberSession;onLogo
   },[reload]);
   const [view, setView] = useState<View>(member.role==='admin'?'home':'deals');
   const [routeReady,setRouteReady]=useState(false);
-  const [prospectingSection,setProspectingSection]=useState<'create'|'screen'|'handoff'|'web'>('create');
+  const [prospectingSection,setProspectingSection]=useState<'create'|'screen'|'handoff'|'web'>('screen');
   const [navigationKey, setNavigationKey] = useState(0);
   const [meetingEmbed, setMeetingEmbed] = useState(false);
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
@@ -120,7 +120,7 @@ export default function Workbench({member,onLogout}:{member:MemberSession;onLogo
       setFocusedDeal(route.focus??route.dealId??null);
       setFocusedApprovalContract(route.contractId??null);
       setFocusedApprovalId(route.approvalId??null);
-      setProspectingSection(route.prospectingSection??'create');
+      setProspectingSection(route.prospectingSection??'screen');
       setRouteReady(true);
     });
     return()=>window.clearTimeout(timer);
@@ -134,7 +134,7 @@ export default function Workbench({member,onLogout}:{member:MemberSession;onLogo
     if(approvalBusy.current){notify('审批操作正在保存，请等待完成后离开。');return;}
     if(contractBusy.current){notify('合同正在导入、保存或初审，请等待完成后离开。');return;}
     if(trainingPending.current){notify('语音回应正在保存，请等待完成；失败时可在带练页直接重试。');return;}
-    const proceed=()=>{stopTrainingMedia.current?.();setView(next);setMeetingEmbed(false);setProspectingSection('create');if(next==='deals')setNavigationKey(value=>value+1);setProjectIntent(intent||null);setFocusedDeal(id||null);setFocusedApprovalContract(contractId||null);setFocusedApprovalId(approvalId||null);const url=new URL(window.location.href);url.search=workspaceSearch(url.search,{view:next,...(next==='knowledge'||next==='talktracks'?{focus:id}:{dealId:id}),contractId,approvalId,intent});window.history.replaceState(null,'',url.href);setMobileMenu(false);setSearchOpen(false);setNoticesOpen(false);window.scrollTo({top:0,left:0,behavior:'auto'});};
+    const proceed=()=>{stopTrainingMedia.current?.();setView(next);setMeetingEmbed(false);setProspectingSection('screen');if(next==='deals')setNavigationKey(value=>value+1);setProjectIntent(intent||null);setFocusedDeal(id||null);setFocusedApprovalContract(contractId||null);setFocusedApprovalId(approvalId||null);const url=new URL(window.location.href);url.search=workspaceSearch(url.search,{view:next,...(next==='knowledge'||next==='talktracks'?{focus:id}:{dealId:id}),contractId,approvalId,intent});window.history.replaceState(null,'',url.href);setMobileMenu(false);setSearchOpen(false);setNoticesOpen(false);window.scrollTo({top:0,left:0,behavior:'auto'});};
     const guardedProceed=()=>{if(prospectingGuard.current&&!prospectingGuard.current(proceed)){setMobileMenu(false);setSearchOpen(false);setNoticesOpen(false);return;}if(studioGuard.current&&!studioGuard.current(proceed)){setMobileMenu(false);setSearchOpen(false);setNoticesOpen(false);return;}proceed();};
     if(projectDirty.current){pendingProjectLeave.current=guardedProceed;setLeaveProject(true);return;}
     if(approvalDirty.current){pendingApprovalLeave.current=guardedProceed;setLeaveApproval(true);return;}

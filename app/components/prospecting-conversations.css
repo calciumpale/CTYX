@@ -1,108 +1,15 @@
-.prospect-chat-workspace { container: prospecting-inbox / inline-size; --prospect-handoff-bg: var(--cds-surface-3); --prospect-handoff-badge: var(--cds-fill-ghost-selected); --prospect-handoff-text: var(--cds-text-primary); --prospect-handoff-line: var(--cds-border-strong); }
+.prospect-chat-workspace { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; container: prospecting-chat / inline-size; --prospect-handoff-bg: var(--cds-surface-3); --prospect-handoff-badge: var(--cds-fill-ghost-selected); --prospect-handoff-text: var(--cds-text-primary); --prospect-handoff-line: var(--cds-border-strong); }
 .prospect-chat-workspace[hidden] { display: none; }
-.prospect-inbox-heading h2 { margin: 0; }
 .prospect-chat-sync-status { grid-area: sync; display: flex; flex-wrap: wrap; gap: 3px 12px; color: var(--cds-text-secondary); font-size: 12px; overflow-wrap: anywhere; }
 .prospect-chat-sync-status time { font-variant-numeric: tabular-nums; }
 .prospect-chat-sync-status.needs-attention > span:last-child { color: var(--cds-text-primary); font-weight: 500; }
-.prospect-chat-agent { padding: 0 0 12px; margin-bottom: 14px; border-bottom: 1px solid var(--cds-border); }
 .prospect-chat-agent-toolbar { display: flex; align-items: center; gap: 12px; justify-content: space-between; }
-.prospect-chat-agent-title { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
-.prospect-chat-agent-title strong { font-size: 13px; font-weight: 550; }
 .prospect-chat-agent-toolbar > .button { flex: none; }
-.prospect-chat-scope { display: flex; align-items: center; gap: 20px; justify-content: space-between; padding: 17px 19px; margin-bottom: 22px; background: var(--cds-surface-0); border-radius: 12px; }
-.prospect-chat-scope strong { font-weight: 550; }
-.prospect-chat-scope p { margin-top: 5px; color: var(--cds-text-secondary); font-size: 12px; }
-.prospect-chat-scope .button { flex: none; }
 .prospect-chat-readonly { display: flex; gap: 8px; padding: 13px 20px; background: var(--cds-surface-0); color: var(--cds-text-secondary); font-size: 12px; }
 .prospect-chat-readonly > svg { flex: none; margin-top: 2px; }
 .prospect-chat-badge { display: inline-flex; align-items: center; gap: 5px; width: fit-content; max-width: 100%; padding: 3px 7px; border-radius: 5px; background: var(--cds-fill-ghost-hover); color: var(--cds-text-secondary); font-size: 11px; font-weight: 500; line-height: 1.5; white-space: nowrap; }
 .prospect-chat-badge.is-online, .prospect-chat-badge.is-grade-high { background: var(--cds-fill-ghost-selected); color: var(--cds-text-primary); }
 .prospect-chat-badge.is-human { background: var(--prospect-handoff-badge); color: var(--prospect-handoff-text); font-weight: 600; }
-.prospect-chat-layout {
-  display: grid;
-  grid-template-columns: minmax(218px, 29%) minmax(0, 1fr);
-  min-width: 0;
-  border: 1px solid var(--cds-border);
-  border-radius: 14px;
-  overflow: hidden;
-}
-
-.prospect-conversation-list {
-  min-width: 0;
-  background: var(--cds-surface-0);
-  border-inline-end: 1px solid var(--cds-border);
-}
-
-.prospect-conversation-search {
-  display: grid;
-  gap: 10px;
-  padding: 13px 12px;
-  border-bottom: 1px solid var(--cds-border);
-}
-
-.prospect-conversation-list-heading {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 6px;
-  font-size: 13px;
-}
-
-.prospect-conversation-list-heading span {
-  color: var(--cds-text-secondary);
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-
-.prospect-conversation-search-field { position: relative; }
-.prospect-conversation-search-field > svg {
-  position: absolute;
-  z-index: 1;
-  inset-inline-start: 10px;
-  inset-block-start: 50%;
-  translate: 0 -50%;
-  color: var(--cds-text-secondary);
-  pointer-events: none;
-}
-
-.prospect-conversation-search input {
-  --field-padding-inline: 32px;
-  --field-padding-end: 10px;
-  width: 100%;
-}
-
-.prospect-conversation-items {
-  max-height: 660px;
-  overflow-y: auto;
-  scrollbar-width: thin;
-  scrollbar-color: var(--cds-border-strong) transparent;
-  padding: 6px;
-}
-
-.prospect-conversation-item {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: start;
-  gap: 9px;
-  width: 100%;
-  margin: 0 0 3px;
-  border: 1px solid transparent;
-  border-radius: 9px;
-  padding: 9px 8px;
-  text-align: start;
-  background: transparent;
-  color: var(--cds-text-primary);
-  cursor: pointer;
-}
-
-.prospect-conversation-item:hover { background: var(--cds-fill-ghost-hover); }
-.prospect-conversation-item:focus-visible { outline-offset: -2px; }
-.prospect-conversation-item.is-selected {
-  border-color: var(--cds-border-strong);
-  background: var(--cds-fill-ghost-selected);
-}
-
 .prospect-conversation-avatar {
   display: grid;
   place-items: center;
@@ -117,21 +24,12 @@
   line-height: 1;
 }
 
-.prospect-conversation-item-body { min-width: 0; }
-.prospect-conversation-item-head { display: flex; align-items: baseline; gap: 4px 7px; flex-wrap: wrap; }
-.prospect-conversation-item-head strong { flex: 1; min-width: 62px; font-size: 13px; font-weight: 650; overflow-wrap: anywhere; }
-.prospect-conversation-item-head time { font-size: 11px; color: var(--cds-text-secondary); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.prospect-conversation-preview { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; color: var(--cds-text-secondary); font-size: 12px; line-height: 1.55; margin-top: 4px; }
-.prospect-conversation-item-foot { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 6px; font-size: 11px; color: var(--cds-text-secondary); }
-.prospect-chat-draft-label { color: var(--cds-text-primary); }
-.prospect-chat-list-empty { padding: 14px; color: var(--cds-text-secondary); font-size: 13px; }
-
 .prospect-conversation-detail {
   position: relative;
   display: flex;
   flex-direction: column;
   min-width: 0;
-  min-height: 540px;
+  min-height: 100%;
   background: var(--cds-surface-2);
 }
 
@@ -154,7 +52,6 @@
 .prospect-conversation-actions .button { padding-inline: 9px; font-size: 12px; }
 .prospect-conversation-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 9px; margin-top: 4px; font-size: 11px; }
 .prospect-conversation-meta a { display: inline-flex; align-items: center; gap: 3px; color: var(--cds-text-secondary); }
-.prospect-chat-back.button { display: none; grid-area: back; }
 
 .prospect-chat-tools {
   display: grid;
@@ -187,9 +84,8 @@
 .prospect-chat-thread {
   position: relative;
   display: flex;
-  flex: 1 1 340px;
-  min-height: 240px;
-  max-height: 520px;
+  flex: 1 1 0;
+  min-height: 92px;
   min-width: 0;
 }
 
@@ -198,7 +94,8 @@
   min-width: 0;
   min-height: 0;
   overflow-y: auto;
-  padding: 17px 16px;
+  overscroll-behavior-y: contain;
+  padding: 14px;
   scrollbar-width: thin;
   scrollbar-color: var(--cds-border-strong) transparent;
 }
@@ -247,47 +144,6 @@
 .prospect-chat-composer-foot > p > span { display: block; font-variant-numeric: tabular-nums; margin-top: 2px; }
 .prospect-chat-composer-foot > .button { flex: none; }
 
-.prospect-pool-toolbar { display: flex; align-items: flex-end; gap: 14px; margin-bottom: 16px; }
-.prospect-pool-toolbar .prospect-field { margin: 0; }
-.prospect-pool-toolbar .prospect-field:first-child { flex: 1; max-width: 340px; }
-.prospect-pool-toolbar .prospect-field:nth-child(2) { width: 150px; }
-.prospect-pool-toolbar > span { margin-left: auto; padding-bottom: 11px; font-size: 12px; color: var(--cds-text-secondary); white-space: nowrap; }
-.prospect-pool-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 13px; }
-.prospect-pool-table caption { text-align: left; color: var(--cds-text-secondary); padding-bottom: 13px; font-size: 12px; }
-.prospect-pool-table th { padding: 11px 14px; text-align: left; font-size: 12px; color: var(--cds-text-secondary); font-weight: 500; background: var(--cds-surface-0); }
-.prospect-pool-table th:nth-child(1) { width: 27%; }
-.prospect-pool-table th:nth-child(2) { width: 17%; }
-.prospect-pool-table th:nth-child(3) { width: 21%; }
-.prospect-pool-table td { padding: 14px 12px; vertical-align: top; border-bottom: 1px solid var(--cds-border); overflow-wrap: anywhere; }
-.prospect-pool-table td > strong { display: block; font-weight: 550; margin-bottom: 5px; }
-.prospect-pool-table td > span:not(.prospect-chat-badge), .prospect-pool-table td > time { display: block; font-size: 12px; color: var(--cds-text-secondary); }
-.prospect-pool-table td > time { margin-top: 6px; font-size: 11px; font-variant-numeric: tabular-nums; }
-.prospect-pool-table .prospect-pool-score { margin-top: 7px; font-variant-numeric: tabular-nums; }
-.prospect-pool-table td > p { font-size: 12px; line-height: 1.8; color: var(--cds-text-secondary); }
-.prospect-pool-table td > .button { margin: 8px 0 -6px -8px; font-size: 12px; }
-@media(max-width:700px) {
-  .prospect-heading-actions { justify-content: flex-start; }
-  .prospect-chat-scope { flex-direction: column; align-items: stretch; gap: 13px; }
-  .prospect-chat-readonly { padding: 13px 16px; }
-  .prospect-chat-agent { align-items: flex-start; flex-direction: column; gap: 15px; padding: 18px; }
-  .prospect-chat-agent > .button { width: 100%; }
-  .prospect-pool-toolbar { flex-wrap: wrap; gap: 14px; }
-  .prospect-pool-toolbar .prospect-field:first-child { flex: 1 1 100%; max-width: none; }
-  .prospect-pool-toolbar .prospect-field:nth-child(2) { flex: 1; max-width: 200px; }
-  .prospect-pool-table { display: block; }
-  .prospect-pool-table caption { display: block; }
-  .prospect-pool-table thead { display: none; }
-  .prospect-pool-table tbody { display: block; }
-  .prospect-pool-table tr { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; padding: 22px 0; border-top: 1px solid var(--cds-border); }
-  .prospect-pool-table td { display: block; border: 0; padding: 0; }
-  .prospect-pool-table td::before { content: attr(data-label); display: block; margin-bottom: 7px; color: var(--cds-text-secondary); font-size: 11px; }
-  .prospect-pool-table td:first-child, .prospect-pool-table td:last-child { grid-column: 1 / -1; }
-}
-
-.prospect-chat-agent-settings { margin-top: 4px; }
-.prospect-chat-agent-settings summary { display: flex; align-items: center; gap: 6px; min-height: var(--control-height); width: fit-content; list-style: none; cursor: pointer; font-size: 12px; color: var(--cds-text-secondary); border-radius: var(--control-radius); }
-.prospect-chat-agent-settings summary::-webkit-details-marker { display: none; }
-.prospect-chat-agent-settings[open] summary > svg, .prospect-chat-needs[open] summary > svg { transform: rotate(180deg); }
 .prospect-chat-unsaved { color: var(--cds-text-primary); font-size: 11px; }
 .prospect-chat-policy { padding: 8px 0 2px; }
 .prospect-chat-policy fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
@@ -299,7 +155,7 @@
 .prospect-chat-library-options input { flex: none; width: 15px; height: 15px; accent-color: var(--cds-text-primary); }
 .prospect-chat-policy fieldset:disabled label, .prospect-chat-library-options label:has(input:disabled) { cursor: default; color: var(--cds-text-secondary); }
 .prospect-chat-policy-empty { padding: 5px 0; font-size: 12px; color: var(--cds-text-secondary); }
-.prospect-chat-policy-fields { display: grid; grid-template-columns: minmax(130px, 1fr) minmax(150px, 1fr) minmax(250px, 1.5fr); gap: 16px; margin-top: 14px; }
+.prospect-chat-policy-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 14px; }
 .prospect-chat-policy .prospect-field { min-width: 0; margin: 0; }
 .prospect-chat-policy .prospect-field > small { font-size: 11px; line-height: 1.5; margin-top: 5px; }
 .prospect-chat-policy-hours > div { display: flex; align-items: center; gap: 8px; }
@@ -310,75 +166,48 @@
 .prospect-chat-policy-footer > p { color: var(--cds-text-secondary); font-size: 12px; }
 .prospect-chat-policy-footer > p[role="alert"] { color: var(--cds-fill-danger); }
 .prospect-chat-policy-footer > .button { flex: none; }
-.prospect-chat-needs { border-bottom: 1px solid var(--cds-border); background: var(--cds-surface-2); }
-.prospect-chat-needs summary { display: flex; align-items: center; gap: 10px; padding: 6px 16px; min-height: var(--control-height); list-style: none; cursor: pointer; color: var(--cds-text-secondary); font-size: 11px; }
-.prospect-chat-needs summary::-webkit-details-marker { display: none; }
-.prospect-chat-needs summary > strong { font-size: 12px; color: var(--cds-text-primary); font-weight: 500; }
-.prospect-chat-needs summary > svg { margin-inline-start: auto; flex: none; }
-.prospect-chat-needs-body { padding: 0 16px 12px; }
-.prospect-chat-needs dl { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px 16px; margin: 6px 0 0; }
-.prospect-chat-needs dt { color: var(--cds-text-secondary); font-size: 11px; }
-.prospect-chat-needs dd { color: var(--cds-text-primary); font-size: 13px; margin: 3px 0 0; overflow-wrap: anywhere; }
-.prospect-chat-needs .prospect-chat-needs-body > p { color: var(--cds-text-secondary); font-size: 12px; margin-top: 12px; overflow-wrap: anywhere; }
-.prospect-chat-needs-body > .prospect-chat-contact-history { font-size: 11px; font-variant-numeric: tabular-nums; }
-.prospect-chat-agent-settings summary:focus-visible, .prospect-chat-needs summary:focus-visible { outline: 2px solid var(--cds-border-strong); outline-offset: 2px; }
 .prospect-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
-@media (max-width: 1000px) { .prospect-chat-policy-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); } .prospect-chat-policy-hours { grid-column: 1 / -1; max-width: 350px; } }
-@media (max-width: 700px) {
-  .prospect-chat-agent { padding: 0 0 12px; }
-  .prospect-chat-agent-toolbar { align-items: flex-start; gap: 10px; }
-  .prospect-chat-agent-title { gap: 5px 7px; }
-  .prospect-chat-agent-title .prospect-chat-badge { flex-basis: auto; }
-  .prospect-chat-agent-toolbar > .button { padding-inline: 10px; }
-  .prospect-chat-policy-fields { gap: 12px; }
-  .prospect-chat-policy-hours { max-width: none; }
-  .prospect-chat-policy-footer { align-items: flex-start; gap: 10px; }
-  .prospect-chat-library-options { gap: 0 14px; }
-  .prospect-chat-needs summary { padding-inline: 16px; }
-  .prospect-chat-needs dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .prospect-pool-table td { padding: 0; }
-  .prospect-pool-table caption.prospect-sr-only { display: none; }
-}
 
-/* The transcript and list scroll independently of the surrounding work pane. */
-.main-content .prospect-chat-layout { height: clamp(460px, calc(100dvh - 340px), 760px); }
-.main-content .prospect-conversation-list { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
-.main-content .prospect-conversation-search { flex: none; }
-.main-content .prospect-conversation-items { flex: 1; min-height: 0; max-height: none; overscroll-behavior-y: contain; }
-.main-content .prospect-conversation-detail { min-height: 0; overflow-y: auto; }
-.main-content .prospect-conversation-detail > :not(.prospect-chat-thread) { flex-shrink: 0; }
-.main-content .prospect-chat-thread { flex: 1 1 0; min-height: 100px; max-height: none; }
-.main-content .prospect-chat-transcript { overscroll-behavior-y: contain; }
+.prospect-chat-list { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.prospect-chat-filters .prospect-chat-filter-search { flex: 1 1 132px; max-width: 224px; }
+.prospect-chat-filter-actions { display: flex; align-items: center; flex: none; gap: 6px; margin-inline-start: auto; }
+.prospect-chat-row-status { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.prospect-chat-list .prospect-chat-badge { padding-inline: 4px; white-space: normal; }
+.prospect-chat-draft-label { font-size: 11px; color: var(--cds-text-secondary); white-space: nowrap; }
+.prospect-chat-panel > .prospect-inbox-panel-body { display: flex; flex-direction: column; padding: 0; }
+.prospect-conversation-detail { flex: 1; min-height: 0; }
+.prospect-conversation-detail > :not(.prospect-chat-thread) { flex-shrink: 0; }
+.prospect-chat-panel .prospect-chat-no-messages { min-height: 0; }
+.prospect-chat-policy-hours { grid-column: 1 / -1; }
+.prospect-chat-policy-footer { align-items: flex-start; }
+.prospect-capture-detail > header { display: flex; align-items: center; gap: 10px; }
+.prospect-capture-detail h3 { font-size: 16px; margin: 0; overflow-wrap: anywhere; }
+.prospect-capture-detail dl { display: grid; gap: 13px; margin-block: 18px; }
+.prospect-capture-detail dt { color: var(--cds-text-secondary); font-size: 12px; }
+.prospect-capture-detail dd { margin: 4px 0 0; font-size: 14px; overflow-wrap: anywhere; white-space: pre-wrap; }
 
-@container prospecting-inbox (max-width: 640px) {
-  .prospect-chat-layout { display: block; }
-  .prospect-conversation-list { border-inline-end: 0; }
-  .prospect-conversation-items { max-height: 560px; }
-  .prospect-conversation-item { padding: 12px 10px; }
-  .prospect-chat-layout:not(.is-detail) .prospect-conversation-detail,
-  .prospect-chat-layout.is-detail .prospect-conversation-list { display: none; }
-  .prospect-chat-back.button { display: inline-flex; width: fit-content; padding-inline: 0; }
+@container prospecting-chat (max-width: 750px) {
   .prospect-conversation-header {
-    grid-template: "back" auto "identity" auto "actions" auto "sync" auto / minmax(0, 1fr);
-    gap: 3px;
-    padding: 7px 11px;
+    grid-template: "identity actions" auto "sync sync" auto / minmax(0, 1fr) auto;
+    gap: 5px;
+    padding: 8px 11px;
   }
-  .prospect-conversation-actions { justify-content: flex-start; }
-  .prospect-chat-tools { gap: 0 7px; padding-inline: 10px; }
+  .prospect-conversation-actions .button { padding-inline: 6px; }
+  .prospect-chat-tools { gap: 0 6px; padding-inline: 10px; }
   .prospect-chat-learning { gap: 3px; }
-  .prospect-chat-transcript { padding: 13px 10px; }
+  .prospect-chat-transcript { padding: 11px 10px; }
   .prospect-chat-message { max-width: 91%; }
   .prospect-chat-message > p { padding: 9px 10px; }
-  .prospect-chat-composer { padding: 7px 9px 9px; }
+  .prospect-chat-composer { padding: 6px 8px 8px; }
   .prospect-chat-composer textarea { font-size: 16px; }
   .prospect-chat-composer-foot { gap: 6px; }
-  .prospect-chat-composer-foot > p { flex: 1 1 120px; }
-  .main-content .prospect-chat-layout { height: 580px; }
-  .main-content .prospect-conversation-list,
-  .main-content .prospect-conversation-detail { height: 100%; }
+  .prospect-chat-readonly { padding: 8px 11px; }
 }
-
-@container prospecting-inbox (max-width: 345px) {
+@media (max-width: 850px) {
+  .prospect-chat-filters .prospect-chat-filter-search { flex-basis: 132px; flex-shrink: 0; }
+}
+@container prospecting-chat (max-width: 345px) {
+  .prospect-conversation-header { grid-template: "identity" auto "actions" auto "sync" auto / minmax(0, 1fr); }
+  .prospect-conversation-actions, .prospect-chat-learning { justify-content: flex-start; }
   .prospect-chat-tools { grid-template-columns: minmax(0, 1fr); }
-  .prospect-chat-learning { justify-content: flex-start; }
 }

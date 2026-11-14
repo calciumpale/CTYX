@@ -1,12 +1,13 @@
 'use client';
 
-import { useCallback, useEffect, useId, useRef, useState, type FormEvent } from 'react';
-import { ArrowDown, ArrowLeft, ChevronDown, Bot, Check, CircleAlert, Clock3, ExternalLink, Loader2, MessageCircle, RefreshCw, Search, Send, UserRound, Users, X } from 'lucide-react';
+import { useCallback, useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { ArrowDown, ChevronDown, Bot, Check, CircleAlert, Clock3, ExternalLink, Loader2, MessageCircle, RefreshCw, Send, UserRound, Users, X } from 'lucide-react';
 import type { ProspectChatConversation, ProspectChatGrade, ProspectChatMessage, ProspectChatPolicy, ProspectChatSnapshot } from '../lib/prospecting-chat-types';
 import { defaultChatPolicy, normalizeChatPolicy, withinChatHours } from '../lib/prospecting-chat-policy';
 import { useChatScroll } from '../lib/use-chat-scroll';
 import './prospecting-conversations.css';
 import { ProspectingMemory, prospectMessageId } from './ProspectingMemory';
+import { ProspectingFilters, ProspectingList, ProspectingPanel } from './ProspectingInbox';
 
 type ChatView = 'chat' | 'pool';
 type Props = {
@@ -19,6 +20,8 @@ type Props = {
   assistantOnline: boolean;
   sendingAvailable: boolean;
   resetKey: number;
+  toolbarStart?: ReactNode;
+  toolbarActions?: ReactNode;
   onViewChange: (view: ChatView) => void;
   onCampaignChange?: (campaignId: string) => void;
   onDirtyChange: (dirty: boolean) => void;
@@ -78,19 +81,20 @@ function profileLink(value: string) {
   try { const url = new URL(value); if (url.protocol === 'https:' && (url.hostname === 'douyin.com' || url.hostname.endsWith('.douyin.com'))) return url.href; } catch { /* Only show verified Douyin URL shapes. */ }
 }
 
-export function ProspectingConversations({ campaignId, active, view, blocked, paused, modelReady, assistantOnline, sendingAvailable, resetKey, onViewChange, onCampaignChange, onDirtyChange, onBusyChange }: Props) {
+export function ProspectingConversations({ campaignId, active, view, blocked, paused, modelReady, assistantOnline, sendingAvailable, resetKey, toolbarStart, toolbarActions, onViewChange, onCampaignChange, onDirtyChange, onBusyChange }: Props) {
   const prefix = useId();
-  const [snapshot, setSnapshot] = useState<ProspectChatSnapshot | null>(null);
+  const [loaded, setLoaded] = useState<{ snapshot: ProspectChatSnapshot; campaignScope: boolean; conversationId: string } | null>(null);
   const [observedAt, setObservedAt] = useState(0);
   const [scope, setScope] = useState<'campaign' | 'global'>(campaignId ? 'campaign' : 'global');
   const [selectedId, setSelectedId] = useState('');
-  const [mobileDetail, setMobileDetail] = useState(false);
+  const [selectedPoolId, setSelectedPoolId] = useState('');
+  const [showSettings, setShowSettings] = useState(false);
   const [query, setQuery] = useState('');
   const [poolQuery, setPoolQuery] = useState('');
+  const [modeFilter, setModeFilter] = useState('all');
   const [grade, setGrade] = useState<'all' | ProspectChatGrade>('all');
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState('');
-  const [loading, setLoading] = useState(true);
   const [readError, setReadError] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -108,8 +112,9 @@ export function ProspectingConversations({ campaignId, active, view, blocked, pa
   const controllers = useRef(new Set<AbortController>());
   const previousResetKey = useRef(resetKey);
   const replyInput = useRef<HTMLTextAreaElement>(null);
-  const selectedRow = useRef<HTMLButtonElement>(null);
-  const detailHeading = useRef<HTMLHeadingElement>(null);
+  const selectedRow = useRef<HTMLElement>(null);
+  const campaignScope = view === 'chat' && scope === 'campaign' && Boolean(campaignId);
+  const snapshot = loaded?.campaignScope === campaignScope ? loaded.snapshot : undefined;
   const selectedSync = snapshot?.sync?.conversationId === selectedId ? snapshot.sync : undefined;
   const syncInProgress = snapshot?.online && (selectedSync?.status === 'queued' || selectedSync?.status === 'running');
 
@@ -124,9 +129,12 @@ export function ProspectingConversations({ campaignId, active, view, blocked, pa
     } finally { controllers.current.delete(controller); }
   }, []);
 
-  const applySnapshot = useCallback((next: ProspectChatSnapshot, campaignScope = false, savedSettings = false) => {
+  const applySnapshot = useCallback((next: ProspectChatSnapshot, campaignScope: boolean, conversationId: string, settingsUpdate = false, savedSettings = false) => {
     if (!mounted.current) return;
-    setSnapshot(next); setObservedAt(Date.now());
+    setLoaded(current => settingsUpdate && current?.campaignScope === campaignScope
+      ? { ...current, snapshot: { ...current.snapshot, enabled: next.enabled, online: next.online, policy: next.policy, libraries: next.libraries } }
+      : { snapshot: next, campaignScope, conversationId });
+    setObservedAt(Date.now());
     if (campaignScope) {
       const nextPolicy = draftFromPolicy(next.policy);
       savedPolicy.current = policySignature(nextPolicy);
@@ -135,27 +143,22 @@ export function ProspectingConversations({ campaignId, active, view, blocked, pa
         setPolicyDraft(nextPolicy); setPolicyDirty(false); policyDirtyRef.current = false;
       }
     }
-    if (!next.conversations.some(item => item.id === selectedRef.current)) {
-      const first = next.conversations[0]?.id || '';
-      selectedRef.current = first; setSelectedId(first);
-    }
   }, []);
 
   const refresh = useCallback(async (force = false) => {
     if (busyRef.current || readInFlight.current && !force) return;
     const generation = ++epoch.current; readInFlight.current = true;
-    const selected = selectedRef.current;
+    const selected = view === 'chat' ? selectedRef.current : '';
     try {
-      const globalScope = view === 'pool' || scope === 'global' || !campaignId;
-      const params = new URLSearchParams({ mode: 'chat', ...(!globalScope && campaignId ? { campaignId } : {}), ...(selected ? { conversationId: selected } : {}) });
+      const params = new URLSearchParams({ mode: 'chat', ...(campaignScope && campaignId ? { campaignId } : {}), ...(selected ? { conversationId: selected } : {}) });
       const next = await request<ProspectChatSnapshot>(`/api/prospecting?${params}`);
-      if (mounted.current && generation === epoch.current) { applySnapshot(next, !globalScope); if (globalScope) setScope('global'); setReadError(''); }
+      if (mounted.current && generation === epoch.current) { applySnapshot(next, campaignScope, selected); setReadError(''); }
     } catch (cause) {
       if (mounted.current && generation === epoch.current && !aborted(cause)) setReadError(errorMessage(cause));
     } finally {
-      if (generation === epoch.current) { readInFlight.current = false; if (mounted.current) setLoading(false); }
+      if (generation === epoch.current) readInFlight.current = false;
     }
-  }, [applySnapshot, campaignId, request, scope, view]);
+  }, [applySnapshot, campaignId, campaignScope, request, view]);
 
   useEffect(() => {
     mounted.current = true; const currentControllers = controllers.current;
@@ -172,7 +175,7 @@ export function ProspectingConversations({ campaignId, active, view, blocked, pa
     if (previousResetKey.current === resetKey) return;
     previousResetKey.current = resetKey;
     const frame = requestAnimationFrame(() => {
-      setDrafts({}); setPolicyDraft(JSON.parse(savedPolicy.current) as PolicyDraft); setPolicyDirty(false); policyDirtyRef.current = false;
+      setDrafts({}); setPolicyDraft(JSON.parse(savedPolicy.current) as PolicyDraft); setPolicyDirty(false); setMemoryDirty(false); policyDirtyRef.current = false;
     });
     return () => cancelAnimationFrame(frame);
   }, [resetKey]);
@@ -186,7 +189,8 @@ export function ProspectingConversations({ campaignId, active, view, blocked, pa
     try {
       const result = await request<ChatResult>('/api/prospecting', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action, campaignId, ...extra }) });
       if (!mounted.current) return false;
-      applySnapshot(result.chat, true, action === 'chatSettings' && Boolean(extra.policy)); setReadError(''); if (action !== 'chatSync') setNotice(result.message || '会话设置已保存。'); succeeded = true; return true;
+      if (campaignScope && action !== 'chatLearn') applySnapshot(result.chat, true, typeof extra.conversationId === 'string' ? extra.conversationId : '', action === 'chatSettings', Boolean(extra.policy));
+      setReadError(''); if (action !== 'chatSync') setNotice(result.message || '会话设置已保存。'); succeeded = true; return true;
     } catch (cause) {
       if (mounted.current && !aborted(cause)) setError(errorMessage(cause));
       return false;
@@ -201,21 +205,41 @@ export function ProspectingConversations({ campaignId, active, view, blocked, pa
     }
   }
 
+  function canChangeDetail() {
+    if (busyRef.current) return false;
+    if (!memoryDirty) return true;
+    setError('请先保存或取消记忆修改。');
+    return false;
+  }
+
+  function rememberRow() {
+    selectedRow.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  }
+
   function selectConversation(id: string) {
-    if (busyRef.current) return;
-    selectedRef.current = id; setSelectedId(id); setMobileDetail(true); setError(''); setNotice('');
-    requestAnimationFrame(() => {
-      if (!selectedRow.current?.getClientRects().length) detailHeading.current?.focus({ preventScroll: true });
-    });
+    if (!canChangeDetail()) return;
+    rememberRow();
+    setShowSettings(false);
+    selectedRef.current = id; setSelectedId(id); setReadError(''); setError(''); setNotice('');
   }
 
   function returnToList() {
-    setMobileDetail(false);
-    requestAnimationFrame(() => selectedRow.current?.focus());
+    if (!canChangeDetail()) return;
+    if (view === 'pool') setSelectedPoolId('');
+    else if (settingsOpen) setShowSettings(false);
+    else { selectedRef.current = ''; setSelectedId(''); }
+    setReadError(''); setError('');
+    requestAnimationFrame(() => {
+      if (selectedRow.current?.isConnected) selectedRow.current.focus({ preventScroll: true });
+      else document.getElementById(`${prefix}-${view === 'pool' ? 'pool-search' : 'search'}`)?.focus({ preventScroll: true });
+    });
   }
 
-  const conversation = snapshot?.conversations.find(item => item.id === selectedId);
-  const conversations = snapshot?.conversations.filter(item => `${item.nickname} ${item.lastMessagePreview}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())) || [];
+  const conversation = loaded?.conversationId === selectedId ? snapshot?.conversations.find(item => item.id === selectedId) : undefined;
+  const conversations = snapshot?.conversations.filter(item => {
+    const matchesMode = modeFilter === 'all' || (item.status === 'closed' ? modeFilter === 'closed' : item.mode === modeFilter);
+    return matchesMode && `${item.nickname} ${item.lastMessagePreview}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase());
+  }) || [];
   const messages = (snapshot?.messages || []).filter(message => message.conversationId === selectedId);
   const verificationRecords = messages.filter(isVerificationRecord);
   const latestOutbound = messages.findLast(message => message.direction === 'outbound');
@@ -231,7 +255,7 @@ export function ProspectingConversations({ campaignId, active, view, blocked, pa
   const draft = drafts[selectedId] || '';
   const mutationBlocked = blocked || Boolean(busy);
   const settingsError = policyError(policyDraft);
-  const readOnlyConversation = Boolean(!campaignId || conversation?.campaignId !== campaignId || conversation.taskMemory && !conversation.taskMemory.isActive);
+  const readOnlyConversation = Boolean(!campaignId || conversation?.campaignId !== campaignId || conversation.memoryEditable === false || conversation.taskMemory && !conversation.taskMemory.isActive);
   const syncAvailable = view === 'chat' && Boolean(conversation) && !readOnlyConversation;
   const syncStatus = syncAvailable ? selectedSync : undefined;
   const syncPending = busy === 'chatSync' || syncStatus?.status === 'queued' || syncStatus?.status === 'running';
@@ -245,11 +269,35 @@ export function ProspectingConversations({ campaignId, active, view, blocked, pa
     : syncIssue ? `同步失败：${syncProblem(syncStatus?.error)}`
     : syncStalled ? '同步已停滞' : '';
   const canReply = Boolean(!readOnlyConversation && conversation?.mode === 'human' && conversation.status === 'active' && sendingAvailable && !mutationBlocked && !paused);
-  const pool = (snapshot?.pool || []).filter(item => (grade === 'all' || item.grade === grade) && `${item.nickname} ${item.contactValue} ${item.assignedName || ''}`.toLocaleLowerCase().includes(poolQuery.trim().toLocaleLowerCase()));
+  const conversationById = new Map(snapshot?.conversations.map(item => [item.id, item]));
+  const captureByConversation = new Map(snapshot?.pool.map(item => [item.conversationId, item]));
+  const pool = (snapshot?.pool || []).filter(item => (grade === 'all' || item.grade === grade) && `${item.nickname} ${conversationById.get(item.conversationId)?.lastMessagePreview || ''} ${item.contactValue} ${item.assignedName || ''}`.toLocaleLowerCase().includes(poolQuery.trim().toLocaleLowerCase()));
+  const selectedCapture = snapshot?.pool.find(item => item.id === selectedPoolId);
   const withinWorkHours = withinChatHours(observedAt, snapshot?.policy || defaultChatPolicy());
   const agentOnline = Boolean(snapshot?.enabled && snapshot.online && !paused && modelReady && withinWorkHours);
   const agentState = !snapshot?.enabled ? 'AI 助手未开启' : paused ? '任务已暂停' : !modelReady ? '等待模型就绪' : snapshot.online ? withinWorkHours ? 'AI 助手在线' : '等待回复时段' : assistantOnline ? '等待抖音账号确认' : '等待助手上线';
   const profile = conversation ? profileLink(conversation.profileUrl) : undefined;
+  const settingsOpen = campaignScope && showSettings && Boolean(snapshot);
+  const panelOpen = view === 'pool' ? Boolean(selectedCapture) : settingsOpen || Boolean(selectedId);
+
+  function openSettings() {
+    if (!canChangeDetail()) return;
+    rememberRow();
+    setShowSettings(true);
+  }
+
+  function showCurrentTask() {
+    if (!canChangeDetail()) return;
+    setSelectedPoolId(''); selectedRef.current = ''; setSelectedId('');
+    setScope('campaign'); setPolicyReady(false); setLoaded(null); setShowSettings(false); setReadError('');
+    if (view === 'pool') onViewChange('chat');
+  }
+
+  function showCapturedConversation(conversationId: string) {
+    if (!canChangeDetail()) return;
+    setSelectedPoolId(''); setScope('global');
+    selectConversation(conversationId); onViewChange('chat');
+  }
 
   function sendReply(event?: FormEvent) {
     event?.preventDefault();
@@ -281,17 +329,63 @@ export function ProspectingConversations({ campaignId, active, view, blocked, pa
   }
 
   return <section className="prospect-chat-workspace" hidden={!active} aria-label={view === 'chat' ? '聊天获客' : '留资线索池'}>
-    <div className="prospect-section-heading prospect-inbox-heading">
-      <h2>{view === 'chat' ? '客户会话' : '留资线索池'}</h2>
-      <button className="button ghost" disabled={mutationBlocked} onClick={() => void refresh(true)}><RefreshCw size={15} />刷新</button>
-    </div>
-    {(error || readError) && <div className="prospect-message is-error" role="alert"><CircleAlert size={17} /><div><p>{error || readError}</p>{error && readError && <p>{readError}</p>}<button className="button ghost" disabled={mutationBlocked} onClick={() => void refresh(true)}>重新读取会话</button></div></div>}
+    <ProspectingFilters className="prospect-chat-filters">
+      {toolbarStart}
+      <label className="prospect-sr-only" htmlFor={`${prefix}-${view === 'chat' ? 'search' : 'pool-search'}`}>{view === 'chat' ? '查找会话' : '查找留资线索'}</label>
+      {view === 'chat' ? <>
+        <input className="prospect-chat-filter-search" id={`${prefix}-search`} type="search" value={query} onChange={event => setQuery(event.target.value)} placeholder="搜索用户名或原文" />
+        <label className="prospect-sr-only" htmlFor={`${prefix}-mode`}>会话状态</label>
+        <select id={`${prefix}-mode`} value={modeFilter} onChange={event => setModeFilter(event.target.value)}>
+          <option value="all">全部状态</option><option value="agent">AI 跟进</option><option value="human">人工处理</option><option value="closed">已结束</option>
+        </select>
+      </> : <>
+        <input className="prospect-chat-filter-search" id={`${prefix}-pool-search`} type="search" value={poolQuery} onChange={event => setPoolQuery(event.target.value)} placeholder="搜索用户名、原文或销售" />
+        <label className="prospect-sr-only" htmlFor={`${prefix}-grade`}>意向等级</label>
+        <select id={`${prefix}-grade`} value={grade} onChange={event => setGrade(event.target.value as typeof grade)}><option value="all">全部意向</option><option value="high">高意向</option><option value="medium">一般意向</option><option value="low">待培育</option></select>
+      </>}
+      <div className="prospect-chat-filter-actions">
+        {campaignScope && snapshot && <button className="button ghost prospect-chat-agent-settings" type="button" onClick={openSettings} aria-expanded={settingsOpen} disabled={mutationBlocked}>跟进设置{policyDirty && <span className="prospect-chat-unsaved">未保存</span>}</button>}
+        {view === 'chat' && !campaignScope && campaignId && <button className="button ghost" disabled={mutationBlocked} onClick={showCurrentTask}>返回当前任务会话</button>}
+        <button className="icon-button" aria-label="刷新" title="刷新" disabled={mutationBlocked} onClick={() => void refresh(true)}><RefreshCw size={15} /></button>
+        {toolbarActions}
+      </div>
+    </ProspectingFilters>
+    {(error || readError) && <div className="prospect-message is-error" role="alert"><CircleAlert size={17} /><div><p>{error || readError}</p>{error && readError && <p>{readError}</p>}{readError && <button className="button ghost" disabled={mutationBlocked} onClick={() => void refresh(true)}>重新读取会话</button>}</div></div>}
     {notice && <div className="prospect-message" role="status"><Check size={17} /><p>{notice}</p><button className="icon-button" aria-label="关闭会话提示" onClick={() => setNotice('')}><X size={14} /></button></div>}
-    {loading && !snapshot ? <div className="prospect-empty" role="status"><Loader2 size={25} className="spin" /><h3>正在同步会话与线索</h3></div> : !snapshot ? <div className="prospect-empty"><h3>暂时无法读取会话</h3><p>请重新读取，已保存的消息和线索会在服务恢复后显示。</p></div> : <>
-      {view === 'chat' && <>
-        {scope === 'campaign' && campaignId ? <div className="prospect-chat-agent">
-          <div className="prospect-chat-agent-toolbar"><div className="prospect-chat-agent-title"><Bot size={17} /><strong>AI 获客助手</strong><span className={`prospect-chat-badge${agentOnline ? ' is-online' : ''}`}>{agentState}</span></div><button className={`button ${snapshot.enabled ? 'secondary' : 'primary'}`} disabled={mutationBlocked || !policyReady || !snapshot.enabled && (!modelReady || paused)} onClick={() => void execute('chatSettings', { enabled: !snapshot.enabled })}>{busy === 'chatSettings' ? <Loader2 size={15} className="spin" /> : <Bot size={15} />}{snapshot.enabled ? '关闭 AI 跟进' : '开启 AI 跟进'}</button></div>
-          <details className="prospect-chat-agent-settings"><summary>跟进设置{policyDirty && <span className="prospect-chat-unsaved">未保存</span>}<ChevronDown size={13} /></summary>
+    {!snapshot ? readError ? <div className="prospect-empty"><h3>暂时无法读取会话</h3><p>请重新读取，已保存的消息和线索会在服务恢复后显示。</p></div> : <div className="prospect-empty" role="status"><Loader2 size={25} className="spin" /><h3>正在同步会话与线索</h3></div> : <div className="prospect-inbox-split" data-panel-open={panelOpen}>
+      <div className="prospect-inbox-list prospect-chat-list">
+        {view === 'chat' ? conversations.length ? <ProspectingList
+          label="客户会话"
+          selectedId={settingsOpen ? '' : selectedId}
+          onSelect={selectConversation}
+          rows={conversations.map(item => {
+            const captured = captureByConversation.get(item.id);
+            return {
+              id: item.id,
+              username: item.nickname || '未提供昵称',
+              text: item.lastMessagePreview || '暂无原文预览',
+              intent: captured ? <span className={`prospect-chat-badge is-grade-${captured.grade}`}>{gradeLabels[captured.grade]}</span> : '未评估',
+              status: <span className="prospect-chat-row-status"><span className={`prospect-chat-badge${item.mode === 'human' && item.status !== 'closed' ? ' is-human' : ''}`}>{conversationModeLabel(item)}</span>{drafts[item.id]?.trim() && <span className="prospect-chat-draft-label">有草稿</span>}</span>,
+            };
+          })}
+        /> : <div className="prospect-empty"><MessageCircle size={24} /><h3>{snapshot.conversations.length ? '没有匹配的会话' : '还没有同步的客户会话'}</h3><p>{snapshot.conversations.length ? '调整状态或搜索关键词后重试。' : campaignScope ? '完成评论线索的招呼并同步后，会话将显示在这里。' : '在线索池中打开客户会话，查看原始沟通记录。'}</p></div> : pool.length ? <ProspectingList
+          label="留资线索池"
+          selectedId={selectedPoolId}
+          onSelect={id => { if (canChangeDetail()) { rememberRow(); setSelectedPoolId(id); setError(''); setNotice(''); } }}
+          rows={pool.map(item => ({
+            id: item.id,
+            username: item.nickname || '未提供昵称',
+            text: conversationById.get(item.conversationId)?.lastMessagePreview || '暂无原文预览',
+            intent: <span className={`prospect-chat-badge is-grade-${item.grade}`}>{gradeLabels[item.grade]}</span>,
+            status: <span className="prospect-chat-badge">{item.status === 'assigned' ? '已分配' : '待分配'}</span>,
+          }))}
+        /> : <div className="prospect-empty"><Users size={24} /><h3>{snapshot.pool.length ? '没有匹配的留资线索' : '暂无可查看的留资线索'}</h3><p>{snapshot.pool.length ? '调整意向等级或搜索关键词后重试。' : '销售可查看分配给自己的线索，管理者可查看团队线索。'}</p>{snapshot.pool.length ? <button className="button secondary" onClick={() => { setGrade('all'); setPoolQuery(''); }}>查看全部留资</button> : campaignId && <button className="button secondary" onClick={showCurrentTask}>进入当前任务聊天</button>}</div>}
+      </div>
+      {view === 'chat' && settingsOpen && <ProspectingPanel key="settings" title="跟进设置" closeLabel="关闭跟进设置" onClose={returnToList} className="prospect-chat-settings-panel">
+        <div className="prospect-chat-agent-toolbar">
+          <span className={`prospect-chat-badge${agentOnline ? ' is-online' : ''}`}>{agentState}</span>
+          <button className={`button ${snapshot.enabled ? 'secondary' : 'primary'}`} disabled={mutationBlocked || !policyReady || !snapshot.enabled && (!modelReady || paused)} onClick={() => void execute('chatSettings', { enabled: !snapshot.enabled })}>{busy === 'chatSettings' ? <Loader2 size={15} className="spin" /> : <Bot size={15} />}{snapshot.enabled ? '关闭 AI 跟进' : '开启 AI 跟进'}</button>
+        </div>
             <form className="prospect-chat-policy" onSubmit={savePolicy} aria-busy={busy === 'chatSettings'}>
               <fieldset disabled={mutationBlocked || !policyReady}>
                 <legend className="prospect-sr-only">当前任务的 AI 跟进设置</legend>
@@ -308,50 +402,14 @@ export function ProspectingConversations({ campaignId, active, view, blocked, pa
               </fieldset>
               <div className="prospect-chat-policy-footer"><p id={`${prefix}-policy-status`} role={settingsError && policyDirty ? 'alert' : 'status'}>{settingsError && policyDirty ? settingsError : paused ? '任务暂停中，恢复后继续跟进。' : !modelReady ? '请联系管理员配置模型。' : !snapshot.online ? '连接并核验抖音账号后开始跟进。' : '保存后用于当前任务，人工接管的会话保持接管。'}</p><button className="button secondary" disabled={mutationBlocked || !policyReady || !policyDirty || Boolean(settingsError)} aria-describedby={`${prefix}-policy-status`}>{busy === 'chatSettings' ? <Loader2 size={14} className="spin" /> : <Check size={14} />}{busy === 'chatSettings' ? '正在保存' : '保存设置'}</button></div>
             </form>
-          </details>
-        </div> : <div className="prospect-chat-scope"><div><strong>来自留资线索池的会话</strong><p>查看线索的原始沟通内容，接管与发送由原获客任务负责。</p></div>{campaignId && <button className="button secondary" disabled={mutationBlocked} onClick={() => { selectedRef.current = ''; setSelectedId(''); setScope('campaign'); setSnapshot(null); setLoading(true); setPolicyReady(false); setMobileDetail(false); }}>返回当前任务会话</button>}</div>}
-        {!snapshot.conversations.length ? <div className="prospect-empty"><MessageCircle size={27} /><h3>还没有同步的客户会话</h3><p>{scope === 'global' ? '在线索池中点击“查看会话”，查看该客户的原始沟通记录。' : '先在“评论线索”中筛选客户并发送招呼，保持本机助手运行。相关会话同步后会出现在这里。'}</p></div> : <div className={`prospect-chat-layout${mobileDetail ? ' is-detail' : ''}`}>
-          <aside className="prospect-conversation-list" aria-label="客户会话列表">
-            <div className="prospect-conversation-search">
-              <div className="prospect-conversation-list-heading">
-                <strong>{scope === 'campaign' ? '当前任务' : '线索池会话'}</strong>
-                <span>{conversations.length} 个会话</span>
-              </div>
-              <div className="prospect-conversation-search-field">
-                <Search size={15} aria-hidden="true" />
-                <label className="prospect-sr-only" htmlFor={`${prefix}-search`}>查找会话</label>
-                <input id={`${prefix}-search`} type="search" value={query} onChange={event => setQuery(event.target.value)} placeholder="客户昵称或最近消息" />
-              </div>
-            </div>
-            <div className="prospect-conversation-items">
-              {conversations.length ? conversations.map(item => {
-                const selected = item.id === selectedId;
-                return <button key={item.id} ref={selected ? selectedRow : undefined}
-                  className={`prospect-conversation-item${selected ? ' is-selected' : ''}`}
-                  aria-pressed={selected} disabled={Boolean(busy)} onClick={() => selectConversation(item.id)}>
-                  <ConversationAvatar nickname={item.nickname} />
-                  <span className="prospect-conversation-item-body">
-                    <span className="prospect-conversation-item-head">
-                      <strong>{item.nickname || '未提供昵称'}</strong>
-                      <time dateTime={item.lastMessageAt}>{dateLabel(item.lastMessageAt)}</time>
-                    </span>
-                    <span className="prospect-conversation-preview">{item.lastMessagePreview || '暂无消息内容'}</span>
-                    <span className="prospect-conversation-item-foot">
-                      <span className={`prospect-chat-badge${item.mode === 'human' && item.status !== 'closed' ? ' is-human' : ''}`}>{conversationModeLabel(item)}</span>
-                      {drafts[item.id]?.trim() && <span className="prospect-chat-draft-label">有草稿</span>}
-                    </span>
-                  </span>
-                </button>;
-              }) : <p className="prospect-chat-list-empty">没有匹配的会话，试试其他昵称或消息关键词。</p>}
-            </div>
-          </aside>
+      </ProspectingPanel>}
+      {view === 'chat' && selectedId && !settingsOpen && <ProspectingPanel key={selectedId} title="会话详情" closeLabel="返回会话列表" onClose={returnToList} className="prospect-chat-panel">
           {conversation ? <div className="prospect-conversation-detail">
             <header className="prospect-conversation-header">
-              <button className="button ghost prospect-chat-back" onClick={returnToList}><ArrowLeft size={15} />会话列表</button>
               <div className="prospect-conversation-identity">
                 <ConversationAvatar nickname={conversation.nickname} />
                 <div>
-                  <h3 ref={detailHeading} tabIndex={-1}>{conversation.nickname || '未提供昵称'}</h3>
+                  <h3>{conversation.nickname || '未提供昵称'}</h3>
                   <div className="prospect-conversation-meta">
                     <span className={`prospect-chat-badge${conversation.mode === 'human' && conversation.status !== 'closed' ? ' is-human' : ''}`}>
                       {conversation.mode === 'human' ? <UserRound size={13} /> : <Bot size={13} />}{conversationModeLabel(conversation)}
@@ -431,13 +489,21 @@ export function ProspectingConversations({ campaignId, active, view, blocked, pa
                 </div>
               </div>
             </form>}
-          </div> : <div className="prospect-empty"><MessageCircle size={26} /><h3>选择一个客户会话</h3><p>从列表中选择客户，查看消息并决定是否接管。</p></div>}
-        </div>}
-      </>}
-      {view === 'pool' && <>
-        <div className="prospect-pool-toolbar"><div className="prospect-field"><label htmlFor={`${prefix}-pool-search`}>查找留资线索</label><input id={`${prefix}-pool-search`} value={poolQuery} onChange={event => setPoolQuery(event.target.value)} placeholder="客户、联系方式或销售姓名" /></div><div className="prospect-field"><label htmlFor={`${prefix}-grade`}>意向等级</label><select id={`${prefix}-grade`} value={grade} onChange={event => setGrade(event.target.value as typeof grade)}><option value="all">全部等级</option><option value="high">高意向</option><option value="medium">一般意向</option><option value="low">待培育</option></select></div><span>可查看 {snapshot.pool.length} 条</span></div>
-        {pool.length ? <div className="prospect-pool-table-wrap"><table className="prospect-pool-table"><caption className="prospect-sr-only">留资客户与销售分配</caption><thead><tr><th scope="col">客户与联系方式</th><th scope="col">意向分级</th><th scope="col">负责销售</th><th scope="col">留资详情</th></tr></thead><tbody>{pool.map(item => <tr key={item.id}><td data-label="客户与联系方式"><strong>{item.nickname || '未提供昵称'}</strong><span>{contactLabels[item.contactType]} · {item.contactValue}</span><time dateTime={item.updatedAt}>{dateLabel(item.updatedAt)}</time></td><td data-label="意向分级"><span className={`prospect-chat-badge is-grade-${item.grade}`}>{gradeLabels[item.grade]}</span><span className="prospect-pool-score">需求匹配 {item.score} / 100</span></td><td data-label="负责销售"><strong>{item.assignedName || (item.status === 'assigned' ? '销售姓名待同步' : '待分配')}</strong><span>{item.status === 'assigned' ? '已自动分配' : '暂无可分配销售，请联系管理员'}</span></td><td data-label="留资详情"><p>{item.reason || '暂无分级说明'}</p><button className="button ghost" disabled={mutationBlocked} onClick={() => { selectConversation(item.conversationId); onViewChange('chat'); }}>查看会话<ExternalLink size={13} /></button></td></tr>)}</tbody></table></div> : <div className="prospect-empty"><Users size={27} /><h3>{snapshot.pool.length ? '没有匹配的留资线索' : '暂无可查看的留资线索'}</h3><p>{snapshot.pool.length ? '调整意向等级或搜索关键词，查看其他留资线索。' : '销售查看分配给自己的线索，管理者查看团队线索。'}</p>{snapshot.pool.length ? <button className="button secondary" onClick={() => { setGrade('all'); setPoolQuery(''); }}>查看全部留资</button> : campaignId ? <button className="button secondary" onClick={() => { setScope('campaign'); selectedRef.current = ''; setSelectedId(''); onViewChange('chat'); }}>进入当前任务聊天</button> : null}</div>}
-      </>}
-    </>}
+          </div> : <div className="prospect-empty" role="status">{readError ? <p>暂时无法读取该会话。</p> : <><Loader2 size={22} className="spin" /><p>正在读取客户会话</p></>}</div>}
+      </ProspectingPanel>}
+      {view === 'pool' && selectedCapture && <ProspectingPanel title="留资详情" closeLabel="返回线索列表" onClose={returnToList} className="prospect-capture-panel">
+        <section className="prospect-capture-detail">
+          <header><ConversationAvatar nickname={selectedCapture.nickname} /><h3>{selectedCapture.nickname || '未提供昵称'}</h3></header>
+          <dl>
+            <div><dt>{contactLabels[selectedCapture.contactType]}</dt><dd>{selectedCapture.contactValue}</dd></div>
+            <div><dt>负责销售</dt><dd>{selectedCapture.assignedName || (selectedCapture.status === 'assigned' ? '销售姓名待同步' : '暂无可分配销售，请联系管理员')}</dd></div>
+            <div><dt>意向</dt><dd>{gradeLabels[selectedCapture.grade]} · 需求匹配 {selectedCapture.score} / 100</dd></div>
+            <div><dt>更新时间</dt><dd><time dateTime={selectedCapture.updatedAt}>{dateLabel(selectedCapture.updatedAt)}</time></dd></div>
+            <div><dt>分级原因</dt><dd>{selectedCapture.reason || '暂无分级说明'}</dd></div>
+          </dl>
+          <button className="button secondary" disabled={mutationBlocked} onClick={() => showCapturedConversation(selectedCapture.conversationId)}>查看会话</button>
+        </section>
+      </ProspectingPanel>}
+    </div>}
   </section>;
 }

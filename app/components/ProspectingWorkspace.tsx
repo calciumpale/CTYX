@@ -1,12 +1,13 @@
 'use client';
 
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent, type MouseEvent } from 'react';
-import { ArrowRight, Check, ChevronDown, CircleAlert, ClipboardList, Copy, Download, ExternalLink, FileUp, Globe2, ListFilter, Loader2, MessageSquare, Monitor, Pause, Play, Plus, RefreshCw, Search, Send, Settings2, Unplug, Users, X } from 'lucide-react';
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent } from 'react';
+import { ArrowRight, Check, ChevronDown, CircleAlert, Copy, Download, ExternalLink, FileUp, Loader2, Monitor, Pause, Play, Plus, RefreshCw, Search, Send, Settings2, Unplug, Users, X } from 'lucide-react';
 import type { ProspectCampaign, ProspectDeviceView, ProspectJobView, ProspectLead, ProspectLeadStatus, ProspectReviewMode, ProspectSnapshot } from '../lib/prospecting-types';
 import { Overlay } from './CoreViews';
 import { ProspectingDailyDiscovery } from './ProspectingDailyDiscovery';
 import { ProspectingConversations } from './ProspectingConversations';
 import WebProspecting from './WebProspecting';
+import { ProspectingFilters, ProspectingList, ProspectingPanel } from './ProspectingInbox';
 import './prospecting-workspace.css';
 
 type PostResult = { snapshot: ProspectSnapshot; deviceCredentials?: { deviceId: string; deviceToken: string }; campaignId?: string; message?: string };
@@ -15,9 +16,8 @@ type LeaveGuard = (proceed: () => void) => boolean;
 export type ProspectingSection = 'create' | 'screen' | 'handoff' | 'web';
 type ProspectingTab = 'candidates' | 'leads' | 'chat' | 'pool' | 'history';
 const sectionForTab = (tab: ProspectingTab): ProspectingSection => tab === 'history' ? 'create' : tab === 'chat' || tab === 'pool' ? 'handoff' : 'screen';
-const sectionLabels: Record<ProspectingSection, string> = { create: '获客任务', screen: '筛选线索', handoff: '留资对接', web: '全网线索' };
-const sectionIcons = { create: ClipboardList, screen: ListFilter, handoff: MessageSquare, web: Globe2 };
-const sectionTabs: Record<ProspectingSection, ProspectingTab> = { create: 'history', screen: 'candidates', handoff: 'chat', web: 'history' };
+const sectionTabs: Record<ProspectingSection, ProspectingTab> = { create: 'history', screen: 'leads', handoff: 'chat', web: 'history' };
+type LeadPanel = 'import' | 'batch' | null;
 const leadLabels: Record<ProspectLeadStatus, string> = { pending: '待审核', rejected: '已拒绝', queued: '等待发送', sending: '正在发送', submitted: '已提交', failed: '发送失败', unknown: '待核对', unreachable: '暂不可联系' };
 const jobLabels = { queued: '排队中', running: '进行中', done: '已完成', failed: '未完成', unknown: '待核对', cancelled: '已取消' };
 const jobKinds = { discover: '发现竞品账号', collect: '采集评论', send: '发送招呼', readConversation: '同步客户会话', reply: '发送聊天回复' };
@@ -111,16 +111,18 @@ function CampaignForm({ busy, modelReady, onCreate, onCancel, onDirtyChange }: {
   </form>;
 }
 
-export function ProspectingWorkspace({ onGuardReady, initialSection = 'create', onSectionChange, onNavigateProject }: { onGuardReady?: (guard: LeaveGuard | null) => void; initialSection?: ProspectingSection; onSectionChange?: (section: ProspectingSection) => void; onNavigateProject?: (id: string) => void }) {
+export function ProspectingWorkspace({ onGuardReady, initialSection = 'screen', onSectionChange, onNavigateProject }: { onGuardReady?: (guard: LeaveGuard | null) => void; initialSection?: ProspectingSection; onSectionChange?: (section: ProspectingSection) => void; onNavigateProject?: (id: string) => void }) {
   const prefix = useId();
   const [snapshot, setSnapshot] = useState<ProspectSnapshot | null>(null);
   const [campaignId, setCampaignId] = useState('');
   const [creating, setCreating] = useState(false);
   const [section, setSection] = useState<ProspectingSection>(initialSection);
   const [tab, setActiveTab] = useState<ProspectingTab>(sectionTabs[initialSection]);
-  const rememberedTabs = useRef({ ...sectionTabs });
   const [formResetKey, setFormResetKey] = useState(0);
   const [filter, setFilter] = useState<'all' | 'highIntent' | 'pending' | 'submitted' | 'attention'>('all');
+  const [leadSearch, setLeadSearch] = useState('');
+  const [leadId, setLeadId] = useState<string | null>(null);
+  const [leadPanel, setLeadPanel] = useState<LeadPanel>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
@@ -162,19 +164,11 @@ export function ProspectingWorkspace({ onGuardReady, initialSection = 'create', 
   const importReadGeneration = useRef(0);
   const connectionDetails = useRef<HTMLDetailsElement>(null);
   const contentPane = useRef<HTMLDivElement>(null);
-  const viewHeading = useRef<HTMLHeadingElement>(null);
-  const previousPage = useRef({ section, creating });
 
   useLayoutEffect(() => {
     if (contentPane.current) contentPane.current.scrollTop = 0;
   }, [section, tab, creating, campaignId]);
-  useLayoutEffect(() => {
-    const previous = previousPage.current;
-    if (previous.section !== section || previous.creating !== creating) {
-      previousPage.current = { section, creating };
-      viewHeading.current?.focus({ preventScroll: true });
-    }
-  }, [section, creating]);
+
 
   const request = useCallback(async <T,>(url: string, init: RequestInit = {}): Promise<T> => {
     const controller = new AbortController(); controllers.current.add(controller);
@@ -203,13 +197,14 @@ export function ProspectingWorkspace({ onGuardReady, initialSection = 'create', 
     } catch (cause) { if (mounted.current && generation === epoch.current && !cancelled(cause)) { leadQuery.current = { ...leadViewRef.current }; setReadError(readableError(cause)); } }
     finally { if (generation === epoch.current) { readInFlight.current = false; if (mounted.current) setLoading(false); } }
   }, [applySnapshot, request]);
+  const isWebView = section === 'web';
   useEffect(() => {
-    if (section === 'web') return;
+    if (isWebView) return;
     mounted.current = true; const activeControllers = controllers.current;
     const frame = requestAnimationFrame(() => { void refresh(); });
     const timer = setInterval(() => { if (document.visibilityState === 'visible') void refresh(); }, 4000);
     return () => { mounted.current = false; cancelAnimationFrame(frame); clearInterval(timer); activeControllers.forEach(controller => controller.abort()); activeControllers.clear(); readInFlight.current = false; };
-  }, [refresh, section]);
+  }, [refresh, isWebView]);
   const post = async (input: Record<string, unknown>) => { const result = await request<PostResult>('/api/prospecting', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) }); if (input.action === 'create') { const initialView = { page: 1, runId: '' }; leadQuery.current = initialView; leadViewRef.current = initialView; setLeadView(initialView); return result; } if (leadQuery.current.page !== 1 || leadQuery.current.runId) result.snapshot = await request<ProspectSnapshot>(`/api/prospecting?campaignId=${encodeURIComponent(String(input.campaignId || activeCampaign.current))}&leadPage=${leadQuery.current.page}&runId=${encodeURIComponent(leadQuery.current.runId)}`); return result; };
   async function execute(label: string, operation: () => Promise<PostResult>, after?: (result: PostResult) => void) {
     if (busyRef.current || chatBusyRef.current) return;
@@ -238,19 +233,18 @@ export function ProspectingWorkspace({ onGuardReady, initialSection = 'create', 
   function discardDrafts() { setWebDirty(false); setDiscoveryDirty(false); selectionDirty.current = false; setSelectionEdited(false); leadQuery.current = { page: 1, runId: '' }; setLeadView(leadQuery.current); importReadGeneration.current++; setChatResetKey(value => value + 1); setFormResetKey(value => value + 1); setChatDirty(false); setDrafts({}); setFormDirty(false); setImportContent(''); setImportName(''); setCredentials(undefined); setAdvancedCdp(''); }
   function showTab(next: ProspectingTab) {
     const nextSection = sectionForTab(next);
-    rememberedTabs.current[nextSection] = next;
-    setActiveTab(next); setSection(nextSection);
+    setActiveTab(next); setSection(nextSection); setLeadId(null); setLeadPanel(null);
     if (nextSection === 'create') setCreating(false);
     onSectionChange?.(nextSection);
   }
   function setTab(next: ProspectingTab) {
-    if (sectionForTab(next) === section) showTab(next);
+    if (sectionForTab(next) === section && !(section === 'handoff' && chatDirty)) showTab(next);
     else guarded(() => showTab(next));
   }
   function openSection(next: ProspectingSection) {
     if (next === section && (next !== 'create' || !creating)) return;
     guarded(() => {
-      setSection(next); setActiveTab(rememberedTabs.current[next]);
+      setSection(next); setActiveTab(sectionTabs[next]); setLeadId(null); setLeadPanel(null);
       if (next === 'create') setCreating(false);
       onSectionChange?.(next);
     });
@@ -262,13 +256,9 @@ export function ProspectingWorkspace({ onGuardReady, initialSection = 'create', 
       onSectionChange?.('create');
     });
   }
-  function sectionLink(event: MouseEvent<HTMLAnchorElement>, next: ProspectingSection) {
-    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-    event.preventDefault(); openSection(next);
-  }
   function selectCampaign(id: string) {
     if (id === activeCampaign.current) return;
-    guarded(() => { discardDrafts(); activeCampaign.current = id; setCampaignId(id); setCreating(false); setSelectedCandidates([]); setSelectedLeads({}); setNotice(''); setLoading(true); setFilter('all'); void refresh(id, true); });
+    guarded(() => { discardDrafts(); activeCampaign.current = id; setCampaignId(id); setCreating(false); setSelectedCandidates([]); setSelectedLeads({}); setLeadId(null); setLeadSearch(''); setNotice(''); setLoading(true); setFilter('all'); void refresh(id, true); });
   }
   const campaign = snapshot?.campaign?.id === campaignId ? snapshot.campaign : undefined;
   const leads = campaign ? snapshot?.leads || [] : [];
@@ -293,16 +283,19 @@ export function ProspectingWorkspace({ onGuardReady, initialSection = 'create', 
   const draftFor = (lead: ProspectLead) => drafts[draftKey(lead)];
   const draftConflict = (lead: ProspectLead) => Boolean(draftFor(lead) && draftFor(lead).version !== lead.version);
   const eligible = leads.filter(lead => lead.status === 'pending' && contactable(lead) && !selfRecipient(lead) && !automaticLead(lead));
-  const pendingCount = leads.filter(lead => lead.status === 'pending').length;
-  const unreachableCount = leads.filter(lead => lead.status === 'unreachable').length;
-  const attentionCount = leads.filter(lead => ['unknown', 'failed', 'unreachable'].includes(lead.status)).length;
   const highIntent = (lead: ProspectLead) => Boolean(campaign && lead.intentScore >= campaign.minIntentScore);
-  const highIntentCount = leads.filter(highIntent).length;
   const modelScoredCount = leads.filter(lead => lead.analysisSource === 'model').length;
-  const displayed = leads.filter(lead => filter === 'all' || filter === 'highIntent' && highIntent(lead) || filter === 'pending' && lead.status === 'pending' || filter === 'submitted' && lead.status === 'submitted' || filter === 'attention' && ['unknown', 'failed', 'unreachable'].includes(lead.status)).sort((a, b) => b.intentScore - a.intentScore || a.id.localeCompare(b.id));
+  const normalizedSearch = leadSearch.trim().toLocaleLowerCase('zh-CN');
+  const displayed = leads.filter(lead => (
+    filter === 'all' || filter === 'highIntent' && highIntent(lead) || filter === 'pending' && lead.status === 'pending' ||
+    filter === 'submitted' && lead.status === 'submitted' || filter === 'attention' && ['unknown', 'failed', 'unreachable'].includes(lead.status)
+  ) && (!normalizedSearch || `${lead.nickname} ${lead.text}`.toLocaleLowerCase('zh-CN').includes(normalizedSearch)))
+    .sort((a, b) => b.intentScore - a.intentScore || a.id.localeCompare(b.id));
+  const selectedLead = leads.find(lead => lead.id === leadId);
+
   const selected = eligible.filter(lead => selectedLeads[lead.id] === lead.version && displayed.some(item => item.id === lead.id));
   const greetingFor = (lead: ProspectLead) => draftFor(lead)?.greeting ?? lead.greeting;
-  function changeLeadFilter(next: typeof filter) { setFilter(next); setSelectedLeads({}); }
+  function changeLeadFilter(next: typeof filter) { setFilter(next); setSelectedLeads({}); setLeadId(null); }
   function discardLeadDraft(lead: ProspectLead) { setDrafts(values => { const next = { ...values }; delete next[draftKey(lead)]; return next; }); }
   const campaignAction = (action: string, extra: Record<string, unknown> = {}) => { if (campaign) void execute(action, () => post({ action, campaignId: campaign.id, ...extra })); };
   function actOnDiscovery() {
@@ -349,7 +342,7 @@ export function ProspectingWorkspace({ onGuardReady, initialSection = 'create', 
     try { const content = await file.text(); if (mounted.current && generation === importReadGeneration.current && forCampaign === activeCampaign.current) { setImportContent(content); setImportName(file.name); setError(''); } } catch { if (mounted.current && generation === importReadGeneration.current && forCampaign === activeCampaign.current) setError('文件没有读取成功，请重新选择。'); }
   }
 
-  const showCreateForm = section === 'create' && (creating || snapshot?.campaigns.length === 0);
+  const showCreateForm = section === 'create' && Boolean(snapshot && (creating || !snapshot.campaigns.length));
   const connectionLabel = connected ? '账号已连接' : device?.online ? '等待账号确认' : device?.id ? '助手离线' : '尚未连接';
   const connectionSettings = (
     <details className="prospect-connection" ref={connectionDetails}>
@@ -369,88 +362,61 @@ export function ProspectingWorkspace({ onGuardReady, initialSection = 'create', 
     </details>
   );
 
-  const sectionNav = (item: ProspectingSection) => {
-    const Icon = sectionIcons[item];
-    return <a key={item} href={`?view=prospecting&section=${item}`} aria-current={section === item ? 'page' : undefined} onClick={event => sectionLink(event, item)}><Icon size={16} /><span>{sectionLabels[item]}</span></a>;
-  };
 
-  return <div className="prospect-workspace">
-    <aside className="prospect-sidebar" aria-label="社交平台获客栏目">
-      <nav aria-label="社交平台获客导航">
-        <div className="prospect-nav-group"><span>抖音获客</span>{(['create', 'screen', 'handoff'] as const).map(sectionNav)}</div>
-        <div className="prospect-nav-group"><span>公开网页</span>{sectionNav('web')}</div>
-      </nav>
-    </aside>
-    <div ref={contentPane} className="prospect-content" aria-label={sectionLabels[section]}>
-    {section === 'web' ? <>{error && <p className="prospect-inline-error" role="alert">{error}</p>}<WebProspecting onDirtyChange={setWebDirty} onBusyChange={onWebBusyChange} onNavigateProject={onNavigateProject}/></> : <>
-    <header className="prospect-heading">
-      <div><h1 ref={viewHeading} tabIndex={-1}>{showCreateForm ? '新建获客任务' : sectionLabels[section]}</h1></div>
-      <div className="prospect-heading-actions">
-        <span className="prospect-platform-status" data-connected={connected}><span aria-hidden="true" />抖音 · {connectionLabel}</span>
-        {section === 'create' && snapshot && !showCreateForm && <button className="button primary" disabled={operationBusy} onClick={startCampaign}><Plus size={16} />新建任务</button>}
-      </div>
-    </header>
-    {(error || readError) && <div className="prospect-message is-error" role="alert"><CircleAlert size={17} /><div><p>{error || readError}</p>{error && readError && <p>{readError}</p>}<button className="button ghost" disabled={operationBusy} onClick={() => void refresh(activeCampaign.current, true)}><RefreshCw size={14} />刷新状态</button></div></div>}
-    {notice && <div className="prospect-message" role="status"><Check size={17} /><p>{notice}</p><button className="icon-button" aria-label="关闭提示" onClick={() => setNotice('')}><X size={14} /></button></div>}
-    {loading && !snapshot ? <div className="prospect-empty" role="status"><Loader2 size={24} className="spin" /><h2>正在读取获客任务</h2></div> : !snapshot ? <div className="prospect-empty"><h2>暂时无法读取任务</h2><p>请刷新状态，已保存的任务会在服务恢复后显示。</p></div> : <>
-      {snapshot.campaigns.length > 0 && !showCreateForm && <div className="prospect-task-context">
-        <div className="prospect-task-picker">
-          <label htmlFor={`${prefix}-campaign`}>当前任务</label>
-          <select id={`${prefix}-campaign`} value={campaignId} disabled={operationBusy} onChange={event => selectCampaign(event.target.value)}>
-            {snapshot.campaigns.map(item => <option key={item.id} value={item.id}>{item.name}{item.status === 'paused' ? ' · 已暂停' : ''}</option>)}
-          </select>
-          {loading && <Loader2 size={16} className="spin" aria-label="切换任务中" />}
-        </div>
-        {section === 'create' && <button className="button secondary" disabled={operationBusy || loading} onClick={() => openSection('screen')}>筛选线索<ArrowRight size={15} /></button>}
-        {section !== 'create' && tab !== 'pool' && campaign && <CampaignSummary campaign={campaign} busy={operationBusy} onToggle={() => campaignAction(paused ? 'resume' : 'pause')} />}
-      </div>}
-      {showCreateForm && <CampaignForm key={formResetKey} busy={operationBusy} modelReady={snapshot.modelReady} onDirtyChange={setFormDirty} onCreate={input => void execute('create', () => post(input), () => { setCreating(false); setFormDirty(false); setFormResetKey(value => value + 1); setSelectedCandidates([]); setSelectedLeads({}); setDrafts({}); showTab('candidates'); })} onCancel={snapshot.campaigns.length ? () => guarded(() => { discardDrafts(); showTab('history'); }) : undefined} />}
-      {section === 'create' && connectionSettings}
-      {campaign && <>
-        {section === 'create' && !showCreateForm && <section className="prospect-task-details" aria-label="任务设置与执行记录">
-          <CampaignSummary campaign={campaign} busy={operationBusy} onToggle={() => campaignAction(paused ? 'resume' : 'pause')} />
-          <div className="prospect-inline-actions"><span>抖音搜索词：</span>{campaign.keywords.map(keyword => <SourceLink key={keyword} href={`https://www.douyin.com/search/${encodeURIComponent(keyword)}?type=video`}>{keyword}</SourceLink>)}</div>
-          <section className="prospect-section"><div className="prospect-section-heading"><div><h2>执行记录 <span>{visibleJobs.length}</span></h2></div><button className="button ghost" disabled={operationBusy} onClick={() => void refresh(activeCampaign.current, true)}><RefreshCw size={15} />刷新</button></div>{visibleJobs.length ? <div className="prospect-jobs">{visibleJobs.map(job => <article key={job.id}><div><strong>{jobKinds[job.kind]}</strong><span className={`prospect-status is-${job.status}`}>{jobLabels[job.status]}</span><time dateTime={job.createdAt}>{dateLabel(job.createdAt)}</time></div>{job.summary && <p>{job.summary}</p>}{job.error && <p className="prospect-inline-error">{job.error}</p>}{job.kind === 'collect' && Boolean(job.warnings?.length) && <div><strong>采集提示</strong>{job.warnings?.map((warning, index) => <p key={index}>{warning}</p>)}</div>}{job.status === 'unknown' && <p>{job.kind === 'reply' ? '回复结果尚未确认，请在留资对接的客户会话中核对消息记录。' : '结果尚未确认。可在原评论点击“核对并重试”，助手会先检查抖音会话。'}</p>}</article>)}</div> : <div className="prospect-empty"><h3>还没有执行记录</h3><p>开始发现账号、采集评论或发送招呼后，这里会保留真实处理结果。</p></div>}</section>
-        </section>}
-        {paused && section !== 'create' && tab !== 'pool' && <p className="prospect-context-note"><Pause size={16} />任务已暂停。待发送项不会继续执行；已经提交的发送不会被撤回。</p>}
-        {!snapshot.modelReady && section === 'screen' && <p className="prospect-context-note"><CircleAlert size={16} />模型暂未就绪，评论将使用规则初筛并等待人工审核。请联系管理员配置模型。</p>}
-        {section === 'screen' && <div className="prospect-tabs" aria-label="筛选线索内容"><button aria-pressed={tab === 'candidates'} onClick={() => setTab('candidates')}>竞品账号<span>{campaign.candidates.length}</span></button><button aria-pressed={tab === 'leads'} onClick={() => setTab('leads')}>评论线索<span>{leads.length}</span></button></div>}
-        {section === 'screen' && <details className="prospect-discovery-settings">
-          <summary><Settings2 size={15} /><span>每日发现</span><small>{campaign.dailyDiscovery?.enabled ? `每天 ${campaign.dailyDiscovery.time} · 北京时间` : '未启用'}</small><ChevronDown size={14} /></summary>
-          <ProspectingDailyDiscovery key={`${campaign.id}-${formResetKey}`} campaign={campaign} runs={snapshot.discoveryRuns} busy={operationBusy || loading} onDirtyChange={setDiscoveryDirty} onRun={() => campaignAction('discoveryRun')} onSave={async dailyDiscovery => { let saved = false; await execute('discoverySchedule', () => post({ action: 'discoverySchedule', campaignId: campaign.id, dailyDiscovery }), () => { saved = true; }); return saved; }} />
-        </details>}
-        {section === 'screen' && tab === 'candidates' && <section className="prospect-section"><div className="prospect-section-heading"><div><h2>竞品账号</h2><div className="prospect-inline-actions" aria-label="抖音公开视频关键词搜索"><span>搜索词：</span>{campaign.keywords.map(keyword => <SourceLink key={keyword} href={`https://www.douyin.com/search/${encodeURIComponent(keyword)}?type=video`}>{keyword}</SourceLink>)}</div></div>{!discovery && <button className="button secondary" disabled={!available || discoveryPending} onClick={() => campaignAction('discover')}><Search size={16} />{campaign.candidates.length ? '重新发现账号' : '发现竞品账号'}</button>}</div>
-          {discovery && <div className={campaign.candidates.length ? 'prospect-message' : 'prospect-empty'} role="status">
-            {discovery.pending ? <Loader2 size={27} className="spin" /> : paused ? <Pause size={27} /> : !connected ? <Monitor size={27} /> : <Users size={27} />}
-            <div><h3>{discovery.title}</h3><p>{discovery.message}</p>{discovery.detail && <p className="prospect-inline-error">{discovery.detail}</p>}<button className="button primary" disabled={operationBusy || loading || discovery.action === 'discover' && (!available || discoveryPending)} onClick={actOnDiscovery}>{discovery.action === 'resume' ? <Play size={15} /> : discovery.action === 'discover' ? <Search size={15} /> : null}{discovery.label}</button></div>
-          </div>}
-          {campaign.candidates.length ? <><div className="prospect-selection-toolbar"><label><input type="checkbox" disabled={operationBusy} checked={candidateOptions.length > 0 && candidateOptions.every(item => selectedCandidateIds.includes(item.id))} onChange={event => { selectionDirty.current = true; setSelectionEdited(true); setSelectedCandidates(event.target.checked ? candidateOptions.map(item => item.id) : []); }} />选择全部账号</label><span aria-live="polite">已选 {selectedCandidateIds.length} 个 · 每视频最多 {campaign.maxCommentsPerVideo} 条评论</span><button className="button secondary" disabled={operationBusy || !selectionEdited} onClick={() => void execute('selectCandidates', () => post({ action: 'selectCandidates', campaignId: campaign.id, candidateIds: selectedCandidateIds }), () => { selectionDirty.current = false; setSelectionEdited(false); })}>保存账号选择</button><button className="button primary" disabled={!available || !selectedCandidateIds.length || jobs.some(job => job.kind === 'collect' && ['queued', 'running'].includes(job.status))} onClick={() => { void execute('collect', () => post({ action: 'collect', campaignId: campaign.id, candidateIds: selectedCandidateIds }), () => { showTab('leads'); setFilter('all'); }); }}><ArrowRight size={16} />采集所选评论</button></div><div className="prospect-candidates">{campaign.candidates.map(item => <article key={item.id} className={selectedCandidateIds.includes(item.id) ? 'prospect-candidate is-selected' : 'prospect-candidate'}><label className="prospect-candidate-choice"><input type="checkbox" disabled={operationBusy || !item.videos.length} checked={selectedCandidateIds.includes(item.id)} onChange={event => { selectionDirty.current = true; setSelectionEdited(true); setSelectedCandidates(ids => event.target.checked ? [...ids, item.id] : ids.filter(id => id !== item.id)); }} /><span><strong>{item.nickname}</strong>{item.firstRunId && item.firstRunId === (leadView.runId || snapshot.discoveryRuns?.[0]?.id) && <small>{leadView.runId && leadView.runId !== snapshot.discoveryRuns?.[0]?.id ? '所选轮次新增' : '本轮新增'}</small>}{item.description && <span>{item.description}</span>}</span></label><details className="prospect-candidate-detail"><summary>来源与匹配依据<span>{item.videos.length} 个视频</span><ChevronDown size={13} /></summary>{item.reason && <p>{item.reason}</p>}<SourceLink href={item.profileUrl}>查看账号</SourceLink><ul>{item.videos.map(video => <li key={video.id}><SourceLink href={video.url}>{video.title || '查看来源视频'}</SourceLink></li>)}</ul>{!item.videos.length && <p className="prospect-secondary">暂无可采集的来源视频。</p>}</details></article>)}</div></> : null}
-        </section>}
-        {section === 'screen' && tab === 'leads' && <section className="prospect-section"><div className="prospect-section-heading"><div><h2>评论线索</h2><p>批准后排队发送；“已提交”不代表送达或已读。</p></div><button className="button secondary" disabled={operationBusy || paused || !leads.length || !snapshot.modelReady} onClick={() => campaignAction('analyze')}><RefreshCw size={15} />AI 分析线索</button></div>
-          <div className="prospect-review-toolbar prospect-review-scope"><label>范围<select value={leadView.runId} disabled={operationBusy || loading} onChange={event => { leadQuery.current = { page: 1, runId: event.target.value }; setLoading(true); setSelectedLeads({}); void refresh(campaign.id, true); }}><option value="">全部轮次</option>{snapshot.discoveryRuns?.map(run => <option key={run.id} value={run.id}>{run.id === snapshot.discoveryRuns?.[0]?.id ? '本轮新增' : '历史轮次新增'} · {dateLabel(run.scheduledFor)}</option>)}{leadView.runId && !snapshot.discoveryRuns?.some(run => run.id === leadView.runId) && <option value={leadView.runId}>已选历史轮次 · {leadView.runId}</option>}</select></label><div className="prospect-review-pagination"><span>共 {snapshot.leadPagination?.total ?? leads.length} 条 · 第 {leadView.page} 页</span>{[-1, 1].map(step => <button key={step} className="button secondary" disabled={operationBusy || loading || (step < 0 ? leadView.page <= 1 : leadView.page * 30 >= (snapshot.leadPagination?.total ?? leads.length))} onClick={() => { leadQuery.current = { ...leadView, page: leadView.page + step }; setLoading(true); setSelectedLeads({}); void refresh(campaign.id, true); }}>{step < 0 ? '上一页' : '下一页'}</button>)}</div></div>
+  const inboxView = section === 'web' ? 'web' : section === 'handoff' ? (tab === 'pool' ? 'pool' : 'chat') : 'leads';
+  const taskPanel = section === 'create' || section === 'screen' && tab === 'candidates';
+  const viewPicker = <select aria-label="获客视图" value={inboxView} disabled={operationBusy} onChange={event => {
+    const value = event.target.value;
+    if (value === 'web') openSection('web');
+    else if (value === 'leads' && taskPanel) closeTaskPanel();
+    else setTab(value as 'leads' | 'chat' | 'pool');
+  }}><option value="leads">评论线索</option><option value="chat">客户会话</option><option value="pool">留资线索</option><option value="web">全网线索</option></select>;
+  const taskPicker = snapshot?.campaigns.length ? <select aria-label="当前任务" value={campaignId} disabled={operationBusy || loading} onChange={event => selectCampaign(event.target.value)}>
+    {snapshot.campaigns.map(item => <option key={item.id} value={item.id}>{item.name}{item.status === 'paused' ? ' · 已暂停' : ''}</option>)}
+  </select> : null;
+  const taskButton = <button type="button" className="button secondary prospect-inbox-actions prospect-inbox-settings" aria-label="任务与采集" title="任务与采集" aria-expanded={taskPanel} disabled={operationBusy} onClick={() => {
+    if (taskPanel) { closeTaskPanel(); return; }
+    if (inboxView === 'chat' || inboxView === 'pool') guarded(() => showTab('history'));
+    else showTab('history');
+  }}><Settings2 size={15} aria-hidden="true" /><span>任务与采集</span></button>;
+  const commonFilters = <>{viewPicker}{taskPicker}</>;
 
-          {readOnlyAccount && <p id={`${prefix}-send-identity`} className="prospect-context-note" role="status"><CircleAlert size={16} /><span>当前账号可搜索和采集，尚未核实发信身份。请在 Mac 助手中停止同步，再点“连接抖音”，按提示核对账号。</span></p>}
-          <div className="prospect-review-toolbar prospect-review-filters"><label htmlFor={`${prefix}-filter`}>筛选<select id={`${prefix}-filter`} value={filter} onChange={event => changeLeadFilter(event.target.value as typeof filter)}><option value="all">全部评论（{leads.length}）</option><option value="highIntent">高意向（{highIntentCount}）</option><option value="pending">待审核（{pendingCount}）</option><option value="submitted">已提交</option><option value="attention">需要处理（{attentionCount}）</option></select></label><details className="prospect-score-details"><summary>评分说明<ChevronDown size={13} /></summary><p>高意向 ≥ {campaign.minIntentScore} / 100 分，按评分排序。当前页 AI 评分 {modelScoredCount} 条，规则初筛 {leads.length - modelScoredCount} 条。</p></details>{filter === 'pending' && eligible.length > 0 && <label><input type="checkbox" disabled={operationBusy} checked={eligible.every(lead => selectedLeads[lead.id] === lead.version)} onChange={event => setSelectedLeads(event.target.checked ? Object.fromEntries(eligible.map(lead => [lead.id, lead.version])) : {})} />选择可联系项</label>}<button className="button secondary" aria-describedby={readOnlyAccount ? `${prefix}-send-identity` : undefined} disabled={!sendingAvailable || !selected.length || selected.some(lead => !greetingFor(lead).trim() || draftConflict(lead))} onClick={approveSelected}>{busy === 'batch' ? <Loader2 size={15} className="spin" /> : <Check size={15} />}批准所选{selected.length ? `（${selected.length}）` : ''}</button></div>
-          {jobs.some(job => job.kind === 'collect' && ['queued', 'running'].includes(job.status)) && <p className="prospect-context-note" role="status"><Loader2 size={16} className="spin" />正在采集评论并筛选线索，完成后自动刷新。</p>}
-          {latestCollection && (latestCollection.warnings?.length || latestCollection.error) ? <div className="prospect-message" role="status"><CircleAlert size={17} /><div><strong>{latestCollection.status === 'done' ? '上次采集提示' : '上次采集未完成'}</strong><p className="prospect-secondary">{dateLabel(latestCollection.updatedAt)}{latestCollection.summary ? ` · ${latestCollection.summary}` : ''}</p>{latestCollection.error && <p>{latestCollection.error}</p>}{latestCollection.warnings?.map((warning, index) => <p key={index}>{warning}</p>)}<button className="button ghost" onClick={() => setTab('history')}>查看执行记录</button></div></div> : null}
-          {displayed.length ? <div className="prospect-leads">{displayed.map(lead => {
-            const auto = automaticLead(lead);
-            const self = selfRecipient(lead);
-            const draft = draftFor(lead);
-            const conflict = draftConflict(lead);
-            const pending = lead.status === 'pending';
-            const retryable = lead.status === 'failed' || lead.status === 'unknown';
-            const canReject = pending || lead.status === 'unreachable';
-            return <article key={lead.id} className="prospect-lead">
-              <header><label>{pending && !auto && <input type="checkbox" disabled={operationBusy || !contactable(lead) || self || conflict} checked={!self && selectedLeads[lead.id] === lead.version} onChange={event => setSelectedLeads(values => { const next = { ...values }; if (event.target.checked) next[lead.id] = lead.version; else delete next[lead.id]; return next; })} />}<strong>{lead.nickname || '未提供昵称'}</strong></label><span className={`prospect-status is-${lead.status}`}>{leadLabels[lead.status]}</span>{highIntent(lead) && <span className="prospect-intent-badge" title={`达到当前任务阈值：≥ ${campaign.minIntentScore} 分`}>高意向</span>}<span className="prospect-score">意向 {lead.intentScore} / 100 分</span></header>
-              <blockquote>{lead.text}</blockquote>{lead.firstRunId && lead.firstRunId === (leadView.runId || snapshot.discoveryRuns?.[0]?.id) && <small>{leadView.runId && leadView.runId !== snapshot.discoveryRuns?.[0]?.id ? '所选轮次新增评论' : '本轮新增评论'}</small>}
-              {lead.error && <p className="prospect-inline-error" role="alert"><CircleAlert size={14} /> {lead.error}</p>}
-              <details className="prospect-lead-detail" open={conflict || undefined}>
-                <summary><span>{pending && !auto ? '审核线索' : '查看处理详情'}</span>{draft && <small>有草稿</small>}<ChevronDown size={14} /></summary>
-              <div className="prospect-source"><SourceLink href={lead.videoUrl}>评论来源</SourceLink><SourceLink href={lead.profileUrl}>用户主页</SourceLink><span>{lead.source === 'mediacrawler' ? '导入评论' : '浏览器采集'} · {lead.analysisSource === 'model' ? 'AI 意向分析' : '规则初筛'}</span></div>
+  function chooseLeadPage(page: number, runId: string) {
+    if (!campaign) return;
+    leadQuery.current = { page, runId };
+    setLoading(true); setSelectedLeads({}); setLeadId(null);
+    void refresh(campaign.id, true);
+  }
+  function openLeadPanel(panel: LeadPanel) { setLeadId(null); setLeadPanel(panel); }
+  function closeTaskPanel() {
+    if (operationBusy) return;
+    if (formDirty || discoveryDirty || credentials) guarded(() => showTab('leads'));
+    else showTab('leads');
+  }
+  const selectForBatch = (lead: ProspectLead, checked: boolean) => setSelectedLeads(current => {
+    const next = { ...current };
+    if (checked) next[lead.id] = lead.version;
+    else delete next[lead.id];
+    return next;
+  });
+  const batchLeads = eligible.filter(lead => displayed.some(item => item.id === lead.id) && !draftConflict(lead));
+
+  const leadDetail = (lead: ProspectLead) => {
+    const auto = automaticLead(lead);
+    const self = selfRecipient(lead);
+    const draft = draftFor(lead);
+    const conflict = draftConflict(lead);
+    const pending = lead.status === 'pending';
+    const retryable = lead.status === 'failed' || lead.status === 'unknown';
+    const canReject = pending || lead.status === 'unreachable';
+    return <article key={lead.id} className="prospect-inbox-lead">
+      <header><h3>{lead.nickname || '未提供昵称'}</h3><span className={`prospect-status is-${lead.status}`}>{leadLabels[lead.status]}</span></header>
+      <blockquote>{lead.text}</blockquote>
+      {lead.error && <p className="prospect-inline-error" role="alert"><CircleAlert size={14} /> {lead.error}</p>}
+      <div className="prospect-source"><SourceLink href={lead.videoUrl}>评论来源</SourceLink><SourceLink href={lead.profileUrl}>用户主页</SourceLink><span>{lead.source === 'mediacrawler' ? '导入评论' : '浏览器采集'} · {lead.analysisSource === 'model' ? 'AI 意向分析' : '规则初筛'}</span></div>
               <p className="prospect-reason"><strong>评分理由：</strong>{lead.reason || '暂无评分理由，可重新分析后查看。'}</p>
               {self && <p id={`${prefix}-self-${lead.id}`} className="prospect-inline-help">当前登录账号，不能给自己发私信。</p>}
-              {pending && auto && <p className="prospect-inline-help">{paused ? '任务已暂停。恢复后，本线索仍按自动策略处理；这里的文案仅供查看。' : '此线索由后台自动分析与筛选，达到条件后会使用服务端文案发送。处理期间不开放本地编辑，可在上方暂停任务。'}</p>}
+              {pending && auto && <p className="prospect-inline-help">{paused ? '任务已暂停。恢复后，本线索仍按自动策略处理；这里的文案仅供查看。' : '此线索由后台自动分析与筛选，达到条件后会使用服务端文案发送。处理期间不开放本地编辑，可在任务与采集中暂停任务。'}</p>}
               {pending && !auto ? <>
                 <div className="prospect-field"><label htmlFor={`${prefix}-greeting-${lead.id}`}>发送前可编辑招呼</label><textarea id={`${prefix}-greeting-${lead.id}`} rows={3} maxLength={300} value={greetingFor(lead)} disabled={operationBusy} onChange={event => setDrafts(values => ({ ...values, [draftKey(lead)]: { version: values[draftKey(lead)]?.version ?? lead.version, greeting: event.target.value } }))} /></div>
                 {conflict && <div className="prospect-draft-conflict" role="status"><p>这条线索的分析或状态已更新，你的文案已保留。核对最新内容后再审核。</p><details><summary>查看最新分析文案</summary><p>{lead.greeting}</p></details><div className="prospect-inline-actions"><button className="button secondary" disabled={operationBusy} onClick={() => setDrafts(values => ({ ...values, [draftKey(lead)]: { version: lead.version, greeting: draft!.greeting } }))}>保留我的文案，确认新版本</button><button className="button ghost" disabled={operationBusy} onClick={() => discardLeadDraft(lead)}>使用最新草稿</button></div></div>}
@@ -465,18 +431,111 @@ export function ProspectingWorkspace({ onGuardReady, initialSection = 'create', 
                 {retryable && <><p className="prospect-inline-help">{lead.status === 'unknown' ? '助手会先核对抖音会话，再决定是否重发。重试沿用上次已批准的招呼文案。' : '重试沿用上次已批准的招呼文案，助手会先核对会话再执行。'}</p>{!busy && !loading && !sendingAvailable && <p className="prospect-inline-help">{paused ? '任务已暂停，恢复任务后可重试。' : !connected ? '请先连接助手并确认抖音登录，再重试发送。' : '请先在 Mac 助手确认发信账号，再重试发送。'}</p>}<footer><button className="button primary" aria-describedby={self ? `${prefix}-self-${lead.id}` : readOnlyAccount ? `${prefix}-send-identity` : undefined} disabled={!sendingAvailable || !contactable(lead) || self} onClick={() => retrySend(lead)}>{busy === lead.id ? <Loader2 size={15} className="spin" /> : <RefreshCw size={15} />}{lead.status === 'unknown' ? '核对并重试' : '重试发送'}</button></footer></>}
                 {canReject && <button className="button ghost" disabled={operationBusy || paused} onClick={() => review(lead, 'reject')}>拒绝</button>}
               </>}
-              </details>
-            </article>;
-          })}</div> : <div className="prospect-empty"><Search size={26} /><h3>{leads.length ? filter === 'highIntent' ? `暂无达到 ${campaign.minIntentScore} 分的评论` : filter === 'pending' ? '当前没有待审核评论' : '当前筛选下没有评论' : emptyCollection.title}</h3><p>{leads.length ? filter === 'highIntent' ? `已评分 ${leads.length} 条评论，暂未达到当前任务的高意向阈值。可以查看全部评论，核对每条评分来源和理由。` : `已保存 ${leads.length} 条评论。${unreachableCount ? `其中 ${unreachableCount} 条暂不可联系，例如缺少公开主页身份；这些评论仍可查看和分析。` : '当前没有符合此筛选状态的评论。'}切换为全部评论即可查看。` : emptyCollection.message}</p>{leads.length > 0 ? <button className="button primary" onClick={() => changeLeadFilter('all')}>查看全部评论（{leads.length}）</button> : latestCollection && !['queued', 'running'].includes(latestCollection.status) ? <button className="button secondary" onClick={() => setTab('history')}>查看采集记录</button> : !latestCollection ? <button className="button secondary" onClick={() => setTab('candidates')}>选择账号并采集评论</button> : null}</div>}
-          <details className="prospect-import"><summary><FileUp size={16} />导入已有评论<ChevronDown size={15} /></summary><p>支持评论 JSON / JSONL，例如已有的 MediaCrawler 导出。每次最多 300 条、1.5MB。导入评论仅用于分析，不会用于发送私信。</p><div className="prospect-field"><label htmlFor={`${prefix}-file`}>选择文件</label><input id={`${prefix}-file`} type="file" accept=".json,.jsonl,.ndjson,application/json" disabled={operationBusy} onChange={event => void readImport(event.target.files?.[0])} />{importName && <small>已读取：{importName}</small>}</div><div className="prospect-field"><label htmlFor={`${prefix}-import`}>或粘贴评论数据</label><textarea id={`${prefix}-import`} rows={5} value={importContent} disabled={operationBusy} onChange={event => { importReadGeneration.current++; setImportContent(event.target.value); setImportName(''); }} placeholder="粘贴 JSON 数组或逐行 JSON 数据" spellCheck={false} /></div><button className="button secondary" disabled={operationBusy || !importContent.trim()} onClick={() => void execute('import', () => post({ action: 'import', campaignId: campaign.id, content: importContent }), () => { setImportContent(''); setImportName(''); setFilter('all'); })}><FileUp size={15} />导入并筛选</button></details>
-        </section>}
+    </article>;
+  };
 
+  return <div className="prospect-workspace">
+    <div ref={contentPane} className="prospect-content" aria-label="社交平台获客">
+      <header className="prospect-inbox-heading"><h1>社交平台获客</h1></header>
+      {section === 'web' ? <>
+        {error && <p className="prospect-inline-error" role="alert">{error}</p>}
+        <WebProspecting toolbarStart={viewPicker} onDirtyChange={setWebDirty} onBusyChange={onWebBusyChange} onNavigateProject={onNavigateProject} />
+      </> : <>
+        {(error || readError) && <div className="prospect-message is-error" role="alert"><CircleAlert size={17} /><div><p>{error || readError}</p>{error && readError && <p>{readError}</p>}<button className="button ghost" disabled={operationBusy} onClick={() => void refresh(activeCampaign.current, true)}><RefreshCw size={14} />刷新状态</button></div></div>}
+        {notice && <div className="prospect-message" role="status"><Check size={17} /><p>{notice}</p><button className="icon-button" aria-label="关闭提示" onClick={() => setNotice('')}><X size={14} /></button></div>}
+        {inboxView === 'leads' && <>
+          <ProspectingFilters>{commonFilters}
+            {campaign && <>
+              <select aria-label="状态筛选" value={filter} onChange={event => changeLeadFilter(event.target.value as typeof filter)}>
+                <option value="all">全部状态</option><option value="highIntent">高意向</option><option value="pending">待审核</option><option value="submitted">已提交</option><option value="attention">需要处理</option>
+              </select>
+              {Boolean(snapshot?.discoveryRuns?.length || leadView.runId) && <select aria-label="范围" value={leadView.runId} disabled={operationBusy || loading} onChange={event => chooseLeadPage(1, event.target.value)}>
+                <option value="">全部轮次</option>{snapshot?.discoveryRuns?.map(run => <option key={run.id} value={run.id}>{run.id === snapshot.discoveryRuns?.[0]?.id ? '本轮新增' : '历史轮次新增'} · {dateLabel(run.scheduledFor)}</option>)}
+                {leadView.runId && !snapshot?.discoveryRuns?.some(run => run.id === leadView.runId) && <option value={leadView.runId}>已选历史轮次</option>}
+              </select>}
+              <label className="prospect-inbox-search"><Search size={15} aria-hidden="true" /><input type="search" aria-label="搜索线索" placeholder="搜索当前页线索" value={leadSearch} onChange={event => { setLeadSearch(event.target.value); setSelectedLeads({}); setLeadId(null); }} /></label>
+            </>}{taskButton}
+          </ProspectingFilters>
+          <div className="prospect-inbox-split" data-panel-open={Boolean(taskPanel || leadPanel || selectedLead)}>
+            <div className="prospect-inbox-list">
+              {loading && !snapshot ? <div className="prospect-empty" role="status"><Loader2 size={20} className="spin" />正在读取获客任务</div> :
+                !snapshot ? <div className="prospect-empty">刷新后查看已保存的获客任务。</div> : !campaign ? <div className="prospect-empty"><h2>创建任务后开始采集</h2><button className="button primary" onClick={startCampaign}><Plus size={15} />新建任务</button></div> : <>
+                  {displayed.length ? <ProspectingList label="评论线索" rows={displayed.map(lead => ({
+                    id: lead.id, username: lead.nickname || '未提供昵称', text: lead.text,
+                    intent: <span className="prospect-inbox-intent" data-high={highIntent(lead)} title={`意向 ${lead.intentScore} / 100 分`}>{lead.intentScore} 分</span>,
+                    status: <span className={`prospect-status is-${lead.status}`}>{leadLabels[lead.status]}</span>,
+                  }))} selectedId={selectedLead?.id} onSelect={id => {
+                    if (operationBusy) return;
+                    if (taskPanel) { guarded(() => { showTab('leads'); setLeadId(id); }); return; }
+                    setLeadPanel(null); setLeadId(id);
+                  }} /> : <div className="prospect-empty">
+                    <h2>{leads.length ? '没有符合筛选条件的评论' : emptyCollection.title}</h2>
+                    {!leads.length && <p>{emptyCollection.message}</p>}
+                    {leads.length ? <button className="button secondary" onClick={() => { setLeadSearch(''); changeLeadFilter('all'); }}>清除筛选</button> :
+                      <button className="button secondary" disabled={operationBusy} onClick={() => showTab(latestCollection ? 'history' : 'candidates')}>{latestCollection ? '查看采集记录' : '选择账号并采集评论'}</button>}
+                  </div>}
+                  <div className="prospect-inbox-pagination"><span aria-live="polite">{displayed.length} 条符合当前筛选 · 共 {snapshot.leadPagination?.total ?? leads.length} 条 · 第 {leadView.page} 页</span>
+                    {[-1, 1].map(step => <button key={step} className="button ghost" disabled={operationBusy || loading || (step < 0 ? leadView.page <= 1 : leadView.page * 30 >= (snapshot.leadPagination?.total ?? leads.length))} onClick={() => chooseLeadPage(leadView.page + step, leadView.runId)}>{step < 0 ? '上一页' : '下一页'}</button>)}
+                  </div>
+                </>}
+            </div>
+            {taskPanel ? <ProspectingPanel title={showCreateForm ? '新建获客任务' : '任务与采集'} onClose={closeTaskPanel} className="prospect-task-panel">
+              <div className="prospect-panel-actions">
+                <button className="button secondary" disabled={operationBusy || showCreateForm} onClick={startCampaign}><Plus size={15} />新建任务</button>
+                {campaign && <><button className="button secondary" disabled={operationBusy || showCreateForm} aria-pressed={tab === 'candidates'} onClick={() => showTab('candidates')}>竞品采集</button>
+                  <button className="button secondary" disabled={operationBusy || showCreateForm} aria-pressed={tab === 'history' && !showCreateForm} onClick={() => showTab('history')}>连接与执行记录</button></>}
+              </div>
+              {showCreateForm && snapshot && <CampaignForm key={formResetKey} busy={operationBusy} modelReady={snapshot.modelReady} onDirtyChange={setFormDirty} onCreate={input => void execute('create', () => post(input), () => { setCreating(false); setFormDirty(false); setFormResetKey(value => value + 1); setSelectedCandidates([]); setSelectedLeads({}); setDrafts({}); showTab('candidates'); })} onCancel={snapshot.campaigns.length ? () => guarded(() => { discardDrafts(); showTab('history'); }) : undefined} />}
+              {tab === 'history' && <>
+                <p className="prospect-platform-status" data-connected={connected}><span aria-hidden="true" />抖音 · {connectionLabel}</p>
+                {connectionSettings}
+                {campaign && !showCreateForm && <section className="prospect-task-details" aria-label="任务设置与执行记录">
+          <CampaignSummary campaign={campaign} busy={operationBusy} onToggle={() => campaignAction(paused ? 'resume' : 'pause')} />
+          <div className="prospect-inline-actions"><span>抖音搜索词：</span>{campaign.keywords.map(keyword => <SourceLink key={keyword} href={`https://www.douyin.com/search/${encodeURIComponent(keyword)}?type=video`}>{keyword}</SourceLink>)}</div>
+          <section className="prospect-section"><div className="prospect-section-heading"><div><h2>执行记录 <span>{visibleJobs.length}</span></h2></div><button className="button ghost" disabled={operationBusy} onClick={() => void refresh(activeCampaign.current, true)}><RefreshCw size={15} />刷新</button></div>{visibleJobs.length ? <div className="prospect-jobs">{visibleJobs.map(job => <article key={job.id}><div><strong>{jobKinds[job.kind]}</strong><span className={`prospect-status is-${job.status}`}>{jobLabels[job.status]}</span><time dateTime={job.createdAt}>{dateLabel(job.createdAt)}</time></div>{job.summary && <p>{job.summary}</p>}{job.error && <p className="prospect-inline-error">{job.error}</p>}{job.kind === 'collect' && Boolean(job.warnings?.length) && <div><strong>采集提示</strong>{job.warnings?.map((warning, index) => <p key={index}>{warning}</p>)}</div>}{job.status === 'unknown' && <p>{job.kind === 'reply' ? '回复结果尚未确认，请在留资对接的客户会话中核对消息记录。' : '结果尚未确认。可在原评论点击“核对并重试”，助手会先检查抖音会话。'}</p>}</article>)}</div> : <div className="prospect-empty"><h3>还没有执行记录</h3><p>开始发现账号、采集评论或发送招呼后，这里会保留真实处理结果。</p></div>}</section>
+        </section>}
+              </>}
+              {campaign && snapshot && !showCreateForm && <>
+                {tab === 'candidates' && <section className="prospect-section"><div className="prospect-section-heading"><div><h2>竞品账号</h2><div className="prospect-inline-actions" aria-label="抖音公开视频关键词搜索"><span>搜索词：</span>{campaign.keywords.map(keyword => <SourceLink key={keyword} href={`https://www.douyin.com/search/${encodeURIComponent(keyword)}?type=video`}>{keyword}</SourceLink>)}</div></div>{!discovery && <button className="button secondary" disabled={!available || discoveryPending} onClick={() => campaignAction('discover')}><Search size={16} />{campaign.candidates.length ? '重新发现账号' : '发现竞品账号'}</button>}</div>
+          {discovery && <div className={campaign.candidates.length ? 'prospect-message' : 'prospect-empty'} role="status">
+            {discovery.pending ? <Loader2 size={27} className="spin" /> : paused ? <Pause size={27} /> : !connected ? <Monitor size={27} /> : <Users size={27} />}
+            <div><h3>{discovery.title}</h3><p>{discovery.message}</p>{discovery.detail && <p className="prospect-inline-error">{discovery.detail}</p>}<button className="button primary" disabled={operationBusy || loading || discovery.action === 'discover' && (!available || discoveryPending)} onClick={actOnDiscovery}>{discovery.action === 'resume' ? <Play size={15} /> : discovery.action === 'discover' ? <Search size={15} /> : null}{discovery.label}</button></div>
+          </div>}
+          {campaign.candidates.length ? <><div className="prospect-selection-toolbar"><label><input type="checkbox" disabled={operationBusy} checked={candidateOptions.length > 0 && candidateOptions.every(item => selectedCandidateIds.includes(item.id))} onChange={event => { selectionDirty.current = true; setSelectionEdited(true); setSelectedCandidates(event.target.checked ? candidateOptions.map(item => item.id) : []); }} />选择全部账号</label><span aria-live="polite">已选 {selectedCandidateIds.length} 个 · 每视频最多 {campaign.maxCommentsPerVideo} 条评论</span><button className="button secondary" disabled={operationBusy || !selectionEdited} onClick={() => void execute('selectCandidates', () => post({ action: 'selectCandidates', campaignId: campaign.id, candidateIds: selectedCandidateIds }), () => { selectionDirty.current = false; setSelectionEdited(false); })}>保存账号选择</button><button className="button primary" disabled={!available || !selectedCandidateIds.length || jobs.some(job => job.kind === 'collect' && ['queued', 'running'].includes(job.status))} onClick={() => { void execute('collect', () => post({ action: 'collect', campaignId: campaign.id, candidateIds: selectedCandidateIds }), () => { selectionDirty.current = false; setSelectionEdited(false); showTab('leads'); setFilter('all'); }); }}><ArrowRight size={16} />采集所选评论</button></div><div className="prospect-candidates">{campaign.candidates.map(item => <article key={item.id} className={selectedCandidateIds.includes(item.id) ? 'prospect-candidate is-selected' : 'prospect-candidate'}><label className="prospect-candidate-choice"><input type="checkbox" disabled={operationBusy || !item.videos.length} checked={selectedCandidateIds.includes(item.id)} onChange={event => { selectionDirty.current = true; setSelectionEdited(true); setSelectedCandidates(ids => event.target.checked ? [...ids, item.id] : ids.filter(id => id !== item.id)); }} /><span><strong>{item.nickname}</strong>{item.firstRunId && item.firstRunId === (leadView.runId || snapshot.discoveryRuns?.[0]?.id) && <small>{leadView.runId && leadView.runId !== snapshot.discoveryRuns?.[0]?.id ? '所选轮次新增' : '本轮新增'}</small>}{item.description && <span>{item.description}</span>}</span></label><details className="prospect-candidate-detail"><summary>来源与匹配依据<span>{item.videos.length} 个视频</span><ChevronDown size={13} /></summary>{item.reason && <p>{item.reason}</p>}<SourceLink href={item.profileUrl}>查看账号</SourceLink><ul>{item.videos.map(video => <li key={video.id}><SourceLink href={video.url}>{video.title || '查看来源视频'}</SourceLink></li>)}</ul>{!item.videos.length && <p className="prospect-secondary">暂无可采集的来源视频。</p>}</details></article>)}</div></> : null}
+        </section>}
+                <details className="prospect-discovery-settings">
+          <summary><Settings2 size={15} /><span>每日发现</span><small>{campaign.dailyDiscovery?.enabled ? `每天 ${campaign.dailyDiscovery.time} · 北京时间` : '未启用'}</small><ChevronDown size={14} /></summary>
+          <ProspectingDailyDiscovery key={`${campaign.id}-${formResetKey}`} campaign={campaign} runs={snapshot.discoveryRuns} busy={operationBusy || loading} onDirtyChange={setDiscoveryDirty} onRun={() => campaignAction('discoveryRun')} onSave={async dailyDiscovery => { let saved = false; await execute('discoverySchedule', () => post({ action: 'discoverySchedule', campaignId: campaign.id, dailyDiscovery }), () => { saved = true; }); return saved; }} />
+        </details>
+                <details className="prospect-discovery-settings"><summary><Settings2 size={15} />评论处理<ChevronDown size={14} /></summary>
+                  <div className="prospect-panel-actions">
+                    <button className="button secondary" disabled={operationBusy || paused || !leads.length || !snapshot.modelReady} onClick={() => campaignAction('analyze')}><RefreshCw size={15} />AI 分析线索</button>
+                    <button className="button secondary" disabled={operationBusy} onClick={() => { showTab('leads'); openLeadPanel('batch'); }}>批量审核</button>
+                    <button className="button secondary" disabled={operationBusy} onClick={() => { showTab('leads'); openLeadPanel('import'); }}><FileUp size={15} />导入已有评论</button>
+                  </div>
+                  <p>当前页 AI 评分 {modelScoredCount} 条，规则初筛 {leads.length - modelScoredCount} 条。高意向阈值 {campaign.minIntentScore} 分。</p>
+                  {!snapshot.modelReady && <p>模型暂未就绪，评论使用规则初筛并等待人工审核。</p>}
+                </details>
+              </>}
+            </ProspectingPanel> : leadPanel && campaign ? <ProspectingPanel title={leadPanel === 'batch' ? '批量审核' : '导入已有评论'} onClose={() => { if (!operationBusy) setLeadPanel(null); }}>
+              {leadPanel === 'import' ? <div className="prospect-panel-form"><p>支持评论 JSON / JSONL，例如已有的 MediaCrawler 导出。每次最多 300 条、1.5MB。导入评论仅用于分析，不会用于发送私信。</p><div className="prospect-field"><label htmlFor={`${prefix}-file`}>选择文件</label><input id={`${prefix}-file`} type="file" accept=".json,.jsonl,.ndjson,application/json" disabled={operationBusy} onChange={event => void readImport(event.target.files?.[0])} />{importName && <small>已读取：{importName}</small>}</div><div className="prospect-field"><label htmlFor={`${prefix}-import`}>或粘贴评论数据</label><textarea id={`${prefix}-import`} rows={5} value={importContent} disabled={operationBusy} onChange={event => { importReadGeneration.current++; setImportContent(event.target.value); setImportName(''); }} placeholder="粘贴 JSON 数组或逐行 JSON 数据" spellCheck={false} /></div><button className="button secondary" disabled={operationBusy || !importContent.trim()} onClick={() => void execute('import', () => post({ action: 'import', campaignId: campaign.id, content: importContent }), () => { setImportContent(''); setImportName(''); setFilter('all'); setLeadPanel(null); })}><FileUp size={15} />导入并筛选</button></div> : <div className="prospect-panel-form">
+                <p>仅显示当前页符合条件的可联系线索。批准后排队发送，已提交表示助手完成提交。</p>
+                {batchLeads.length ? <>
+                  <label className="prospect-batch-choice"><input type="checkbox" disabled={operationBusy} checked={batchLeads.every(lead => selectedLeads[lead.id] === lead.version)} onChange={event => setSelectedLeads(event.target.checked ? Object.fromEntries(batchLeads.map(lead => [lead.id, lead.version])) : {})} />选择可联系项</label>
+                  {batchLeads.map(lead => <label className="prospect-batch-choice" key={lead.id}><input type="checkbox" disabled={operationBusy} checked={selectedLeads[lead.id] === lead.version} onChange={event => selectForBatch(lead, event.target.checked)} /><span><strong>{lead.nickname || '未提供昵称'}</strong><span>{lead.text}</span><small>{greetingFor(lead) || '暂无招呼文案'}</small></span></label>)}
+                  <button className="button primary" disabled={!sendingAvailable || !selected.length || selected.some(lead => !greetingFor(lead).trim() || draftConflict(lead))} onClick={approveSelected}><Check size={15} />批准所选{selected.length ? `（${selected.length}）` : ''}</button>
+                </> : <p>当前筛选下没有可批量审核的线索。</p>}
+                {readOnlyAccount && <p>请先在 Mac 助手中确认发信账号。</p>}
+              </div>}
+            </ProspectingPanel> : selectedLead ? <ProspectingPanel title="线索详情" onClose={() => { if (!operationBusy) setLeadId(null); }}>
+              {readOnlyAccount && <p id={`${prefix}-send-identity`} className="prospect-inline-help">当前账号可采集，发信身份待核实。请在 Mac 助手中确认账号。</p>}
+              {leadDetail(selectedLead)}
+            </ProspectingPanel> : null}
+          </div>
+        </>}
+        {snapshot && <ProspectingConversations key={campaign?.id || 'global'} campaignId={campaign?.id} active={inboxView === 'chat' || inboxView === 'pool'} view={inboxView === 'pool' ? 'pool' : 'chat'} blocked={Boolean(busy) || loading} paused={Boolean(paused)} modelReady={snapshot.modelReady} assistantOnline={Boolean(device?.online)} sendingAvailable={Boolean(connected && !readOnlyAccount && !paused && !busy && !loading)} resetKey={chatResetKey} onViewChange={setTab} onCampaignChange={selectCampaign} onDirtyChange={setChatDirty} onBusyChange={onChatBusyChange} toolbarStart={commonFilters} toolbarActions={taskButton} />}
+        {!snapshot && (inboxView === 'chat' || inboxView === 'pool') && <ProspectingFilters>{commonFilters}{taskButton}</ProspectingFilters>}
       </>}
-      {section === 'screen' && !campaign && <div className="prospect-empty"><Search size={26} /><h2>先创建获客任务</h2><p>保存产品与客群要求后，选择抖音账号来源并采集、筛选评论线索。</p><button className="button primary" onClick={startCampaign}><Plus size={15} />新建任务</button></div>}
-      {section === 'handoff' && <div className="prospect-tabs" aria-label="留资对接内容"><button aria-pressed={tab === 'chat'} onClick={() => setTab('chat')}>客户会话</button><button aria-pressed={tab === 'pool'} onClick={() => setTab('pool')}>留资线索池</button></div>}
-      <ProspectingConversations key={campaign?.id || 'global'} campaignId={campaign?.id} active={section === 'handoff'} view={tab === 'pool' ? 'pool' : 'chat'} blocked={Boolean(busy) || loading} paused={Boolean(paused)} modelReady={snapshot.modelReady} assistantOnline={Boolean(device?.online)} sendingAvailable={Boolean(connected && !readOnlyAccount && !paused && !busy && !loading)} resetKey={chatResetKey} onViewChange={setTab} onCampaignChange={selectCampaign} onDirtyChange={setChatDirty} onBusyChange={onChatBusyChange} />
-    </>}
-    </>}
     </div>
     {leaveRequested && <Overlay className="confirmation-dialog" title="有尚未保存的获客内容" onClose={() => { setLeaveRequested(false); pendingLeave.current = null; }}><p>继续会丢弃未提交的需求、招呼草稿、聊天回复或导入内容。尚未保存的一次性配对配置也会关闭。</p><div className="contract-leave-actions"><button data-dialog-initial-focus="true" className="button secondary" onClick={() => { setLeaveRequested(false); pendingLeave.current = null; }}>继续编辑</button><button className="button primary" onClick={() => { const proceed = pendingLeave.current; pendingLeave.current = null; discardDrafts(); setLeaveRequested(false); proceed?.(); }}>放弃更改并继续</button></div></Overlay>}
   </div>;

@@ -70,6 +70,7 @@ test('task memory keeps correction drafts across polling and conflict, preserves
       return route.fulfill({json:{message:'已保存',chat:snapshot()}});
     });
     const page = await context.newPage(); await page.goto(origin);
+    await page.getByRole('button',{name:/隔离测试客户/}).click();
     const memory = page.locator('.prospect-memory');
     await memory.getByText('本任务记忆', {exact:true}).waitFor({timeout:8000});
     await memory.locator(':scope > summary').click();
@@ -89,6 +90,8 @@ test('task memory keeps correction drafts across polling and conflict, preserves
     assert.equal(await memory.getByLabel('纠正后的预算').evaluate(el => document.activeElement === el),true,'Correction opens at the editable field');
     await memory.getByLabel('纠正后的预算').fill('9000 元/月');
     await page.waitForFunction(() => window.__chatDirty === true);
+    await page.getByRole('button',{name:'返回会话列表'}).click();
+    await page.getByText('请先保存或取消记忆修改。',{exact:true}).waitFor();
     await page.waitForResponse(r => r.url().includes('/api/prospecting?') && r.request().method() === 'GET');
     assert.equal(await memory.getByLabel('纠正后的预算').inputValue(),'9000 元/月');
     await memory.getByRole('button',{name:'保存纠正'}).click();
@@ -134,7 +137,6 @@ test('task memory keeps correction drafts across polling and conflict, preserves
     await memory.locator('.prospect-memory-body').evaluate(el => { el.scrollTop=0; });
     if (process.env.PROSPECT_MEMORY_CAPTURE_DIR) { await mkdir(process.env.PROSPECT_MEMORY_CAPTURE_DIR,{recursive:true}); await page.screenshot({path:path.join(process.env.PROSPECT_MEMORY_CAPTURE_DIR,'memory-desktop.png'),fullPage:true}); }
     await page.setViewportSize({width:390,height:844});
-    await page.getByRole('button',{name:/隔离测试客户/}).click();
     assert.ok((await memory.getByRole('button',{name:'纠正预算',exact:true}).boundingBox()).height >= 44);
     assert.equal(await memory.getByRole('button',{name:'纠正预算',exact:true}).isDisabled(),true,'Inactive tasks cannot edit memory');
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),true);
@@ -164,10 +166,12 @@ test('real workspace navigates after memory task switch releases saving guard an
       return route.fulfill({json:{message:'任务已切换',chat:snapshot(bound)}});
     });
     await page.goto(origin);
+    await page.getByRole('button',{name:/切换回归客户/}).click();
     await page.locator('.prospect-memory > summary').click();
     await page.getByLabel('切换接待任务',{exact:true}).selectOption('b');
     await page.getByRole('button',{name:'确认切换任务'}).click();
-    await page.waitForFunction(()=>document.querySelector('.prospect-task-picker select')?.value === 'b',{},{timeout:4000});
+    await page.waitForFunction(()=>document.querySelector('select[aria-label="当前任务"]')?.value === 'b',{},{timeout:4000});
+    await page.getByRole('button',{name:/切换回归客户/}).click();
     await page.locator('.prospect-memory > summary').click();
     await page.getByText('当前自动接待任务：任务 B',{exact:true}).waitFor();
     await page.getByRole('button',{name:'交还 AI 助手',exact:true}).waitFor();

@@ -18,8 +18,9 @@ import '/app/components/prospecting-workspace.css';
 function Fixture() {
   const [campaignId, setCampaign] = useState('campaign-a');
   const [blocked, setBlocked] = useState(false);
-  useEffect(() => { window.__chatFixture = { setCampaign, setBlocked }; }, []);
-  return <main className="prospect-workspace" style={{ display: 'block', maxWidth: 1200, margin: 'auto', padding: 16 }}><ProspectingConversations key={campaignId} campaignId={campaignId} active view="chat" blocked={blocked} paused={false} modelReady assistantOnline sendingAvailable resetKey={0} onViewChange={() => {}} onDirtyChange={dirty => { window.__chatDirty = dirty; }} onBusyChange={() => {}} /></main>;
+  const [view, setView] = useState('chat');
+  useEffect(() => { window.__chatFixture = { setCampaign, setBlocked, setView }; }, []);
+  return <main className="prospect-workspace" style={{ display: 'block', maxWidth: 1200, margin: 'auto', padding: 16 }}><ProspectingConversations key={campaignId} campaignId={campaignId} active view={view} blocked={blocked} paused={false} modelReady assistantOnline sendingAvailable resetKey={0} onViewChange={setView} onDirtyChange={dirty => { window.__chatDirty = dirty; }} onBusyChange={() => {}} /></main>;
 }
 createRoot(document.getElementById('root')).render(<Fixture />);
 `;
@@ -93,7 +94,14 @@ test('conversation settings preserve drafts, save the loaded enabled state, and 
     await page.clock.setFixedTime(new Date('2026-11-07T18:00:00Z')); // 02:00 in Shanghai.
     page.on('pageerror', error => errors.push(error.message));
     await page.goto(origin);
-    await page.getByRole('button', { name: '开启 AI 跟进', exact: true }).waitFor();
+    const table = page.getByRole('table', { name: '客户会话', exact: true });
+    await table.waitFor();
+    assert.deepEqual(await table.getByRole('columnheader').allTextContents(), ['用户名', '原文', '意向', '状态']);
+    assert.equal(await page.getByRole('complementary', { name: '会话详情' }).count(), 0, 'No conversation is selected automatically');
+    const wang = page.getByRole('button', { name: /王女士/ });
+    const settings = page.getByRole('button', { name: /^跟进设置/ });
+    const closeSettings = page.getByRole('button', { name: '关闭跟进设置', exact: true });
+    await wang.click();
     await page.locator('.prospect-chat-takeover').getByText(handoffReason, { exact: true }).waitFor();
     const syncDetails = page.locator('.prospect-chat-sync-status');
     await syncDetails.locator(`time[datetime="${lastSyncedAt}"]`).waitFor();
@@ -101,7 +109,7 @@ test('conversation settings preserve drafts, save the loaded enabled state, and 
     assert.match(await syncDetails.textContent(), /同步失败/);
     assert.match(await syncDetails.textContent(), /核验.*账号.*重新同步/);
     assert.doesNotMatch(await syncDetails.textContent(), /16:00/, 'A job completion or GET refresh must not replace the platform observation time');
-    await page.locator('.prospect-chat-agent-settings > summary').click();
+    await settings.click();
     assert.equal(await page.getByRole('checkbox', { checked: true }).count(), 2, 'All server-authorized department and shared libraries are mandatory');
     assert.equal(await page.getByLabel('每日回复上限', { exact: true }).inputValue(), '30');
     assert.equal(await page.getByLabel('单会话回复上限', { exact: true }).inputValue(), '12');
@@ -125,20 +133,24 @@ test('conversation settings preserve drafts, save the loaded enabled state, and 
     await replyHours.uncheck();
     assert.equal(await page.getByLabel('开始时间', { exact: true }).isDisabled(), true);
     assert.equal(await page.getByLabel('开始时间', { exact: true }).inputValue(), '09:00', 'Turning off limits preserves the edited window');
+    await closeSettings.click();
     await page.getByRole('button', { name: '立即同步', exact: true }).click();
     await syncDetails.getByText('同步失败：会话面板尚未就绪，请在抖音打开此会话后重新同步。', { exact: true }).waitFor();
     assert.equal(syncStatus, 'done', 'A completed task with an error must still show a sync failure');
     assert.match(await syncDetails.textContent(), /15:45/);
     assert.doesNotMatch(await syncDetails.textContent(), /16:00/, 'Task completion must not advance the platform observation time');
     assert.equal(await page.locator('.prospect-chat-takeover').getByText(handoffReason, { exact: true }).count(), 1, 'Synchronization status stays separate from the customer handoff reason');
-    await page.waitForFunction(() => document.querySelector('.prospect-chat-agent-settings input[type="number"]')?.value === '17');
+    await settings.click();
+    await page.waitForFunction(() => document.querySelector('.prospect-chat-policy input[type="number"]')?.value === '17');
     assert.equal(await page.getByLabel('每日回复上限', { exact: true }).inputValue(), '17');
     assert.equal(await page.getByRole('checkbox', { name: '已审核招商资料' }).isChecked(), true);
     syncError = undefined;
     await page.getByRole('button', { name: '开启 AI 跟进', exact: true }).click();
     await page.getByRole('button', { name: '关闭 AI 跟进', exact: true }).waitFor();
     await page.getByText('AI 助手在线', { exact: true }).waitFor();
+    await closeSettings.click();
     assert.doesNotMatch(await syncDetails.textContent(), /同步已停滞/, 'A human-controlled conversation is outside routine automatic sync');
+    await settings.click();
     assert.equal(await page.getByLabel('每日回复上限', { exact: true }).inputValue(), '17', 'Enabled-only responses preserve pending settings');
     assert.equal(posts.find(item => item.action === 'chatSettings').policy, undefined);
     rejectSave = true;
@@ -169,16 +181,21 @@ test('conversation settings preserve drafts, save the loaded enabled state, and 
     await replyHours.check();
     await page.getByLabel('开始时间', { exact: true }).fill('09:00');
     const replyInput = page.getByRole('textbox', { name: '人工回复客户', exact: true });
+    await closeSettings.click();
     await replyInput.fill('仅用于测试的未发送草稿');
+    await settings.click();
     await replyHours.uncheck();
     await page.getByRole('button', { name: '保存设置', exact: true }).click();
     await page.getByRole('button', { name: '保存设置', exact: true }).waitFor({ state: 'visible' });
     await page.waitForFunction(() => document.querySelector('.prospect-chat-unsaved') === null);
     assert.equal(posts.findLast(item => item.policy).policy.replyHoursEnabled, false);
-    assert.equal(await replyInput.inputValue(), '仅用于测试的未发送草稿', 'Saving the hours switch preserves the manual reply draft');
     assert.equal(await page.getByLabel('开始时间', { exact: true }).inputValue(), '09:00');
     assert.equal(await page.getByLabel('结束时间', { exact: true }).inputValue(), '18:00');
     await page.getByText('AI 助手在线', { exact: true }).waitFor();
+    const geometry = await page.getByLabel('每日回复上限', { exact: true }).boundingBox();
+    assert.equal(geometry.height, 36);
+    await closeSettings.click();
+    assert.equal(await replyInput.inputValue(), '仅用于测试的未发送草稿', 'Saving the hours switch preserves the manual reply draft');
     const composingKeys = await replyInput.evaluate(el => {
       el.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true, data: '中文' }));
       const results = [
@@ -201,8 +218,6 @@ test('conversation settings preserve drafts, save the loaded enabled state, and 
     await page.getByRole('button', { name: '查看最新消息', exact: true }).waitFor();
     await page.getByRole('button', { name: '查看最新消息', exact: true }).click();
     assert.ok(await transcript.evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight < 50));
-    const geometry = await page.getByLabel('每日回复上限', { exact: true }).boundingBox();
-    assert.equal(geometry.height, 36);
     const captureDir = process.env.PROSPECT_UI_CAPTURE_DIR;
     if (captureDir) { await mkdir(captureDir, { recursive: true }); await page.screenshot({ path: path.join(captureDir, 'chat-desktop.png'), fullPage: true }); }
     await page.getByRole('button', { name: /已退订客户/ }).click();
@@ -212,19 +227,22 @@ test('conversation settings preserve drafts, save the loaded enabled state, and 
     assert.equal(await page.getByRole('textbox', { name: '人工回复客户', exact: true }).isDisabled(), true);
     assert.equal(posts.filter(item => ['chatReply', 'chatResume'].includes(item.action)).length, 0);
     await page.setViewportSize({ width: 390, height: 844 });
-    assert.equal(await page.getByLabel('每日回复上限', { exact: true }).evaluate(el => getComputedStyle(el).height), '44px');
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'Mobile layout must not overflow');
     if (captureDir) await page.screenshot({ path: path.join(captureDir, 'chat-mobile.png'), fullPage: true });
-    await page.getByRole('button', { name: '会话列表', exact: true }).click();
-    await page.getByRole('button', { name: /王女士/ }).click();
+    await page.getByRole('button', { name: '返回会话列表', exact: true }).click();
+    await wang.click();
     assert.equal(await page.getByRole('textbox', { name: '人工回复客户', exact: true }).inputValue(), '仅用于测试的未发送草稿');
+    await settings.click();
+    assert.equal(await page.getByLabel('每日回复上限', { exact: true }).evaluate(el => getComputedStyle(el).height), '44px');
     await page.evaluate(() => window.__chatFixture.setBlocked(true));
+    await page.waitForFunction(() => document.querySelector('.prospect-chat-agent-toolbar button')?.disabled);
     assert.equal(await page.getByRole('button', { name: '关闭 AI 跟进', exact: true }).isDisabled(), true);
     assert.equal(await page.getByLabel('每日回复上限', { exact: true }).isDisabled(), true);
     await page.evaluate(() => { window.__chatFixture.setBlocked(false); window.__chatFixture.setCampaign('campaign-b'); });
-    await page.getByLabel('每日回复上限', { exact: true }).waitFor({ state: 'attached' });
+    assert.equal(await page.getByRole('checkbox', { checked: true }).count(), 0, 'Settings are closed after campaign remount');
+    await settings.click();
     assert.equal(await page.getByLabel('每日回复上限', { exact: true }).inputValue(), '30', 'Campaign remount resets settings');
-    assert.equal(await page.getByRole('checkbox', { checked: true }).count(), 0, 'Collapsed settings are hidden after campaign remount');
+    await closeSettings.click();
     handoffReason = undefined;
     lastSyncedAt = undefined;
     await page.waitForResponse(response => response.url().includes('/api/prospecting?') && response.request().method() === 'GET');
@@ -286,6 +304,7 @@ test('verification waits stay one reply while legacy unsent attempts remain insp
     page.on('pageerror', error => errors.push(error.message));
     await page.clock.setFixedTime(new Date('2026-11-08T18:00:00Z'));
     await page.goto(origin);
+    await page.getByRole('button', { name: /王女士/ }).click();
     const transcript = page.getByRole('log');
     const waiting = transcript.locator('article').filter({ has: page.getByText(replyText, { exact: true }) });
     await waiting.getByText('等待账号核验，尚未发送', { exact: true }).waitFor();
@@ -324,7 +343,6 @@ test('verification waits stay one reply while legacy unsent attempts remain insp
     const captureDir = process.env.PROSPECT_UI_CAPTURE_DIR;
     if (captureDir) { await mkdir(captureDir, { recursive: true }); await page.screenshot({ path: path.join(captureDir, 'chat-waiting-desktop.png'), fullPage: true }); }
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.getByRole('button', { name: /王女士/ }).click();
     assert.equal(await waiting.getByText('检查助手后点击立即同步', { exact: true }).isVisible(), true);
     assert.equal(await page.getByRole('button', { name: '立即同步', exact: true }).evaluate(el => getComputedStyle(el).height), '44px');
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
@@ -381,11 +399,54 @@ test('conversation learning sends only source identifiers and shows retryable st
       return fail ? route.fulfill({ status: 409, json: { error: '至少需要两轮实质客户文本' } }) : route.fulfill({ json: { chat: snapshot, message: '对话案例已保存；请配置大模型后重试' } });
     });
     await page.goto(origin);
+    await page.getByRole('button', { name: /案例客户/ }).click();
     const button = page.getByRole('button', { name: '提炼话术 Skill / 重试', exact: true });
     await button.click(); await page.getByText('至少需要两轮实质客户文本', { exact: true }).waitFor();
     assert.deepEqual(posts[0], { action: 'chatLearn', campaignId: 'campaign-a', conversationId: 'case-a' });
     fail = false; await button.click(); await page.getByText('对话案例已保存；请配置大模型后重试', { exact: true }).waitFor();
     assert.equal(posts.length, 2);
+  } finally { await browser?.close(); await server.close(); await rm(cacheDir, { recursive: true, force: true }); }
+});
+
+test('the capture list filters four columns and opens authorized conversation details on demand', { timeout: 30000 }, async () => {
+  const { chromium } = await import(pathToFileURL(path.join(root, 'tools/douyin-bridge/node_modules/playwright/index.mjs')).href);
+  const { server, origin, cacheDir } = await createConversationFixture();
+  let browser;
+  try {
+    browser = await chromium.launch({ headless: true });
+    const page = await browser.newPage({ viewport: { width: 390, height: 800 } });
+    const selectedReads = [];
+    const snapshot = { enabled: false, online: false, policy: defaultPolicy(), conversations: [], messages: [], pool: [{ id: 'capture', conversationId: 'readonly', nickname: '留资客户', contactType: 'phone', contactValue: '13600000001', grade: 'high', score: 88, assignedName: '测试销售', status: 'assigned', updatedAt: '2026-11-08' }] };
+    await page.route('**/*', async route => {
+      const url = new URL(route.request().url());
+      if (url.origin !== origin) return route.abort();
+      if (url.pathname !== '/api/prospecting') return route.continue();
+      assert.equal(route.request().method(), 'GET');
+      if (url.searchParams.get('conversationId') !== 'readonly') return route.fulfill({ json: snapshot });
+      selectedReads.push(url.searchParams.get('campaignId'));
+      return route.fulfill({ json: { ...snapshot, conversations: [{ id: 'readonly', campaignId: 'different-campaign', nickname: '留资客户', mode: 'human', status: 'active', version: 1, memoryEditable: false, lastMessagePreview: '想预约看铺' }], messages: [{ id: 'source', conversationId: 'readonly', direction: 'inbound', actor: 'customer', text: '想预约看铺', status: 'received', createdAt: '2026-11-08' }] } });
+    });
+    await page.goto(origin);
+    await page.waitForFunction(() => Boolean(window.__chatFixture));
+    await page.evaluate(() => window.__chatFixture.setView('pool'));
+    const table = page.getByRole('table', { name: '留资线索池' });
+    await table.waitFor();
+    assert.deepEqual(await table.getByRole('columnheader').allTextContents(), ['用户名', '原文', '意向', '状态']);
+    assert.equal(await page.getByRole('complementary', { name: '留资详情' }).count(), 0);
+    assert.doesNotMatch(await table.textContent(), /13600000001|测试销售/);
+    await page.getByLabel('意向等级').selectOption('low');
+    await page.getByText('没有匹配的留资线索', { exact: true }).waitFor();
+    await page.getByRole('button', { name: '查看全部留资' }).click();
+    await table.getByRole('button', { name: /留资客户/ }).click();
+    const detail = page.getByRole('complementary', { name: '留资详情' });
+    await detail.getByText('13600000001').waitFor();
+    assert.equal(await table.isVisible(), false);
+    await detail.getByRole('button', { name: '查看会话' }).click();
+    await page.getByRole('log').getByText('想预约看铺').waitFor();
+    assert.ok(selectedReads.length && selectedReads.every(scope => scope === null));
+    assert.equal(await page.getByRole('button', { name: '发送回复' }).count(), 0);
+    await page.getByRole('button', { name: '返回会话列表' }).click();
+    assert.equal(await page.getByRole('complementary', { name: '会话详情' }).count(), 0);
   } finally { await browser?.close(); await server.close(); await rm(cacheDir, { recursive: true, force: true }); }
 });
 

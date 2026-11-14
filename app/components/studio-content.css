@@ -1,13 +1,13 @@
 .studio-content {
   container: studio-content / inline-size;
-  --draft-paper: var(--cds-surface-2, #fff);
-  --draft-input: var(--cds-surface-2, #fff);
-  --draft-text: var(--cds-text-primary, #181b21);
-  --draft-panel: #f5f6f7;
-  --draft-line: #dcdfe3;
-  --draft-muted: #575f6b;
-  --draft-ink: #181b21;
-  --draft-ink-text: #fff;
+  --draft-paper: var(--cds-surface-2, var(--surface));
+  --draft-input: var(--cds-bg-input, var(--draft-paper));
+  --draft-text: var(--text);
+  --draft-panel: var(--surface-secondary);
+  --draft-line: var(--border);
+  --draft-muted: var(--text-secondary);
+  --draft-action: var(--primary);
+  --draft-action-text: var(--on-primary);
   --draft-hero: linear-gradient(120deg, #fbfbfd 21%, #edf3fa 64%, #f6e8e5);
   --draft-cover: #fffcfb;
   --draft-cover-line: #e6dcd9;
@@ -15,14 +15,7 @@
 }
 
 :root[data-mode='dark'] .studio-content {
-  --draft-paper: #23272d;
-  --draft-input: var(--cds-surface-3, #292f36);
-  --draft-text: var(--cds-text-primary, #f0f3f7);
-  --draft-panel: #1e2228;
-  --draft-line: #414751;
-  --draft-muted: #b3bcc9;
-  --draft-ink: #eceff4;
-  --draft-ink-text: #1c2027;
+  --draft-input: var(--cds-surface-3, var(--draft-paper));
   --draft-hero: linear-gradient(120deg, #292d36 21%, #293442 64%, #3b3035);
   --draft-cover: #332d36;
   --draft-cover-line: #574957;
@@ -142,14 +135,14 @@
 .material-workspace .studio-content button:not(:disabled):hover { background: var(--draft-panel); }
 
 .material-workspace .studio-content .studio-content-ink {
-  border-color: var(--draft-ink);
-  background: var(--draft-ink);
-  color: var(--draft-ink-text);
+  border-color: var(--draft-action);
+  background: var(--draft-action);
+  color: var(--draft-action-text);
   font-weight: 600;
 }
 
 .material-workspace .studio-content .studio-content-ink:not(:disabled):hover {
-  background: color-mix(in srgb, var(--draft-ink), var(--draft-ink-text) 14%);
+  background: var(--cds-clay-hover, var(--draft-action));
 }
 
 .studio-content-draft {

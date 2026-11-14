@@ -2,6 +2,8 @@ import {markSalesBusinessChanges} from './sales-project-eligibility.ts';
 import type {SalesScope} from './sales-scope.ts';
 import {DomainError,projectState} from './domain.ts';
 import {authorizedRecording,recordingObjectKey} from './followup-recordings.ts';
+import {readRecordingInboxSource} from './recording-inbox.ts';
+import {RECORDING_INBOX_DEAL_ID} from './recording-inbox-types.ts';
 import {queueFeedback} from './talktrack-domain.ts';
 import {salesMutationEvents} from './sales-report-domain.ts';
 import {createSpeechSettingsStore,readSpeechJson,speechGateway} from './speech-settings.ts';
@@ -64,7 +66,11 @@ export async function linkSpeechTranscript(state:WorkbenchState,dealId:string,re
 export function createSpeechTranscriptionService(environment:Environment,deps:WorkspaceDependencies,request:SpeechFetch=fetch){
   const database=()=>{if(!environment.DB)throw new DomainError('转写任务存储尚未就绪',503);return environment.DB;};
   const find=async(userId:string,recordingId:string)=>database().prepare('SELECT version,remote_id,lease_until,data_json FROM workbench_recording_transcriptions WHERE user_id = ? AND recording_id = ?').bind(userId,recordingId).first<JobRow>();
-  const authorize=async(userId:string,role:Role,dealId:string,recordingId:string,origin:string,salesScope?:SalesScope)=>{if(!userId||userId.length>512)throw new DomainError('请先登录',401);const state=await deps.load(userId,origin);return authorizedRecording(projectState(state,role,salesScope),dealId,recordingId);};
+  const authorize=async(userId:string,role:Role,dealId:string,recordingId:string,origin:string,salesScope?:SalesScope,memberId?:string)=>{
+    if(!userId||userId.length>512)throw new DomainError('请先登录',401);
+    if(dealId===RECORDING_INBOX_DEAL_ID)return (await readRecordingInboxSource(database(),userId,memberId,recordingId)).recording;
+    return authorizedRecording(projectState(await deps.load(userId,origin),role,salesScope),dealId,recordingId);
+  };
   const persist=async(userId:string,row:JobRow,job:SpeechTranscriptionJob,remoteId=row.remote_id)=>{const saved=await database().prepare('UPDATE workbench_recording_transcriptions SET version = ?,remote_id = ?,lease_until = NULL,updated_at = ?,data_json = ? WHERE user_id = ? AND recording_id = ? AND version = ?').bind(row.version+1,remoteId,job.updatedAt,JSON.stringify(job),userId,job.recordingId,row.version).run();return saved.meta.changes===1;};
   async function link(userId:string,row:JobRow,job:SpeechTranscriptionJob,origin:string,sourceOnly?:true):Promise<SpeechTranscriptionJob>{
     if(job.status!=='completed'||!job.result||job.linked)return job;
@@ -79,8 +85,8 @@ export function createSpeechTranscriptionService(environment:Environment,deps:Wo
     }catch(error){const updated={...job,message:error instanceof DomainError?error.message:'转写已保存，项目分析暂未更新；重新打开录音后自动重试',updatedAt:new Date().toISOString()};await persist(userId,row,updated);return updated;}
     return job;
   }
-  async function start(userId:string,role:Role,dealId:string,recordingId:string,origin:string,retry=false,salesScope?:SalesScope):Promise<SpeechTranscriptionJob>{
-    const recording=await authorize(userId,role,dealId,recordingId,origin,salesScope);let row=await find(userId,recordingId);const previous=row?JSON.parse(row.data_json) as SpeechTranscriptionJob:null;
+  async function start(userId:string,role:Role,dealId:string,recordingId:string,origin:string,retry=false,salesScope?:SalesScope,memberId?:string):Promise<SpeechTranscriptionJob>{
+    const recording=await authorize(userId,role,dealId,recordingId,origin,salesScope,memberId);let row=await find(userId,recordingId);const previous=row?JSON.parse(row.data_json) as SpeechTranscriptionJob:null;
     if(previous&&previous.dealId!==dealId)throw new DomainError('录音不存在或当前视角无权访问',404);
     if(previous&&(previous.status==='completed'&&!retry||previous.status==='running'||previous.status==='queued'&&(row!.remote_id||Date.parse(row!.lease_until??'')>Date.now())||previous.status==='failed'&&!retry))return previous;
     const now=new Date().toISOString(),job:SpeechTranscriptionJob={id:`asr-${crypto.randomUUID()}`,recordingId,dealId,status:'queued',progress:0,message:'正在提交识别任务',createdAt:now,updatedAt:now,linked:false,...(previous?.result?{result:previous.result}:{})};const version=(row?.version??0)+1,until=new Date(Date.now()+90000).toISOString();
@@ -92,8 +98,8 @@ export function createSpeechTranscriptionService(environment:Environment,deps:Wo
       const response=await request(`${gateway.url}/transcriptions`,{method:'POST',headers:{Authorization:`Bearer ${await signRecordingSession(gateway.secret,userId,recordingId)}`},body:form,redirect:'manual',signal:AbortSignal.timeout(45000)});if(!response.ok)throw new DomainError(safeFailure,response.status===413?413:503);const remote=remoteJob(await readSpeechJson(response,1950000),job);await persist(userId,row,remote.job,remote.remoteId);const updated=await find(userId,recordingId);return updated?link(userId,updated,JSON.parse(updated.data_json),origin,recording.sourceOnly):remote.job;
     }catch(error){const failed={...job,status:'failed' as const,message:error instanceof DomainError?error.message:safeFailure,updatedAt:new Date().toISOString()};await persist(userId,row,failed);return failed;}
   }
-  async function read(userId:string,role:Role,dealId:string,recordingId:string,origin:string,salesScope?:SalesScope):Promise<SpeechTranscriptionJob|null>{
-    const recording=await authorize(userId,role,dealId,recordingId,origin,salesScope);let row=await find(userId,recordingId);if(!row)return null;let job=JSON.parse(row.data_json) as SpeechTranscriptionJob;if(job.dealId!==dealId)throw new DomainError('录音不存在或当前视角无权访问',404);
+  async function read(userId:string,role:Role,dealId:string,recordingId:string,origin:string,salesScope?:SalesScope,memberId?:string):Promise<SpeechTranscriptionJob|null>{
+    const recording=await authorize(userId,role,dealId,recordingId,origin,salesScope,memberId);let row=await find(userId,recordingId);if(!row)return null;let job=JSON.parse(row.data_json) as SpeechTranscriptionJob;if(job.dealId!==dealId)throw new DomainError('录音不存在或当前视角无权访问',404);
     if(['queued','running'].includes(job.status)&&row.remote_id){try{const gateway=speechGateway(environment,origin);if(!gateway)throw new Error();const response=await request(`${gateway.url}/transcriptions/${row.remote_id}`,{headers:{Authorization:`Bearer ${await signRecordingSession(gateway.secret,userId,recordingId)}`},redirect:'manual',signal:AbortSignal.timeout(8000)});if(response.status===404||response.status===410){const expired={...job,status:'failed' as const,message:'语音服务中的任务已过期或被清理，原录音仍保留，请重新转写',updatedAt:new Date().toISOString()};await persist(userId,row,expired);return expired;}if(!response.ok)throw new Error();const remote=remoteJob(await readSpeechJson(response,1950000),job);if(await persist(userId,row,remote.job,remote.remoteId)){row={...row,version:row.version+1,remote_id:remote.remoteId,data_json:JSON.stringify(remote.job)};job=remote.job;}else{const latest=await find(userId,recordingId);if(latest){row=latest;job=JSON.parse(latest.data_json);}}}catch{return {...job,message:'暂时无法读取转写进度；录音已保留，连接恢复后继续查询'};}}
     if(job.status==='queued'&&!row.remote_id&&Date.parse(row.lease_until??'')<=Date.now()){const failed={...job,status:'failed' as const,message:'转写提交未完成；原录音已保存，请重试',updatedAt:new Date().toISOString()};await persist(userId,row,failed);return failed;}
     return link(userId,row,job,origin,recording.sourceOnly);

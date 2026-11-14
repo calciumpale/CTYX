@@ -1,5 +1,6 @@
 import type {SalesScope} from './sales-scope.ts';
 import { assertRevision, DomainError, executeAction, projectState } from './domain.ts';
+import { RECORDING_INBOX_DEAL_ID } from './recording-inbox-types.ts';
 import type { ApiResult, FollowupRecording, Role, WorkbenchState } from './types.ts';
 
 export const MAX_RECORDING_BYTES=20*1024*1024;
@@ -25,7 +26,7 @@ const formats:Record<string,{mimeType:string;aliases:string[]}>= {
   ogg:{mimeType:'audio/ogg',aliases:['audio/ogg','application/ogg']},
   webm:{mimeType:'audio/webm',aliases:['audio/webm','video/webm']},
 };
-const recordingId=/^recording-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+export const isRecordingId=(value:unknown):value is string=>typeof value==='string'&&/^recording-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 const ascii=(bytes:Uint8Array,at:number,length:number)=>new TextDecoder('latin1').decode(bytes.subarray(at,at+length));
 function badAudio():never {throw new DomainError('录音格式与文件内容不一致，请选择有效的音频文件',415);}
 function isMpegFrame(bytes:Uint8Array,at:number):boolean {
@@ -94,33 +95,43 @@ export async function parseRecordingForm(request:Request):Promise<RecordingForm>
   for(const key of form.keys())if(!allowed.has(key)||form.getAll(key).length!==1)throw new DomainError('录音上传参数不正确');
   const dealId=form.get('dealId');const text=form.get('text')??'';const revision=form.get('revision');const audio=form.get('audio');const sourceOnly=form.get('sourceOnly');
   if(sourceOnly!==null&&(sourceOnly!=='true'||text!==''))throw new DomainError('录音处理只接收原录音，请在整理结果中填写跟进记录');
-  if(typeof dealId!=='string'||!dealId.trim()||dealId.length>100||typeof text!=='string'||text.length>5000||typeof revision!=='string'||!/^\d+$/.test(revision)||!Number.isSafeInteger(Number(revision)))throw new DomainError('跟进记录参数不正确，请刷新后重试');
+  if(typeof dealId!=='string'||!dealId.trim()||dealId.length>100||typeof text!=='string'||text.length>5000)throw new DomainError('跟进记录参数不正确，请刷新后重试');
+  const inbox=dealId.trim()===RECORDING_INBOX_DEAL_ID;
+  if(inbox&&sourceOnly!=='true')throw new DomainError('未选择项目的录音只能保存为原录音');
+  if(!inbox&&(typeof revision!=='string'||!/^\d+$/.test(revision)||!Number.isSafeInteger(Number(revision))))throw new DomainError('跟进记录参数不正确，请刷新后重试');
   if(!audio||typeof audio==='string'||typeof audio.arrayBuffer!=='function')throw new DomainError('请选择录音文件');
-  return {dealId:dealId.trim(),text:text.trim(),revision:Number(revision),audio,...(sourceOnly==='true'?{sourceOnly:true as const}:{})};
+  return {dealId:dealId.trim(),text:text.trim(),revision:inbox?0:Number(revision),audio,...(sourceOnly==='true'?{sourceOnly:true as const}:{})};
 }
 export async function recordingObjectKey(userId:string,id:string):Promise<string> {
-  if(!recordingId.test(id))throw new DomainError('录音不存在或当前视角无权访问',404);
+  if(!isRecordingId(id))throw new DomainError('录音不存在或当前视角无权访问',404);
   const hash=new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(userId)));
   return `followups/${Array.from(hash,byte=>byte.toString(16).padStart(2,'0')).join('')}/${id}`;
 }
-export async function saveRecordingNote(userId:string,role:Role,input:RecordingForm,deps:RecordingPersistence):Promise<ApiResult> {
-  const state=await deps.load();assertRevision(state,input.revision);
-  const audio=await validateRecording(input.audio);
-  const recording:FollowupRecording={id:`recording-${crypto.randomUUID()}`,name:audio.name,size:audio.bytes.length,mimeType:audio.mimeType,...(input.sourceOnly?{sourceOnly:true as const}:{})};
-  // The domain checks role visibility and text before any object can be written.
-  const result=await executeAction(state,role,'deal_note',{dealId:input.dealId,text:input.text},{trustedRecording:recording,actorName:deps.actorName,salesScope:deps.salesScope});
+export async function prepareRecording(file:File,sourceOnly?:true) {
+  const audio=await validateRecording(file);
+  const recording:FollowupRecording={id:`recording-${crypto.randomUUID()}`,name:audio.name,size:audio.bytes.length,mimeType:audio.mimeType,...(sourceOnly?{sourceOnly:true as const}:{})};
+  return {recording,bytes:audio.bytes};
+}
+export async function persistRecordingObject(userId:string, recording:FollowupRecording, bytes:Uint8Array, bucket:RecordingObjectStore, save:()=>Promise<unknown>) {
   const key=await recordingObjectKey(userId,recording.id);
-  const uploaded=await deps.bucket.put(key,audio.bytes,{onlyIf:{etagDoesNotMatch:'*'},httpMetadata:{contentType:audio.mimeType}});
+  const uploaded=await bucket.put(key,bytes,{onlyIf:{etagDoesNotMatch:'*'},httpMetadata:{contentType:recording.mimeType}});
   if(!uploaded)throw new DomainError('录音暂时无法保存，请重新上传',503);
-  try {await deps.save(state.revision,result.state);}catch(error){
-    try{await deps.bucket.delete(key);}catch{console.error('Follow-up recording cleanup failed');}
+  try {await save();}catch(error){
+    try{await bucket.delete(key);}catch{console.error('Follow-up recording cleanup failed');}
     throw error;
   }
+}
+export async function saveRecordingNote(userId:string,role:Role,input:RecordingForm,deps:RecordingPersistence):Promise<ApiResult> {
+  const state=await deps.load();assertRevision(state,input.revision);
+  const {recording,bytes}=await prepareRecording(input.audio,input.sourceOnly);
+  // The domain checks role visibility and text before any object can be written.
+  const result=await executeAction(state,role,'deal_note',{dealId:input.dealId,text:input.text},{trustedRecording:recording,actorName:deps.actorName,salesScope:deps.salesScope});
+  await persistRecordingObject(userId,recording,bytes,deps.bucket,()=>deps.save(state.revision,result.state));
   return {...result,state:projectState(result.state,role,deps.salesScope),message:input.sourceOnly?'原录音已保存':'录音及跟进记录已保存'};
 }
 /** Call only with a state projected to the current role. */
 export function authorizedRecording(state:WorkbenchState,dealId:string,id:string):FollowupRecording {
-  if(!recordingId.test(id))throw new DomainError('录音不存在或当前视角无权访问',404);
+  if(!isRecordingId(id))throw new DomainError('录音不存在或当前视角无权访问',404);
   const recording=state.deals.find(deal=>deal.id===dealId)?.notes.find(note=>note.recording?.id===id)?.recording;
   if(!recording)throw new DomainError('录音不存在或当前视角无权访问',404);
   return recording;

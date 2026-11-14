@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 import { assertMemberApi } from '../app/lib/member-policy.ts';
 import { projectState } from '../app/lib/domain.ts';
+import { RECORDING_INBOX_DEAL_ID } from '../app/lib/recording-inbox-types.ts';
+import { ensureRecordingInbox } from '../app/lib/recording-inbox.ts';
 import { recordingQuoteStore } from '../app/lib/recording-quotes.ts';
 import { createSeed } from '../app/lib/seed.ts';
 import type { SpeechTranscriptionJob } from '../app/lib/speech-types.ts';
@@ -39,7 +41,7 @@ function fixture() {
   sqlite.prepare('INSERT INTO workbench_recording_transcriptions VALUES (?,?,?,?,?)').run('owner', deal.id, recording.id, 1, JSON.stringify(job));
   const scope = (memberId: string, salesId = 'sales-1', manager = false, ownerId = 'owner') =>
     recordingQuoteStore(db, { ownerId, memberId, manager, state: projectState(state, manager ? 'manager' : 'sales', {salesId,displayName:'测试'}) });
-  return { sqlite, scope, job };
+  return { sqlite, db, scope, job };
 }
 
 test('recording quotes use the exact current transcript segment and idempotently share it within project scope', async () => {
@@ -92,4 +94,24 @@ test('recording quotes endpoints are available only to sales and sales managers'
     assert.doesNotThrow(() => assertMemberApi('manager','/api/recording-quotes',method));
     assert.throws(() => assertMemberApi('admin','/api/recording-quotes',method), {status:403});
   }
+});
+
+
+test('an unassigned recording and its saved quote are visible only to the uploader', async () => {
+  const { sqlite, db, scope, job }=fixture();
+  try {
+    await ensureRecordingInbox(db);
+    sqlite.prepare('INSERT INTO workbench_recording_inbox (owner_id,member_id,id,name,size,mime_type,created_at) VALUES (?,?,?,?,?,?,?)').run('owner','writer',recording.id,recording.name,recording.size,recording.mimeType,now);
+    const unassigned={...target,dealId:RECORDING_INBOX_DEAL_ID};
+    sqlite.prepare('UPDATE workbench_recording_transcriptions SET deal_id=?,data_json=?').run(unassigned.dealId,JSON.stringify({...job,dealId:unassigned.dealId}));
+    const writer=scope('writer');
+    const saved=await writer.save(unassigned);
+    assert.deepEqual((await writer.list()).quotes,[saved]);
+    assert.equal(saved.projectName,'待归属录音');
+    assert.equal(saved.text,exactText);
+    const other=scope('other','sales-1',true);
+    assert.deepEqual((await other.list()).quotes,[]);
+    await assert.rejects(other.save(unassigned),{status:404});
+    await assert.rejects(other.remove(saved.id),{status:404});
+  } finally { sqlite.close(); }
 });

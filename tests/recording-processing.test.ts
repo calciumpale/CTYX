@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 import { assertMemberApi, executeMemberAction } from '../app/lib/member-policy.ts';
+import { RECORDING_INBOX_DEAL_ID } from '../app/lib/recording-inbox-types.ts';
+import { ensureRecordingInbox } from '../app/lib/recording-inbox.ts';
 import { createRecordingProcessing } from '../app/lib/recording-processing.ts';
 import { persistSalesWorkspace } from '../app/lib/sales-report-store.ts';
 import { createSeed } from '../app/lib/seed.ts';
@@ -73,7 +75,7 @@ function fixture() {
     await persistSalesWorkspace(db,actor.ownerId,before.revision,result.state,[],write.receipt,write.precondition);
     return result;
   };
-  return {sqlite,state,target,job,load,scope,service,context,generate,modelCalls,apply};
+  return {sqlite,db,state,target,job,load,scope,service,context,generate,modelCalls,apply};
 }
 
 test('an exact full speech result generates grounded model output without a project write', async t => {
@@ -141,4 +143,21 @@ test('a model result with unsupported quote is rejected, and target version chan
   assert.equal((await f.service.read(f.context,edited,source)).draft,null);
   await assert.rejects(f.service.prepareApply(f.context,edited,{...source,sourceDealId:source.dealId,dealId:f.target.id,
     version:f.target.version,draftId:draft.id,profile:{goals:'确认目标'},followup:'',confirmed:true}),{status:409});
+});
+
+
+test('unassigned recording processing stays personal and writes only to the confirmed project', async t => {
+  const f=fixture(); t.after(()=>f.sqlite.close());
+  await ensureRecordingInbox(f.db);
+  f.sqlite.prepare('INSERT INTO workbench_recording_inbox (owner_id,member_id,id,name,size,mime_type,created_at) VALUES (?,?,?,?,?,?,?)').run('owner','member',recording.id,recording.name,recording.size,recording.mimeType,at);
+  const inboxSource={...source,dealId:RECORDING_INBOX_DEAL_ID};
+  f.sqlite.prepare('UPDATE workbench_recording_transcriptions SET deal_id=?, data_json=?').run(RECORDING_INBOX_DEAL_ID,JSON.stringify({...f.job,dealId:RECORDING_INBOX_DEAL_ID}));
+  await assert.rejects(f.service.generate({...f.context, memberId:'other'},f.state,inboxSource,f.generate),{status:404});
+  const draft=await f.service.generate(f.context,f.state,inboxSource,f.generate);
+  assert.equal(draft.matchedDealId,f.target.id);
+  assert.equal(JSON.stringify(f.load()),JSON.stringify(f.state));
+  const applied=await f.apply({...inboxSource,dealId:f.target.id,sourceDealId:RECORDING_INBOX_DEAL_ID,version:f.target.version,
+    draftId:draft.id,profile:{goals:draft.profile.goals},followup:draft.followup,confirmed:true});
+  assert.equal(applied.state.deals.find(deal=>deal.id===f.target.id)?.notes[0].text,draft.followup);
+  assert.equal(applied.state.deals.some(deal=>deal.id===RECORDING_INBOX_DEAL_ID),false);
 });

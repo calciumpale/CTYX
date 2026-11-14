@@ -1,3 +1,4 @@
+import { RECORDING_INBOX_DEAL_ID } from './recording-inbox-types.ts';
 import {canReadLegacyKnowledge} from './knowledge-content-scope.ts';
 import {knowledgeDepartmentForSalesId} from './knowledge-department-scope.ts';
 import { markSalesBusinessChanges } from './sales-project-eligibility.ts';
@@ -1016,8 +1017,10 @@ async function executeActionInternal(original:WorkbenchState,role:Role,action:st
     case 'recording_apply': {
       const review=context.trustedRecordingProcessing;
       if(!review||payload.confirmed!==true||payload.draftId!==review.draftId)fail('请先核对并确认录音整理草稿',403);
-      const source=visibleDeal(state,role,review.sourceDealId);
-      if(!source.notes.some(note=>note.recording?.id===review.recordingId))fail('原录音已不存在',404);
+      if(review.sourceDealId!==RECORDING_INBOX_DEAL_ID){
+        const source=visibleDeal(state,role,review.sourceDealId);
+        if(!source.notes.some(note=>note.recording?.id===review.recordingId))fail('原录音已不存在',404);
+      }
       const deal=visibleDeal(state,role,review.dealId);
       if(deal.archive)fail('归档项目不可写入跟进和画像',409);
       checkVersion(deal.version,review.version);

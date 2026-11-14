@@ -5,6 +5,7 @@ import {createSeed} from '../app/lib/seed.ts';
 import {createSpeechTranscriptionService,linkSpeechTranscript,parseSpeechResult,signRecordingSession} from '../app/lib/speech-transcription.ts';
 import type {SpeechResult} from '../app/lib/speech-types.ts';
 import type {WorkbenchState} from '../app/lib/types.ts';
+import {RECORDING_INBOX_DEAL_ID} from '../app/lib/recording-inbox-types.ts';
 
 const recording={id:'recording-9a83c9a6-61ce-489c-bd7a-a6dba42ee69a',name:'沟通.m4a',size:4,mimeType:'audio/mp4'},now='2026-10-25T03:00:00.000Z',origin='https://app.example.com';
 const result:SpeechResult={text:'请看企查查。',rawText:'请看气查查。',segments:[{start:0,end:3,speaker:'speaker-1',text:'请看企查查。',rawText:'请看气查查。'}],speakers:[{id:'speaker-1',label:'讲话人1'}],corrections:[{from:'气查查',to:'企查查',count:1}],model:'FunASR-Nano',durationSeconds:3,dialectHint:'auto',diarization:true,hotwordVersion:1};
@@ -19,6 +20,27 @@ function fixture(request:(url:string,options?:RequestInit)=>Promise<Response>,co
 const remote=(status='queued')=>({job:{id:'a'.repeat(32),recordingId:recording.id,status,progress:status==='completed'?100:0,...(status==='completed'?{result}:{})}});
 test('signed transcription tickets are short-lived and bound to account and recording',async()=>{
   const secret='abc'.repeat(16),token=await signRecordingSession(secret,'alice',recording.id,1700000000),[head,body,signature]=token.split('.');const claims=JSON.parse(Buffer.from(body,'base64url').toString());assert.equal(claims.aud,'recording-asr');assert.equal(claims.sub,'alice');assert.equal(claims.recordingId,recording.id);assert.equal(claims.exp-claims.iat,300);const key=await crypto.subtle.importKey('raw',new TextEncoder().encode(secret),{name:'HMAC',hash:'SHA-256'},false,['verify']);assert.equal(await crypto.subtle.verify('HMAC',key,Buffer.from(signature,'base64url'),new TextEncoder().encode(`${head}.${body}`)),true);
+});
+test('unassigned recordings are private to the uploading member and complete without workspace writes',async t=>{
+  let calls=0;
+  const f=fixture(async()=>{calls++;return Response.json(remote('completed'));});
+  t.after(()=>f.sqlite.close());
+  f.sqlite.exec('CREATE TABLE workbench_recording_inbox (owner_id TEXT NOT NULL,member_id TEXT NOT NULL,id TEXT NOT NULL,name TEXT NOT NULL,size INTEGER NOT NULL,mime_type TEXT NOT NULL,created_at TEXT NOT NULL,PRIMARY KEY(owner_id,id))');
+  f.sqlite.prepare('INSERT INTO workbench_recording_inbox VALUES (?,?,?,?,?,?,?)').run('alice','member-a',recording.id,recording.name,recording.size,recording.mimeType,now);
+  await assert.rejects(f.service.start('alice','manager',RECORDING_INBOX_DEAL_ID,recording.id,origin,false,undefined,'member-b'),{status:404});
+  await assert.rejects(f.service.read('bob','manager',RECORDING_INBOX_DEAL_ID,recording.id,origin,undefined,'member-a'),{status:404});
+  assert.equal(calls,0);
+  const completed=await f.service.start('alice','manager',RECORDING_INBOX_DEAL_ID,recording.id,origin,false,undefined,'member-a');
+  assert.equal(completed.status,'completed');
+  assert.equal(completed.dealId,RECORDING_INBOX_DEAL_ID);
+  assert.equal(completed.result?.text,result.text);
+  assert.equal(f.saves,0);
+  assert.equal(f.refreshes,0);
+  assert.equal(f.feedback,0);
+  assert.equal(f.state.deals.some(deal=>deal.id===RECORDING_INBOX_DEAL_ID),false);
+  assert.equal((await f.service.read('alice','manager',RECORDING_INBOX_DEAL_ID,recording.id,origin,undefined,'member-a'))?.id,completed.id);
+  await assert.rejects(f.service.read('alice','manager',RECORDING_INBOX_DEAL_ID,recording.id,origin,undefined,'member-b'),{status:404});
+  assert.equal(calls,1);
 });
 test('uploads are submitted once, recording-scoped and non-redirecting; completed results link exactly once into feedback',async()=>{
   let posts=0;const f=fixture(async(_url,options)=>{assert.equal(options?.redirect,'manual');assert.match(new Headers(options?.headers).get('Authorization')??'',/^Bearer /);if(options?.method==='POST'){posts++;const form=options.body as FormData;assert.equal((form.get('file') as File).name,recording.name);assert.equal(JSON.parse(String(form.get('options'))).hotwordVersion,0);return Response.json(remote());}return Response.json(remote('completed'));});

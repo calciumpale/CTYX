@@ -1,5 +1,7 @@
 import { DomainError, projectState } from './domain.ts';
 import { authorizedRecording } from './followup-recordings.ts';
+import { readRecordingInboxSource } from './recording-inbox.ts';
+import { RECORDING_INBOX_DEAL_ID } from './recording-inbox-types.ts';
 import { organizeRecording, recordingProfileKeys, suggestRecordingProject, type RecordingModel } from './recording-processing-model.ts';
 import type { RecordingProcessingApply, RecordingProcessingDraft, RecordingProcessingSource, RecordingProcessingStatus } from './recording-processing-types.ts';
 import type { SalesScope } from './sales-scope.ts';
@@ -87,10 +89,11 @@ function unusedRecording(context: Context, recordingId: string) {
 }
 
 export function createRecordingProcessing(db: D1Database) {
-  function authorize(context: Context, state: WorkbenchState, source: RecordingProcessingSource) {
+  async function authorize(context: Context, state: WorkbenchState, source: RecordingProcessingSource) {
     if (context.role === 'sales' && !context.salesScope) throw new DomainError('销售账号归属无效。', 401);
     const visible = projectState(state, context.role, context.salesScope);
-    authorizedRecording(visible, source.dealId, source.recordingId);
+    if (source.dealId === RECORDING_INBOX_DEAL_ID) await readRecordingInboxSource(db, context.ownerId, context.memberId, source.recordingId);
+    else authorizedRecording(visible, source.dealId, source.recordingId);
     return visible.deals;
   }
 
@@ -108,7 +111,7 @@ export function createRecordingProcessing(db: D1Database) {
 
   async function read(context: Context, state: WorkbenchState, input: unknown): Promise<RecordingProcessingStatus> {
     const source = parseSource(input);
-    const deals = authorize(context, state, source);
+    const deals = await authorize(context, state, source);
     if (source.targetDealId) activeProject(deals, source.targetDealId);
     await initialize(db);
     const applied = await appliedTarget(context, source);
@@ -131,7 +134,7 @@ export function createRecordingProcessing(db: D1Database) {
 
   async function generate(context: Context, state: WorkbenchState, input: unknown, model: RecordingModel) {
     const source = parseSource(input);
-    const deals = authorize(context, state, source).filter(deal => !deal.archive);
+    const deals = (await authorize(context, state, source)).filter(deal => !deal.archive);
     const selection = source.targetDealId ? activeProject(deals, source.targetDealId) : undefined;
     await initialize(db);
     if (await appliedTarget(context, source)) throw alreadyApplied();
@@ -156,7 +159,7 @@ export function createRecordingProcessing(db: D1Database) {
   async function prepareApply(context: Context, state: WorkbenchState, input: unknown, at = new Date().toISOString()) {
     const apply = parseRecordingProcessingApply(input);
     const source = { dealId: apply.sourceDealId, recordingId: apply.recordingId, jobId: apply.jobId };
-    const deals = authorize(context, state, source);
+    const deals = await authorize(context, state, source);
     await initialize(db);
     if (await appliedTarget(context, source)) throw alreadyApplied();
     const target = activeProject(deals, apply.dealId);

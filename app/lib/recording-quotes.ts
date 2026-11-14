@@ -1,5 +1,7 @@
 import { DomainError } from './domain.ts';
 import { authorizedRecording } from './followup-recordings.ts';
+import { ensureRecordingInbox, readRecordingInboxSource } from './recording-inbox.ts';
+import { RECORDING_INBOX_DEAL_ID } from './recording-inbox-types.ts';
 import type { RecordingQuote } from './recording-quotes-types.ts';
 import type { SpeechTranscriptionJob } from './speech-types.ts';
 import type { WorkbenchState } from './types.ts';
@@ -21,6 +23,7 @@ type QuoteRow = {
   end_seconds: number;
   text: string;
   created_at: string;
+  inbox_name?: string | null;
 };
 
 type QuoteInput = {
@@ -95,24 +98,39 @@ function toQuote(row: QuoteRow, context: QuoteContext, source: { projectName: st
 
 /** State should already be projected to the current member's project scope. */
 export function recordingQuoteStore(db: D1Database, context: QuoteContext) {
+  async function sourceFor(dealId: string, recordingId: string) {
+    if (dealId === RECORDING_INBOX_DEAL_ID) {
+      const { recording } = await readRecordingInboxSource(db, context.ownerId, context.memberId, recordingId);
+      return { dealId, projectName: '待归属录音', recordingName: recording.name };
+    }
+    const recording = authorizedRecording(context.state, dealId, recordingId);
+    const deal = context.state.deals.find(item => item.id === dealId)!;
+    return { dealId, projectName: deal.projectName || deal.name, recordingName: recording.name };
+  }
+
   async function list(cursor?: string | null): Promise<{ quotes: RecordingQuote[]; nextCursor: string | null }> {
     const [createdAt, id, extra] = cursor ? cursor.split('|') : [];
     if (cursor && (!createdAt || !identifier(id) || extra !== undefined || !Number.isFinite(Date.parse(createdAt)))) {
       throw new DomainError('金句分页位置无效，请重新加载。');
     }
     const sources = visibleRecordings(context.state);
-    if (!sources.size) return { quotes: [], nextCursor: null };
-    await initialize(db);
+    await Promise.all([initialize(db), ensureRecordingInbox(db)]);
+    const selected = columns.split(', ').map(column => `quote.${column}`).join(', ');
     const { results } = await db.prepare(`
-      SELECT ${columns} FROM workbench_recording_quotes
-      WHERE owner_id = ? AND recording_id IN (SELECT value FROM json_each(?))
-        AND (? IS NULL OR (created_at, id) < (?, ?))
-      ORDER BY created_at DESC, id DESC
+      SELECT ${selected}, inbox.name AS inbox_name
+      FROM workbench_recording_quotes quote
+      LEFT JOIN workbench_recording_inbox inbox ON quote.deal_id = ? AND inbox.owner_id = quote.owner_id
+        AND inbox.id = quote.recording_id AND inbox.member_id = ?
+      WHERE quote.owner_id = ? AND (inbox.id IS NOT NULL OR quote.recording_id IN (SELECT value FROM json_each(?)))
+        AND (? IS NULL OR (quote.created_at, quote.id) < (?, ?))
+      ORDER BY quote.created_at DESC, quote.id DESC
       LIMIT 51
-    `).bind(context.ownerId, JSON.stringify([...sources.keys()]), createdAt ?? null, createdAt ?? null, id ?? null).all<QuoteRow>();
+    `).bind(RECORDING_INBOX_DEAL_ID, context.memberId, context.ownerId, JSON.stringify([...sources.keys()]), createdAt ?? null, createdAt ?? null, id ?? null).all<QuoteRow>();
     const rows = results.slice(0, 50);
     const quotes = rows.flatMap(row => {
-      const source = sources.get(row.recording_id);
+      const source = row.inbox_name && row.deal_id === RECORDING_INBOX_DEAL_ID
+        ? { dealId: RECORDING_INBOX_DEAL_ID, projectName: '待归属录音', recordingName: row.inbox_name }
+        : sources.get(row.recording_id);
       return source?.dealId === row.deal_id ? [toQuote(row, context, source)] : [];
     });
     const last = rows.at(-1);
@@ -121,9 +139,7 @@ export function recordingQuoteStore(db: D1Database, context: QuoteContext) {
 
   async function save(value: unknown): Promise<RecordingQuote> {
     const { dealId, recordingId, jobId, segmentIndex } = parseInput(value);
-    const recording = authorizedRecording(context.state, dealId, recordingId);
-    const deal = context.state.deals.find(item => item.id === dealId)!;
-    const source = { projectName: deal.projectName || deal.name, recordingName: recording.name };
+    const source = await sourceFor(dealId, recordingId);
     await initialize(db);
 
     const result = await db.prepare(`
@@ -161,7 +177,7 @@ export function recordingQuoteStore(db: D1Database, context: QuoteContext) {
     const row = await db.prepare('SELECT deal_id, recording_id, created_by FROM workbench_recording_quotes WHERE owner_id = ? AND id = ?')
       .bind(context.ownerId, id).first<Pick<QuoteRow, 'deal_id' | 'recording_id' | 'created_by'>>();
     if (!row) throw notFound();
-    authorizedRecording(context.state, row.deal_id, row.recording_id);
+    await sourceFor(row.deal_id, row.recording_id);
     if (!context.manager && context.memberId !== row.created_by) throw new DomainError('只有收藏者或销售管理者可以删除这条金句。', 403);
     await db.prepare('DELETE FROM workbench_recording_quotes WHERE owner_id = ? AND id = ?')
       .bind(context.ownerId, id).run();

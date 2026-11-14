@@ -1,9 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 import { DomainError, executeAction, projectState } from '../app/lib/domain.ts';
 import { createSeed } from '../app/lib/seed.ts';
 import type { FollowupRecording, WorkbenchState } from '../app/lib/types.ts';
 import { MAX_RECORDING_BYTES, MAX_MULTIPART_BYTES, parseRecordingForm, validateRecording, saveRecordingNote, recordingObjectKey, authorizedRecording, parseAudioRange } from '../app/lib/followup-recordings.ts';
+import { ensureRecordingInbox, listRecordingInbox, readRecordingInboxSource, saveRecordingInboxSource } from '../app/lib/recording-inbox.ts';
+import { RECORDING_INBOX_DEAL_ID } from '../app/lib/recording-inbox-types.ts';
 
 const now='2026-10-23T08:00:00.000Z';
 const rejectsStatus=(status:number)=>(error:unknown)=>error instanceof DomainError&&error.status===status;
@@ -53,6 +56,47 @@ test('multipart parser enforces revision, field uniqueness and total bytes witho
   const stream=new ReadableStream<Uint8Array>({start(controller){controller.enqueue(new Uint8Array(MAX_MULTIPART_BYTES));controller.enqueue(new Uint8Array(1));controller.close();}});
   const huge=new Request('https://example.test',{method:'POST',headers:{'Content-Type':'multipart/form-data; boundary=test','Content-Length':'1'},body:stream,duplex:'half'} as RequestInit);
   await assert.rejects(parseRecordingForm(huge),rejectsStatus(413));
+});
+
+test('personal inbox requires the source-only form and has no project revision requirement',async()=>{
+  const form=new FormData();form.set('dealId',RECORDING_INBOX_DEAL_ID);form.set('audio',file());
+  await assert.rejects(parseRecordingForm(new Request('https://example.test',{method:'POST',body:form})),rejectsStatus(400));
+  form.set('sourceOnly','true');
+  const result=await parseRecordingForm(new Request('https://example.test',{method:'POST',body:form}));
+  assert.equal(result.dealId,RECORDING_INBOX_DEAL_ID);assert.equal(result.sourceOnly,true);assert.equal(result.audio.name,'客户沟通.wav');
+  form.set('text','不得提前写入的跟进');
+  await assert.rejects(parseRecordingForm(new Request('https://example.test',{method:'POST',body:form})),rejectsStatus(400));
+});
+
+test('inbox storage scopes reads and pagination to the owner/member pair and cleans up failed writes',async t=>{
+  const sqlite=new DatabaseSync(':memory:');t.after(()=>sqlite.close());
+  const db={prepare(sql:string){let params:SQLInputValue[]=[];return {
+    bind(...values:SQLInputValue[]){params=values;return this;},
+    async run(){return {meta:{changes:Number(sqlite.prepare(sql).run(...params).changes)}};},
+    async first(){return sqlite.prepare(sql).get(...params)??null;},
+    async all(){return {results:sqlite.prepare(sql).all(...params)};},
+  };}} as unknown as D1Database;
+  const storage=persistence();
+  const saved=await saveRecordingInboxSource(db,'owner-a','member-a',file(),storage.deps.bucket);
+  assert.equal(saved.recording.sourceOnly,true);
+  assert.equal(storage.objects.size,1);
+  assert.equal([...storage.objects.keys()][0],await recordingObjectKey('owner-a',saved.recording.id));
+  assert.deepEqual(await readRecordingInboxSource(db,'owner-a','member-a',saved.recording.id),saved);
+  for(const [owner,member] of [['owner-a','member-b'],['owner-b','member-a']]){
+    assert.deepEqual(await listRecordingInbox(db,owner,member),{recordings:[],nextCursor:null});
+    await assert.rejects(readRecordingInboxSource(db,owner,member,saved.recording.id),{status:404});
+  }
+  await ensureRecordingInbox(db);
+  const insert=sqlite.prepare('INSERT INTO workbench_recording_inbox VALUES (?,?,?,?,?,?,?)');
+  for(let i=0;i<52;i++)insert.run('owner-a','member-a',`recording-9a83c9a6-61ce-489c-bd7a-${i.toString(16).padStart(12,'0')}`,`录音 ${i}.wav`,48,'audio/wav',now);
+  const first=await listRecordingInbox(db,'owner-a','member-a');
+  const second=await listRecordingInbox(db,'owner-a','member-a',first.nextCursor);
+  assert.equal(first.recordings.length,50);assert.equal(second.recordings.length,3);assert.equal(second.nextCursor,null);
+  assert.equal(new Set([...first.recordings,...second.recordings].map(row=>row.recording.id)).size,53);
+  await assert.rejects(listRecordingInbox(db,'owner-a','member-a','invalid'),{status:400});
+  sqlite.exec("CREATE TRIGGER reject_upload BEFORE INSERT ON workbench_recording_inbox BEGIN SELECT RAISE(ABORT,'test storage failure'); END");
+  await assert.rejects(saveRecordingInboxSource(db,'owner-a','member-a',file(),storage.deps.bucket),/test storage failure/);
+  assert.equal(storage.objects.size,1);
 });
 
 function persistence(state=createSeed(now),failSave=false) {

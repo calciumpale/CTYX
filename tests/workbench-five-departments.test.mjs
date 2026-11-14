@@ -8,6 +8,7 @@ import {createServer} from 'vite';
 import react from '@vitejs/plugin-react';
 import {createSeed} from '../app/lib/seed.ts';
 import {checkGeoQuality} from '../app/lib/geo-content.ts';
+import {RECORDING_INBOX_DEAL_ID} from '../app/lib/recording-inbox-types.ts';
 
 const root=fileURLToPath(new URL('../',import.meta.url));
 const fixture=`import React from 'react';import {createRoot} from 'react-dom/client';import '/app/globals.css';import Workbench from '/app/components/Workbench.tsx';createRoot(document.getElementById('root')).render(<Workbench member={{accountId:'member-zs',username:'ZS',displayName:'ZS',role:'sales',salesId:'sales-1'}} onLogout={async()=>{}}/>);`;
@@ -31,25 +32,26 @@ test('full workbench opens projects, submits a GEO draft and guards material dra
   wav.write('RIFF',0); wav.writeUInt32LE(wav.length-8,4); wav.write('WAVEfmt ',8); wav.writeUInt32LE(16,16);
   wav.writeUInt16LE(1,20); wav.writeUInt16LE(1,22); wav.writeUInt32LE(8000,24); wav.writeUInt32LE(16000,28);
   wav.writeUInt16LE(2,32); wav.writeUInt16LE(16,34); wav.write('data',36); wav.writeUInt32LE(wav.length-44,40);
-  const recording={id:'fixture-audio',name:'项目跟进.wav',size:wav.length,mimeType:'audio/wav'};
+  const recording={id:'fixture-audio',name:'项目跟进.wav',size:wav.length,mimeType:'audio/wav',sourceOnly:true};
   const speakers=[{id:'speaker-1',label:'讲话人 1'},{id:'speaker-2',label:'讲话人 2'}];
   const segments=[
    {start:0,end:3,speaker:speakers[0].id,text:'先核对交付清单。'},
    {start:3,end:7,speaker:speakers[1].id,text:'请把物业要求写进周五的方案。'},
   ];
   const transcriptText=segments.map(segment=>segment.text).join('\n');
-  const job={id:'fixture-transcript',dealId:deal.id,recordingId:recording.id,status:'completed',linked:true,progress:100,message:'',createdAt:'2026-11-14T02:00:00Z',updatedAt:'2026-11-14T02:00:00Z',result:{text:transcriptText,rawText:transcriptText,segments,speakers,diarization:true,durationSeconds:7,model:'fixture',hotwordVersion:1,corrections:[]}};
-  const source={dealId:deal.id,recordingId:recording.id,jobId:job.id};
+  const job={id:'fixture-transcript',dealId:RECORDING_INBOX_DEAL_ID,recordingId:recording.id,status:'completed',linked:false,progress:100,message:'',createdAt:'2026-11-14T02:00:00Z',updatedAt:'2026-11-14T02:00:00Z',result:{text:transcriptText,rawText:transcriptText,segments,speakers,diarization:true,durationSeconds:7,model:'fixture',hotwordVersion:1,corrections:[]}};
+  const source={dealId:RECORDING_INBOX_DEAL_ID,recordingId:recording.id,jobId:job.id};
   const reviewedFollowup='周五前复核交付清单及物业要求。';
-  const processedDraft={id:'fixture-draft',summary:'讨论了交付与物业要求。',decisions:['把物业要求写进周五的方案。'],followup:'核对交付清单',projectName:deal.projectName,matchedDealId:deal.id,matchReason:'与原录音项目核对一致',profile:{goals:'核对新方案交付范围',budget:'建议预算'},evidence:[segments[1].text],targetVersion:deal.version};
-  const expectedApply={dealId:deal.id,version:deal.version,sourceDealId:deal.id,recordingId:recording.id,jobId:job.id,draftId:processedDraft.id,profile:{goals:'核对后的交付目标'},followup:reviewedFollowup,confirmed:true};
+  const processedDraft={id:'fixture-draft',summary:'讨论了交付与物业要求。',decisions:['把物业要求写进周五的方案。'],followup:'核对交付清单',projectName:deal.projectName,matchedDealId:deal.id,matchReason:'录音内容与可访问项目匹配',profile:{goals:'核对新方案交付范围',budget:'建议预算'},evidence:[segments[1].text],targetVersion:deal.version};
+  const expectedApply={dealId:deal.id,version:deal.version,sourceDealId:RECORDING_INBOX_DEAL_ID,recordingId:recording.id,jobId:job.id,draftId:processedDraft.id,profile:{goals:'核对后的交付目标'},followup:reviewedFollowup,confirmed:true};
   const processingRequests=[];
   const applyRequests=[];
-  const savedQuote={id:'fixture-quote',dealId:deal.id,projectName:deal.projectName,recordingId:recording.id,recordingName:recording.name,speaker:speakers[1].label,start:3,end:7,text:segments[1].text,createdAt:job.createdAt,canDelete:true};
+  const savedQuote={id:'fixture-quote',dealId:RECORDING_INBOX_DEAL_ID,projectName:'待归属录音',recordingId:recording.id,recordingName:recording.name,speaker:speakers[1].label,start:3,end:7,text:segments[1].text,createdAt:job.createdAt,canDelete:true};
   const quoteRequests=[];
   const removedQuotes=[];
   let quotes=[];
   let uploads=0;
+  let inboxSourceReads=0;
   const recentQuery='核对园区项目的交付边界、申请条件和下一次跟进安排';
   state.deals=[];state.runs=[{id:'recent-task',query:recentQuery,answer:'已整理待核对事项。',agentIds:[],steps:[],citations:[],mode:'live',createdAt:'2026-11-14T02:00:00Z',duration:100}];
   let reads=0;
@@ -72,7 +74,16 @@ test('full workbench opens projects, submits a GEO draft and guards material dra
     return route.fulfill({json:{...state,revision:reads,deals:reads>1?[deal]:[]}});
    }
    if(pathname==='/api/deal-recordings'){
+    if(request.method()==='GET'&&url.searchParams.get('inbox')==='1'){
+     if(url.searchParams.has('id')){
+      assert.equal(url.searchParams.get('id'),recording.id);
+      inboxSourceReads++;
+     }
+     return route.fulfill({json:{recordings:uploads?[{recording,createdAt:job.createdAt}]:[],nextCursor:null}});
+    }
     if(request.method()!=='POST'){
+     assert.equal(url.searchParams.get('dealId'),RECORDING_INBOX_DEAL_ID);
+     assert.equal(url.searchParams.get('id'),recording.id);
      const range=request.headers().range?.match(/^bytes=(\d+)-(\d*)$/);
      const start=range?Number(range[1]):0;
      const end=range?.[2]?Math.min(Number(range[2]),wav.length-1):wav.length-1;
@@ -83,17 +94,16 @@ test('full workbench opens projects, submits a GEO draft and guards material dra
     }
     uploads++;
     const body=await new Response(request.postDataBuffer(),{headers:{'Content-Type':request.headers()['content-type']}}).formData();
-    assert.equal(body.get('dealId'),deal.id);
+    assert.equal(body.get('dealId'),RECORDING_INBOX_DEAL_ID);
     assert.equal(body.get('text'),'');
     assert.equal(body.get('sourceOnly'),'true');
     assert.equal(body.get('audio').name,recording.name);
     assert.equal(body.get('audio').size,wav.length);
-    deal.notes=[{id:'fixture-audio-note',text:'',author:'ZS',date:job.createdAt,recording}];
-    return route.fulfill({json:{state:{...state,revision:++reads,deals:[deal]},recording,message:'录音已保存'}});
+    return route.fulfill({json:{state:{...state,revision:++reads,deals:[deal]},recording,recordingCreatedAt:job.createdAt,message:'录音已保存'}});
    }
    if(pathname==='/api/recording-transcriptions'){
     assert.equal(request.method(),'GET');
-    assert.equal(url.searchParams.get('dealId'),deal.id);
+    assert.equal(url.searchParams.get('dealId'),RECORDING_INBOX_DEAL_ID);
     assert.equal(url.searchParams.get('id'),recording.id);
     return route.fulfill({json:{job}});
    }
@@ -226,7 +236,12 @@ test('full workbench opens projects, submits a GEO draft and guards material dra
   await page.getByRole('heading',{name:'录音处理',exact:true}).waitFor();
   assert.equal(new URL(page.url()).searchParams.get('view'),'recordings');
   assert.equal(await recordingsLink.getAttribute('aria-current'),'page');
-  await page.getByRole('combobox',{name:'原录音项目',exact:true}).selectOption(deal.id);
+  const sourceProject=page.getByRole('combobox',{name:'原录音项目',exact:true});
+  assert.equal(await sourceProject.inputValue(),RECORDING_INBOX_DEAL_ID);
+  await sourceProject.selectOption(deal.id);
+  assert.equal(await sourceProject.inputValue(),deal.id);
+  await sourceProject.selectOption(RECORDING_INBOX_DEAL_ID);
+  await page.getByText('暂无待归属录音，上传后在这里查看转写。',{exact:true}).waitFor();
   assert.equal(await page.getByRole('textbox',{name:'跟进备注',exact:false}).count(),0);
   const recordingInput=page.getByLabel('选择跟进录音文件',{exact:true});
   const saveRecording=page.getByRole('button',{name:'上传并转写',exact:true});
@@ -240,6 +255,7 @@ test('full workbench opens projects, submits a GEO draft and guards material dra
   await saveRecording.click();
   await page.getByRole('heading',{name:'录音已保存',exact:true}).waitFor();
   assert.equal(uploads,1);
+  assert.equal(deal.notes.length,0);
   const turns=page.getByRole('list',{name:'按讲话人分段的录音转写',exact:true}).getByRole('listitem');
   await turns.nth(1).getByText(segments[1].text,{exact:true}).waitFor();
   assert.deepEqual(await turns.locator('.recording-segment-heading > strong').allTextContents(),speakers.map(speaker=>speaker.label));
@@ -264,9 +280,10 @@ test('full workbench opens projects, submits a GEO draft and guards material dra
   const square=page.getByRole('region',{name:'金句广场',exact:true});
   await square.getByText(savedQuote.text,{exact:true}).waitFor();
   assert.equal(await square.getByText(savedQuote.speaker,{exact:false}).isVisible(),true);
-  assert.deepEqual(quoteRequests,[{dealId:deal.id,recordingId:recording.id,jobId:job.id,segmentIndex:1}]);
+  assert.deepEqual(quoteRequests,[{...source,segmentIndex:1}]);
   await square.getByRole('button',{name:'打开录音',exact:true}).click();
-  assert.equal(await page.getByRole('tab',{name:'录音转写',exact:true}).getAttribute('aria-selected'),'true');
+  await page.getByRole('tab',{name:'录音转写',exact:true,selected:true}).waitFor();
+  assert.equal(inboxSourceReads,1);
   const audio=page.locator('.followup-recording-saved audio');
   await audio.waitFor();
   await page.waitForFunction(() => Math.abs(document.querySelector('.followup-recording-saved audio')?.currentTime - 3)<0.05,undefined,{timeout:5000});

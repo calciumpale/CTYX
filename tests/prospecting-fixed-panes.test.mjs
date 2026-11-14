@@ -55,14 +55,14 @@ for (const viewport of [{width:1440,height:900},{width:1280,height:560},{width:3
     const pathname=new URL(request.url()).pathname;
     return route.fulfill({json:pathname==='/api/workbench'?state:pathname==='/api/prospecting'?snapshot:{pendingCount:0}});
    });
-   await page.goto(`${origin}/?view=prospecting&section=handoff`);
-   const table=page.getByRole('table',{name:'客户会话',exact:true});
-   const first=table.getByRole('row').filter({has:page.getByText('测试客户0',{exact:true})});
+   await page.goto(`${origin}/?view=prospecting&section=handoff`,{waitUntil:'domcontentloaded',timeout:20000});
+   const roster=page.getByRole('list',{name:'客户会话',exact:true});
+   const first=roster.getByRole('button',{name:'查看测试客户0详情',exact:true});
    const transcript=page.getByRole('log',{name:'测试客户0的聊天记录',exact:true});
    await first.waitFor();
    assert.equal(await transcript.count(),0);
-   const listScroll=await table.evaluate(table=>{
-    let element=table.parentElement;
+   const listScroll=await roster.evaluate(roster=>{
+    let element=roster;
     while(element&&element!==document.body&&!/auto|scroll/.test(getComputedStyle(element).overflowY))element=element.parentElement;
     if(!element||element===document.body)return null;
     element.scrollTop=element.scrollHeight;
@@ -71,7 +71,7 @@ for (const viewport of [{width:1440,height:900},{width:1280,height:560},{width:3
    assert.ok(listScroll,'the conversation list needs an independent scroll container');
    assert.ok(listScroll.height>40 && listScroll.max>0 && listScroll.top>0,JSON.stringify(listScroll));
    assert.ok(listScroll.bottom<=viewport.height+1,JSON.stringify(listScroll));
-   await first.getByText('测试客户0',{exact:true}).click();
+   await first.click();
    await transcript.waitFor();
    const bounds=await page.evaluate(()=>{
     const rect=selector=>{const r=document.querySelector(selector).getBoundingClientRect();return {top:r.top,bottom:r.bottom,height:r.height}};
@@ -96,7 +96,7 @@ for (const viewport of [{width:1440,height:900},{width:1280,height:560},{width:3
    assert.equal(await page.evaluate(()=>window.scrollY),0);
    await page.locator('.prospect-chat-composer textarea').fill('');
    await page.getByRole('button',{name:'返回会话列表',exact:true}).click();
-   await table.waitFor();
+   await roster.waitFor();
    await page.getByRole('button',{name:'任务与采集',exact:true}).click();
    await page.getByRole('button',{name:'新建任务',exact:true}).click();
    await page.locator('.prospect-create').waitFor();

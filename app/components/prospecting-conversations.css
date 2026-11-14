@@ -171,9 +171,43 @@
 .prospect-chat-list { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .prospect-chat-filters .prospect-chat-filter-search { flex: 1 1 132px; max-width: 224px; }
 .prospect-chat-filter-actions { display: flex; align-items: center; flex: none; gap: 6px; margin-inline-start: auto; }
-.prospect-chat-row-status { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.prospect-chat-roster {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  margin: 0;
+  padding: 4px;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  scrollbar-width: thin;
+  list-style: none;
+  border: 1px solid var(--cds-border);
+  border-radius: var(--radius-2xl);
+  background: var(--cds-surface-2);
+}
+.prospect-chat-roster > li + li { margin-block-start: 2px; }
+.prospect-chat-roster-row {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  min-height: 54px;
+  padding: 9px 12px;
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: transparent;
+  color: var(--cds-text-primary);
+  text-align: start;
+  cursor: pointer;
+}
+.prospect-chat-roster-row:hover { background: var(--cds-fill-ghost-hover); }
+.prospect-chat-roster-row[aria-expanded=true] { background: var(--cds-fill-ghost-selected); }
+.prospect-chat-roster-row:focus-visible { outline: 2px solid var(--cds-border-strong); outline-offset: -2px; }
+.prospect-chat-roster-name { font-size: 14px; font-weight: 600; line-height: 1.45; overflow-wrap: anywhere; }
+.prospect-chat-roster-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.prospect-chat-roster-intent { color: var(--cds-text-secondary); font-size: 12px; }
 .prospect-chat-list .prospect-chat-badge { padding-inline: 4px; white-space: normal; }
 .prospect-chat-draft-label { font-size: 11px; color: var(--cds-text-secondary); white-space: nowrap; }
+.prospect-chat-panel { container: prospecting-detail / inline-size; }
 .prospect-chat-panel > .prospect-inbox-panel-body { display: flex; flex-direction: column; padding: 0; }
 .prospect-conversation-detail { flex: 1; min-height: 0; }
 .prospect-conversation-detail > :not(.prospect-chat-thread) { flex-shrink: 0; }
@@ -185,6 +219,12 @@
 .prospect-capture-detail dl { display: grid; gap: 13px; margin-block: 18px; }
 .prospect-capture-detail dt { color: var(--cds-text-secondary); font-size: 12px; }
 .prospect-capture-detail dd { margin: 4px 0 0; font-size: 14px; overflow-wrap: anywhere; white-space: pre-wrap; }
+
+@media (width > 850px) {
+  .prospect-inbox-split[data-panel-open=true][data-chat-open=true] {
+    grid-template-columns: clamp(172px, 23%, 240px) minmax(0, 1fr);
+  }
+}
 
 @container prospecting-chat (max-width: 750px) {
   .prospect-conversation-header {
@@ -206,8 +246,11 @@
 @media (max-width: 850px) {
   .prospect-chat-filters .prospect-chat-filter-search { flex-basis: 132px; flex-shrink: 0; }
 }
-@container prospecting-chat (max-width: 345px) {
-  .prospect-conversation-header { grid-template: "identity" auto "actions" auto "sync" auto / minmax(0, 1fr); }
-  .prospect-conversation-actions, .prospect-chat-learning { justify-content: flex-start; }
+@container prospecting-detail (max-width: 440px) {
   .prospect-chat-tools { grid-template-columns: minmax(0, 1fr); }
+  .prospect-chat-learning { justify-content: flex-start; flex-wrap: wrap; }
+}
+@container prospecting-detail (max-width: 345px) {
+  .prospect-conversation-header { grid-template: "identity" auto "actions" auto "sync" auto / minmax(0, 1fr); }
+  .prospect-conversation-actions { justify-content: flex-start; }
 }

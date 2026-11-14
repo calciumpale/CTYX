@@ -94,15 +94,40 @@ test('conversation settings preserve drafts, save the loaded enabled state, and 
     await page.clock.setFixedTime(new Date('2026-11-07T18:00:00Z')); // 02:00 in Shanghai.
     page.on('pageerror', error => errors.push(error.message));
     await page.goto(origin);
-    const table = page.getByRole('table', { name: '客户会话', exact: true });
-    await table.waitFor();
-    assert.deepEqual(await table.getByRole('columnheader').allTextContents(), ['用户名', '原文', '意向', '状态']);
-    assert.equal(await page.getByRole('complementary', { name: '会话详情' }).count(), 0, 'No conversation is selected automatically');
-    const wang = page.getByRole('button', { name: /王女士/ });
+    const roster = page.getByRole('list', { name: '客户会话', exact: true });
+    await roster.waitFor();
+    const panel = page.getByRole('complementary', { name: '会话详情', exact: true });
+    assert.equal(await panel.count(), 0, 'No conversation is selected automatically');
+    const wang = roster.getByRole('button', { name: '查看王女士详情', exact: true });
+    const closed = roster.getByRole('button', { name: '查看已退订客户详情', exact: true });
+    const wangRow = roster.getByRole('listitem').filter({ has: page.getByRole('button', { name: '查看王女士详情', exact: true }) });
+    const closedRow = roster.getByRole('listitem').filter({ has: page.getByRole('button', { name: '查看已退订客户详情', exact: true }) });
+    await wangRow.getByText('未评估', { exact: true }).waitFor();
+    await wangRow.getByText('需人工处理', { exact: true }).waitFor();
+    await closedRow.getByText('已结束', { exact: true }).waitFor();
+    assert.equal(await roster.getByText('想了解面积和预算', { exact: true }).count(), 0, 'The roster does not expose message previews');
+    const username = await wang.getByText('王女士', { exact: true }).boundingBox();
+    for (const label of ['未评估', '需人工处理']) {
+      const metadata = await wangRow.getByText(label, { exact: true }).boundingBox();
+      assert.ok(metadata.y >= username.y + username.height - 1, `${label} appears below the username`);
+    }
+    const description = await wang.evaluate(button => (button.getAttribute('aria-describedby') ?? '').split(/\s+/)
+      .map(id => document.getElementById(id)?.textContent ?? '').join(' '));
+    assert.match(description, /未评估/);
+    assert.match(description, /需人工处理/);
     const settings = page.getByRole('button', { name: /^跟进设置/ });
     const closeSettings = page.getByRole('button', { name: '关闭跟进设置', exact: true });
     await wang.click();
     await page.locator('.prospect-chat-takeover').getByText(handoffReason, { exact: true }).waitFor();
+    const expectWideDetail = async width => {
+      await page.setViewportSize({ width, height: 1000 });
+      const [rosterBounds, panelBounds] = await Promise.all([roster.boundingBox(), panel.boundingBox()]);
+      assert.ok(panelBounds.x >= rosterBounds.x + rosterBounds.width - 1, `The detail occupies the right pane at ${width}px`);
+      const splitWidth = panelBounds.x + panelBounds.width - rosterBounds.x;
+      assert.ok(panelBounds.width / splitWidth >= 0.7, `The detail has at least 70% of the workspace at ${width}px`);
+    };
+    await expectWideDetail(960);
+    await expectWideDetail(1280);
     const syncDetails = page.locator('.prospect-chat-sync-status');
     await syncDetails.locator(`time[datetime="${lastSyncedAt}"]`).waitFor();
     assert.match(await syncDetails.textContent(), /上次同步.*15:45/);
@@ -220,7 +245,7 @@ test('conversation settings preserve drafts, save the loaded enabled state, and 
     await page.waitForFunction(el => el.scrollHeight - el.scrollTop - el.clientHeight < 50, await transcript.elementHandle());
     const captureDir = process.env.PROSPECT_UI_CAPTURE_DIR;
     if (captureDir) { await mkdir(captureDir, { recursive: true }); await page.screenshot({ path: path.join(captureDir, 'chat-desktop.png'), fullPage: true }); }
-    await page.getByRole('button', { name: /已退订客户/ }).click();
+    await closed.click();
     await page.getByText('会话已结束：客户明确要求停止联系', { exact: true }).waitFor();
     assert.equal(await page.getByRole('button', { name: '交还 AI 助手', exact: true }).isDisabled(), true);
     assert.equal(await page.getByRole('button', { name: '发送回复', exact: true }).isDisabled(), true);
@@ -228,8 +253,10 @@ test('conversation settings preserve drafts, save the loaded enabled state, and 
     assert.equal(posts.filter(item => ['chatReply', 'chatResume'].includes(item.action)).length, 0);
     await page.setViewportSize({ width: 390, height: 844 });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'Mobile layout must not overflow');
+    assert.equal(await roster.isVisible(), false, 'Mobile shows just the selected detail');
     if (captureDir) await page.screenshot({ path: path.join(captureDir, 'chat-mobile.png'), fullPage: true });
     await page.getByRole('button', { name: '返回会话列表', exact: true }).click();
+    await closed.waitFor();
     await wang.click();
     assert.equal(await page.getByRole('textbox', { name: '人工回复客户', exact: true }).inputValue(), '仅用于测试的未发送草稿');
     await settings.click();

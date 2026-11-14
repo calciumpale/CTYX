@@ -25,6 +25,7 @@ const storeLead = lead('c1', 'a', '周末店主', '我想问嘉兴商铺的面�
 const submittedLead = lead('c2', 'a', '园区买家', '麻烦发一下办公楼位置', 'submitted', 77);
 const officeLead = lead('c3', 'b', '办公访客', '还有独立办公室吗', 'pending', 80);
 const webLead = { id: 'web-1', taskId: 'search-1', version: 1, status: 'new', sourceUrl: 'https://example.com/source', title: '本地夹具公开线索', excerpt: '园区公开检索摘要', platform: 'other', query: '园区', region: '嘉兴', regionMatch: 'unverified', retrievedAt: now };
+const conversation = { id: 'chat-1', campaignId: 'a', leadId: 'c1', recipientId: 'recipient-c1', nickname: '会话测试客户', mode: 'agent', status: 'active', version: 1, lastMessageAt: now, updatedAt: now, lastMessagePreview: '只在详情显示的会话原文' };
 
 test('prospecting inbox defaults to comment rows and only opens their details on selection', { timeout: 60000 }, async () => {
   const cacheDir = await mkdtemp(path.join(tmpdir(), 'prospecting-inbox-'));
@@ -69,7 +70,7 @@ test('prospecting inbox defaults to comment rows and only opens their details on
       if (url.pathname === '/api/workbench') return route.fulfill({ json: state });
       if (url.pathname === '/api/web-prospects') return route.fulfill({ json: { tasks: [], leads: [webLead], owners: [] } });
       if (url.pathname === '/api/prospecting') {
-        if (url.searchParams.get('mode') === 'chat') return route.fulfill({ json: { online: false, enabled: false, modelReady: true, policy: { libraryIds: [], replyDailyLimit: 30, conversationReplyLimit: 12, replyHoursEnabled: false, workStart: '08:30', workEnd: '21:30' }, libraries: [], conversations: [], messages: [], pool: [] } });
+        if (url.searchParams.get('mode') === 'chat') return route.fulfill({ json: { online: false, enabled: false, modelReady: true, policy: { libraryIds: [], replyDailyLimit: 30, conversationReplyLimit: 12, replyHoursEnabled: false, workStart: '08:30', workEnd: '21:30' }, libraries: [], conversations: [conversation], messages: [], pool: [] } });
         const selected = campaigns.find(item => item.id === url.searchParams.get('campaignId')) ?? campaigns[0];
         const leads = [storeLead, submittedLead, officeLead].filter(item => item.campaignId === selected.id);
         return route.fulfill({ json: { campaigns, campaign: selected, leads, jobs: [], discoveryRuns: [], device: { online: false, authenticated: false }, modelReady: true, leadPagination: { page: 1, pageSize: 30, total: leads.length } } });
@@ -140,6 +141,9 @@ test('prospecting inbox defaults to comment rows and only opens their details on
     await page.goto(`${origin}?view=prospecting&section=handoff`);
     await view.waitFor();
     assert.equal(await option(view), '客户会话');
+    const roster = page.getByRole('list', { name: '客户会话', exact: true });
+    await roster.getByRole('button', { name: `查看${conversation.nickname}详情`, exact: true }).waitFor();
+    assert.equal(await roster.getByText(conversation.lastMessagePreview, { exact: true }).count(), 0);
     await view.selectOption({ label: '全网线索' });
     const webTable = page.getByRole('table', { name: '公开网页线索', exact: true });
     await webTable.getByText(webLead.excerpt, { exact: true }).waitFor();

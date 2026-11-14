@@ -345,23 +345,29 @@ export function ProspectingConversations({ campaignId, active, view, blocked, pa
     </ProspectingFilters>
     {(error || readError) && <div className="prospect-message is-error" role="alert"><CircleAlert size={17} /><div><p>{error || readError}</p>{error && readError && <p>{readError}</p>}{readError && <button className="button ghost" disabled={mutationBlocked} onClick={() => void refresh(true)}>重新读取会话</button>}</div></div>}
     {notice && <div className="prospect-message" role="status"><Check size={17} /><p>{notice}</p><button className="icon-button" aria-label="关闭会话提示" onClick={() => setNotice('')}><X size={14} /></button></div>}
-    {!snapshot ? readError ? <div className="prospect-empty"><h3>暂时无法读取会话</h3><p>请重新读取，已保存的消息和线索会在服务恢复后显示。</p></div> : <div className="prospect-empty" role="status"><Loader2 size={25} className="spin" /><h3>正在同步会话与线索</h3></div> : <div className="prospect-inbox-split" data-panel-open={panelOpen}>
+    {!snapshot ? readError ? <div className="prospect-empty"><h3>暂时无法读取会话</h3><p>请重新读取，已保存的消息和线索会在服务恢复后显示。</p></div> : <div className="prospect-empty" role="status"><Loader2 size={25} className="spin" /><h3>正在同步会话与线索</h3></div> : <div className="prospect-inbox-split" data-panel-open={panelOpen} data-chat-open={view === 'chat' && Boolean(selectedId) && !settingsOpen}>
       <div className="prospect-inbox-list prospect-chat-list">
-        {view === 'chat' ? conversations.length ? <ProspectingList
-          label="客户会话"
-          selectedId={settingsOpen ? '' : selectedId}
-          onSelect={selectConversation}
-          rows={conversations.map(item => {
+        {view === 'chat' ? conversations.length ? <ul className="prospect-chat-roster" role="list" aria-label="客户会话">
+          {conversations.map(item => {
             const captured = captureByConversation.get(item.id);
-            return {
-              id: item.id,
-              username: item.nickname || '未提供昵称',
-              text: item.lastMessagePreview || '暂无原文预览',
-              intent: captured ? <span className={`prospect-chat-badge is-grade-${captured.grade}`}>{gradeLabels[captured.grade]}</span> : '未评估',
-              status: <span className="prospect-chat-row-status"><span className={`prospect-chat-badge${item.mode === 'human' && item.status !== 'closed' ? ' is-human' : ''}`}>{conversationModeLabel(item)}</span>{drafts[item.id]?.trim() && <span className="prospect-chat-draft-label">有草稿</span>}</span>,
-            };
+            const username = item.nickname || '未提供昵称';
+            const metaId = `${prefix}-summary-${item.id}`;
+            return <li key={item.id}>
+              <button type="button" className="prospect-chat-roster-row" aria-label={`查看${username}详情`}
+                aria-expanded={!settingsOpen && item.id === selectedId} aria-describedby={metaId} onClick={event => {
+                  event.currentTarget.focus({ preventScroll: true });
+                  selectConversation(item.id);
+                }}>
+                <span className="prospect-chat-roster-name">{username}</span>
+                <span className="prospect-chat-roster-meta" id={metaId}>
+                  <span className="prospect-chat-roster-intent">{captured ? gradeLabels[captured.grade] : '未评估'}</span>
+                  <span className={`prospect-chat-badge${item.mode === 'human' && item.status !== 'closed' ? ' is-human' : ''}`}>{conversationModeLabel(item)}</span>
+                  {drafts[item.id]?.trim() && <span className="prospect-chat-draft-label">有草稿</span>}
+                </span>
+              </button>
+            </li>;
           })}
-        /> : <div className="prospect-empty"><MessageCircle size={24} /><h3>{snapshot.conversations.length ? '没有匹配的会话' : '还没有同步的客户会话'}</h3><p>{snapshot.conversations.length ? '调整状态或搜索关键词后重试。' : campaignScope ? '完成评论线索的招呼并同步后，会话将显示在这里。' : '在线索池中打开客户会话，查看原始沟通记录。'}</p></div> : pool.length ? <ProspectingList
+        </ul> : <div className="prospect-empty"><MessageCircle size={24} /><h3>{snapshot.conversations.length ? '没有匹配的会话' : '还没有同步的客户会话'}</h3><p>{snapshot.conversations.length ? '调整状态或搜索关键词后重试。' : campaignScope ? '完成评论线索的招呼并同步后，会话将显示在这里。' : '在线索池中打开客户会话，查看原始沟通记录。'}</p></div> : pool.length ? <ProspectingList
           label="留资线索池"
           selectedId={selectedPoolId}
           onSelect={id => { if (canChangeDetail()) { rememberRow(); setSelectedPoolId(id); setError(''); setNotice(''); } }}

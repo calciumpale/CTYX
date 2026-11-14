@@ -97,13 +97,23 @@ test('training uses four setup cards, optional coaching tips and a six-dimension
 
     await page.goto(origin, { waitUntil: 'domcontentloaded', timeout: 20000 });
     const setupNames = ['选择剧本', '人物及音色', '选陪练方式', '开始陪练'];
-    const setupHeadings = setupNames.map(name => page.getByRole('heading', { name, exact: true }));
+    const setupCards = setupNames.map(name => page.getByRole('region', { name, exact: true }));
     await page.getByRole('heading', { name: 'AI带练', exact: true }).waitFor();
-    for (const heading of setupHeadings) await heading.waitFor();
+    for (const card of setupCards) await card.waitFor();
     await page.getByRole('heading', { name: '练习记录及复盘', exact: true }).waitFor();
+    const cardBounds = () => Promise.all(setupCards.map(card => card.boundingBox()));
+    const expectEqualCards = async (state) => {
+      const bounds = await cardBounds();
+      const [first] = bounds;
+      assert.ok(bounds.every(card => Math.abs(card.width - first.width) <= 1 && Math.abs(card.height - first.height) <= 1),
+        `${state} desktop cards share width and height: ${JSON.stringify(bounds)}`);
+      return first.height;
+    };
+    const desktopHeight = await expectEqualCards('initial');
     await page.setViewportSize({ width: 390, height: 844 });
-    const mobileCards = await Promise.all(setupHeadings.map(heading => heading.boundingBox()));
-    assert.ok(mobileCards.every((card, index) => index === 0 || card.y > mobileCards[index - 1].y), 'mobile setup cards appear in task order');
+    const mobileCards = await cardBounds();
+    assert.ok(mobileCards.every((card, index) => index === 0 || card.y >= mobileCards[index - 1].y + mobileCards[index - 1].height - 1), 'mobile setup cards stack in task order');
+    assert.ok(Math.max(...mobileCards.map(card => card.height)) - Math.min(...mobileCards.map(card => card.height)) > 10, 'mobile cards size to their content');
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
     await page.setViewportSize({ width: 1440, height: 900 });
 
@@ -126,6 +136,9 @@ test('training uses four setup cards, optional coaching tips and a six-dimension
     await textMode.click();
     await voiceTransport.waitFor({ state: 'hidden' });
     await page.getByText('编辑客户画像', { exact: true }).click();
+    await setupCards[1].getByText('客户背景与决策条件', { exact: true }).click();
+    await setupCards[1].getByRole('textbox', { name: '客户称呼', exact: true }).waitFor();
+    assert.ok(await expectEqualCards('expanded profile') > desktopHeight, 'cards grow to fit the expanded profile');
     await page.getByRole('textbox', { name: '业务需求', exact: true }).fill('比较两处园区的办公成本。');
     await page.getByRole('button', { name: '预览并确认', exact: true }).click();
     await page.getByRole('heading', { name: '确认客户画像', exact: true }).waitFor();

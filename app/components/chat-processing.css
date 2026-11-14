@@ -1,10 +1,26 @@
 .chat-processing { margin-top: 16px; }
-.chat-processing-details > summary { font-size: 12px; }
-.chat-processing-steps { list-style: none; margin: 0; padding: 0 14px 6px; }
+/* The pending disclosure uses the same visual weight as a saved trace. */
+.chat-processing-details { color: var(--cds-text-secondary); }
+.chat-processing-details > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  list-style: none;
+  cursor: pointer;
+  border-radius: var(--radius-md);
+  font-size: .8125rem;
+  font-weight: 550;
+}
+.chat-processing-details > summary::-webkit-details-marker { display: none; }
+.chat-processing-details > summary > span { display: inline-flex; align-items: center; gap: 7px; }
+.chat-processing-details > summary:hover { color: var(--cds-text-primary); }
+.chat-processing-details[open] > summary > svg:last-child { transform: rotate(180deg); }
+.chat-processing-steps { list-style: none; margin: 0; padding: 0 0 6px; }
 .chat-processing-step { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; gap: 9px; padding: 10px 0; border-top: 1px solid var(--cds-border); }
 .chat-processing-step > svg { margin-top: 1px; color: var(--cds-text-secondary); }
 .chat-processing-step strong { font-size: 12px; font-weight: 550; }
 .chat-processing-step p { margin: 3px 0 0; line-height: 1.6; overflow-wrap: anywhere; }
 .chat-processing-step p, .chat-processing-step > span, .chat-processing-waiting { color: var(--cds-text-secondary); }
 .chat-processing-step > span { white-space: nowrap; }
-.chat-processing-waiting { display: flex; align-items: center; gap: 8px; margin: 0; padding: 0 14px 13px; }
+.chat-processing-waiting { display: flex; align-items: center; gap: 8px; margin: 0; padding: 0 0 13px; }

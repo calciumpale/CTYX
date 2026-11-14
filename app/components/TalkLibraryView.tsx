@@ -18,10 +18,11 @@ const jobLabels: Record<FeedbackJob['status'], string> = { waiting_transcript: '
 const lines = (value: string) => value.split(/\n/).map(item => item.trim()).filter(Boolean);
 const tags = (value: string) => [...new Set(value.split(/[,，、\n]/u).map(item => item.trim()).filter(Boolean))];
 
-export function TalkTrackPicker({ tracks, selectedIds, onChange, disabled = false }: { tracks: TalkTrack[]; selectedIds: string[]; onChange: (ids: string[]) => void; disabled?: boolean }) {
+export function TalkTrackPicker({ tracks, selectedIds, onChange, disabled = false, compact = false }: { tracks: TalkTrack[]; selectedIds: string[]; onChange: (ids: string[]) => void; disabled?: boolean; compact?: boolean }) {
   const published = tracks.filter(track => track.status === 'published' && track.weight > 0);
   const selected = published.find(track => selectedIds.includes(track.id));
-  return <label className="talk-track-picker"><BookOpen size={15} /><select aria-label="指定话术模板" value={selected?.id ?? ''} onChange={event => onChange(event.target.value ? [event.target.value] : [])} disabled={disabled || published.length === 0}><option value="">{published.length ? '指定话术 · 自动匹配' : '暂无已发布话术'}</option>{published.map(track => <option key={track.id} value={track.id}>{track.title}</option>)}</select><ChevronDown size={12} /></label>;
+  const defaultLabel = published.length ? '话术 · 自动匹配' : '暂无已发布话术';
+  return <label className="talk-track-picker" title={selected?.title ?? defaultLabel}><BookOpen size={15} aria-hidden="true" /><select aria-label="指定话术模板" value={selected?.id ?? ''} onChange={event => onChange(event.target.value ? [event.target.value] : [])} disabled={disabled || published.length === 0}><option value="" label={compact ? '话术' : defaultLabel}>{defaultLabel}</option>{published.map(track => <option key={track.id} value={track.id}>{track.title}</option>)}</select><ChevronDown size={12} aria-hidden="true" /></label>;
 }
 
 function Empty({ title, detail, children }: { title: string; detail: string; children?: ReactNode }) {

@@ -32,23 +32,23 @@ colors:
   dark-warning: "#d8b264"
 typography:
   headline:
-    fontFamily: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif
+    fontFamily: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif
     fontSize: 24px
     fontWeight: 550
     lineHeight: 1.4
     letterSpacing: "-0.7px"
   title:
-    fontFamily: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif
+    fontFamily: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif
     fontSize: 14px
     fontWeight: 550
     lineHeight: 1.7
   body:
-    fontFamily: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif
+    fontFamily: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif
     fontSize: 14px
     fontWeight: 400
     lineHeight: 1.7
   label:
-    fontFamily: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif
+    fontFamily: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif
     fontSize: 13px
     fontWeight: 500
     lineHeight: 1.3
@@ -166,6 +166,8 @@ components:
 界面共用系统无衬线字体栈，包含中文回退；不加载展示字体。正文以 frontmatter 的 body 为阅读基准，长文按内容使用更宽松行距。标题常见为 headline，角色首页使用较紧凑的 22px 标题；章节与条目以 title、按钮与工具栏以 label 为基准。元数据常见 11–12px，不用其承载主要正文。手机表单输入提高到 16px。
 
 凭据、代码与诊断内容使用 frontmatter 的 code 等宽字体栈，便于核对标识符和多行数据。
+
+主助手与项目对话借鉴 Anara 的阅读排布。正文约 16px，回答直接排在工作面上，用户提问用中性浅底圆角气泡。桌面阅读列约 672–690px，与底部输入区对齐；窄屏保持正文优先。已结束的处理过程与来源可展开，生成时继续显示实时步骤。输入区随文字增高，发送按钮使用圆形。
 
 ## Layout
 

@@ -247,10 +247,8 @@
   .prospect-chat-filters .prospect-chat-filter-search { flex-basis: 132px; flex-shrink: 0; }
 }
 @container prospecting-detail (max-width: 440px) {
-  .prospect-chat-tools { grid-template-columns: minmax(0, 1fr); }
-  .prospect-chat-learning { justify-content: flex-start; flex-wrap: wrap; }
-}
-@container prospecting-detail (max-width: 345px) {
   .prospect-conversation-header { grid-template: "identity" auto "actions" auto "sync" auto / minmax(0, 1fr); }
   .prospect-conversation-actions { justify-content: flex-start; }
+  .prospect-chat-tools { grid-template-columns: minmax(0, 1fr); }
+  .prospect-chat-learning { justify-content: flex-start; flex-wrap: wrap; }
 }

@@ -104,6 +104,16 @@ test('creative studio connects copy, design, saved versions, and independent tem
     assert.equal(await page.getByRole('textbox', { name: /^画面/ }).inputValue(), '摊位全景');
     await page.getByRole('button', { name: '用稿件做画板' }).click();
     await page.getByRole('region', { name: '画板浏览区' }).waitFor();
+    const width = page.getByRole('spinbutton', { name: '宽度 (px)', exact: true });
+    await width.fill('5000');
+    for (const event of [{ isComposing: true }, { keyCode: 229 }]) {
+      await width.dispatchEvent('keydown', { key: 'Enter', ...event });
+      assert.equal(await width.evaluate(input => input === document.activeElement), true, 'IME confirmation must keep the numeric field focused');
+      assert.equal(await width.inputValue(), '5000', 'IME confirmation must not normalize the draft');
+    }
+    await width.press('Enter');
+    assert.equal(await width.evaluate(input => input === document.activeElement), false);
+    assert.equal(await width.inputValue(), '4096', 'A normal Enter still finalizes the field');
     await page.getByLabel('项目名称', { exact: true }).fill('市集第一版');
     await page.getByRole('button', { name: '保存', exact: true }).click();
     await page.getByText('版本 1', { exact: true }).waitFor();
@@ -206,7 +216,7 @@ test('content factory preserves access to historical images, videos and admin co
     });
     await page.goto(origin);
     await page.getByRole('tab', { name: 'AI 内容工厂' }).waitFor();
-    assert.deepEqual(await page.getByRole('tab').allTextContents(), ['AI 内容工厂', '数字人']);
+    assert.deepEqual(await page.getByRole('tablist', { name: '素材功能' }).getByRole('tab').allTextContents(), ['AI 内容工厂', '数字人']);
     assert.equal(await page.getByRole('tab', { name: 'AI 内容工厂' }).getAttribute('aria-selected'), 'true');
     assert.equal(await page.getByLabel('输出类型').count(), 0);
     await page.getByRole('button', { name: '历史素材', exact: true }).click();

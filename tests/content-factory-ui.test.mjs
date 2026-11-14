@@ -31,6 +31,8 @@ const generated = {
 
 test('content factory edits generated channel copy and saves a local publication queue', { timeout: 60000 }, async () => {
   const cacheDir = await mkdtemp(path.join(tmpdir(), 'content-factory-ui-'));
+  const initialRead = Promise.withResolvers();
+  const initialReadFinished = Promise.withResolvers();
   let server;
   let browser;
   try {
@@ -61,6 +63,7 @@ test('content factory edits generated channel copy and saves a local publication
     const requests = [];
     const unexpected = [];
     const records = new Map();
+    let hasReadCampaigns = false;
     page.on('pageerror', error => pageErrors.push(error.message));
     await page.route('**/*', async route => {
       const request = route.request();
@@ -70,7 +73,16 @@ test('content factory edits generated channel copy and saves a local publication
         return route.abort();
       }
       if (url.pathname !== '/api/content-factory') return route.continue();
-      if (request.method() === 'GET') return route.fulfill({ json: { modelAvailable: true, campaigns: [...records.values()] } });
+      if (request.method() === 'GET') {
+        const campaigns = [...records.values()];
+        if (hasReadCampaigns) return route.fulfill({ json: { modelAvailable: true, campaigns } });
+        hasReadCampaigns = true;
+        await initialRead.promise;
+        try { await route.fulfill({ json: { modelAvailable: true, campaigns } }); }
+        catch { /* The stale request can be canceled after the newer save. */ }
+        finally { initialReadFinished.resolve(); }
+        return;
+      }
       assert.equal(request.method(), 'POST');
       const body = request.postDataJSON();
       requests.push(body);
@@ -91,13 +103,26 @@ test('content factory edits generated channel copy and saves a local publication
     assert.equal(await factory.getAttribute('aria-selected'), 'true');
     await page.getByLabel('活动 / 主题', { exact: true }).fill(topic);
     await page.getByLabel('目标人群', { exact: true }).fill(audience);
+
+    const save = page.getByRole('button', { name: '保存活动', exact: true });
+    const saveResponse = () => page.waitForResponse(result => result.request().method() === 'POST' && result.request().postDataJSON().action === 'save');
+    const firstSave = saveResponse();
+    await save.click();
+    assert.equal((await firstSave).status(), 200);
+    const history = page.getByRole('combobox', { name: '历史活动', exact: true });
+    await history.waitFor();
+    initialRead.resolve();
+    await initialReadFinished.promise;
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    assert.equal(await history.locator('option:checked').textContent(), topic, 'a stale list response cannot remove a saved activity');
+
     await page.getByRole('button', { name: '生成全套内容', exact: true }).click();
     const title = page.getByRole('textbox', { name: /^标题$/ }).first();
     const body = page.getByRole('textbox', { name: /^正文$/ }).first();
     await title.waitFor();
     assert.equal(await title.inputValue(), generated.copy[0].title);
     assert.equal(await body.inputValue(), generated.copy[0].body);
-    assert.deepEqual(requests[0], { action: 'generate', brief: { goal: 'leads', topic, audience, tone: 'professional', channels: ['wechat', 'xiaohongshu'], requirements: '', brand: '' } });
+    assert.deepEqual(requests[1], { action: 'generate', brief: { goal: 'leads', topic, audience, tone: 'professional', channels: ['wechat', 'xiaohongshu'], requirements: '', brand: '' } });
 
     const editedTitle = '周末市集店主邀约';
     const editedCopy = '本周日来现场看摊位，请先确认意向时段。';
@@ -106,12 +131,10 @@ test('content factory edits generated channel copy and saves a local publication
     await page.getByRole('region', { name: 'AI 人群洞察' }).getByText(generated.audience.summary, { exact: true }).waitFor();
     await page.getByRole('button', { name: '加入发布队列', exact: true }).click();
 
-    const save = page.getByRole('button', { name: '保存活动', exact: true });
-    const saveResponse = () => page.waitForResponse(result => result.request().method() === 'POST' && result.request().postDataJSON().action === 'save');
     const response = saveResponse();
     await save.click();
     assert.equal((await response).status(), 200);
-    assert.equal(requests[1].document.queue[0].status, 'draft');
+    assert.equal(requests[2].document.queue[0].status, 'draft');
 
     await page.getByRole('button', { name: '送审并排期', exact: true }).click();
     const review = page.getByRole('dialog', { name: '送审并排期', exact: true });
@@ -122,12 +145,22 @@ test('content factory edits generated channel copy and saves a local publication
     const queue = page.getByRole('dialog', { name: '发布队列', exact: true });
     await queue.getByText(editedTitle, { exact: true }).waitFor();
     await queue.getByText(/待审核 · 已登记排期/).waitFor();
+    const reschedule = queue.getByRole('button', { name: '调整排期', exact: true });
+    for (const dismissal of ['button', 'Escape']) {
+      await reschedule.click();
+      await review.getByLabel('计划发布时间').waitFor();
+      if (dismissal === 'button') await review.getByRole('button', { name: '取消', exact: true }).click();
+      else await page.keyboard.press('Escape');
+      await review.waitFor({ state: 'hidden' });
+      assert.equal(await reschedule.evaluate(button => document.activeElement === button), true, 'return focus to the selected queue row');
+    }
     await queue.getByRole('button', { name: '关闭', exact: true }).click();
 
-    const document = requests[2].document;
-    assert.deepEqual(requests.map(request => request.action), ['generate', 'save', 'save']);
-    assert.deepEqual(requests.slice(1).map(request => request.version), [0, 1]);
-    assert.equal(requests[1].id, requests[2].id);
+    const document = requests[3].document;
+    assert.deepEqual(requests.map(request => request.action), ['save', 'generate', 'save', 'save']);
+    const saves = requests.filter(request => request.action === 'save');
+    assert.deepEqual(saves.map(request => request.version), [0, 1, 2]);
+    assert.ok(saves.every(request => request.id === saves[0].id));
     assert.equal(document.generated.copy.find(item => item.channel === 'wechat').body, editedCopy);
     assert.deepEqual(document.generated.copy.find(item => item.channel === 'xiaohongshu'), generated.copy[1]);
     assert.equal(document.queue.length, 1);
@@ -136,10 +169,30 @@ test('content factory edits generated channel copy and saves a local publication
     assert.equal(document.queue[0].scheduledAt, new Date('2099-02-15T09:30').toISOString());
 
     await page.reload();
-    await page.getByRole('combobox', { name: '历史活动', exact: true }).selectOption({ label: topic });
+    await history.selectOption({ label: topic });
     await title.waitFor();
     assert.equal(await title.inputValue(), editedTitle);
     assert.equal(await body.inputValue(), editedCopy);
+
+    const resultTabs = page.getByRole('tablist', { name: '生成结果渠道', exact: true });
+    const wechatTab = resultTabs.getByRole('tab', { name: '公众号长文', exact: true });
+    const xhsTab = resultTabs.getByRole('tab', { name: '小红书笔记', exact: true });
+    await wechatTab.focus();
+    for (const [key, tab, expected] of [
+      ['ArrowRight', xhsTab, generated.copy[1].title],
+      ['ArrowLeft', wechatTab, editedTitle],
+      ['End', xhsTab, generated.copy[1].title],
+      ['Home', wechatTab, editedTitle],
+    ]) {
+      await page.keyboard.press(key);
+      assert.equal(await tab.getAttribute('aria-selected'), 'true');
+      assert.equal(await tab.evaluate(element => document.activeElement === element), true);
+      assert.equal(await tab.evaluate(element => {
+        const panels = [...document.querySelectorAll('[role="tabpanel"]')];
+        return panels.some(panel => panel.getAttribute('aria-labelledby') === element.id && !panel.hidden);
+      }), true, 'the selected channel controls the visible result panel');
+      assert.equal(await title.inputValue(), expected);
+    }
 
     const artifacts = process.env.CONTENT_FACTORY_QA_ARTIFACT_DIR;
     if (artifacts) await page.screenshot({ path: path.join(artifacts, 'content-factory-desktop.png'), animations: 'disabled' });
@@ -152,6 +205,7 @@ test('content factory edits generated channel copy and saves a local publication
     assert.deepEqual(unexpected, []);
     assert.deepEqual(pageErrors, []);
   } finally {
+    initialRead.resolve();
     await browser?.close();
     await server?.close();
     await rm(cacheDir, { force: true, recursive: true });

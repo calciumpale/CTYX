@@ -119,6 +119,7 @@ function NumberField({label, value, min, max, step = 1, change}: {
         setDraft(null);
       }}
       onKeyDown={event => {
+        if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
         if (event.key === 'Enter') event.currentTarget.blur();
         if (event.key === 'Escape') setDraft(null);
       }} />

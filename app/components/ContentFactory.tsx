@@ -1,11 +1,10 @@
 'use client';
 
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { Archive, BadgeCheck, CalendarDays, Check, Clipboard, Download, FileText, Image, ListPlus, Loader2, Plus, RefreshCw, Sparkles, Trash2, Users, Video } from 'lucide-react';
-import { zipSync } from 'fflate';
 import { Overlay } from './CoreViews';
-import FactoryHistory from './FactoryHistory';
-import { downloadStudioBlob, renderStudioBoardPng, studioColor, studioLayerStyle } from '../lib/creative-studio-export';
+import type FactoryHistory from './FactoryHistory';
+import { studioColor, studioLayerStyle } from '../lib/creative-studio-geometry';
 import type { StudioBoard } from '../lib/creative-studio-types';
 import {
   blankFactoryDocument, FACTORY_CHANNELS, FACTORY_GOALS, FACTORY_TONES,
@@ -21,10 +20,10 @@ const channels = Object.keys(FACTORY_CHANNELS) as FactoryChannel[];
 const safeFile = (name: string) => name.replace(/[\\/:*?"<>|]/g, '-').trim().slice(0, 80) || '海报';
 const dateLabel = (value: string) => new Date(value).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
 
-async function callFactory<T>(body?: Record<string, unknown>): Promise<T> {
+async function callFactory<T>(body?: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
   const response = await fetch(endpoint, body ? {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-  } : { cache: 'no-store' });
+  } : { cache: 'no-store', signal });
   const result = await response.json().catch(() => null) as (T & { message?: string; error?: string }) | null;
   if (!response.ok || !result) {
     throw new Error(result?.message || result?.error || '内容工厂暂时无法连接，请稍后重试。');
@@ -43,6 +42,9 @@ export default function ContentFactory({ notify, onBusyChange, onDirtyChange }: 
   const [error, setError] = useState('');
   const [resultTab, setResultTab] = useState<FactoryChannel>('wechat');
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [History, setHistory] = useState<typeof FactoryHistory | null>(null);
+  const [historyError, setHistoryError] = useState('');
+  const [historyBusy, setHistoryBusy] = useState(false);
   const [queueOpen, setQueueOpen] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(false);
   const [reviewTarget, setReviewTarget] = useState('');
@@ -50,6 +52,12 @@ export default function ContentFactory({ notify, onBusyChange, onDirtyChange }: 
   const [replaceTarget, setReplaceTarget] = useState<string | null>(null);
   const [preview, setPreview] = useState<StudioBoard | null>(null);
   const generationInFlight = useRef(false);
+  const campaignRead = useRef<AbortController | null>(null);
+  const campaignWriteRevision = useRef(0);
+  const mounted = useRef(false);
+  const channelIds = useId();
+  const reviewNoteId = useId();
+  const [scheduleError, setScheduleError] = useState('');
   const saveId = useRef('');
   const { brief, generated, queue } = document;
   const changed = JSON.stringify(document) !== JSON.stringify(current?.document ?? blankFactoryDocument());
@@ -60,30 +68,68 @@ export default function ContentFactory({ notify, onBusyChange, onDirtyChange }: 
 
   useEffect(() => { onBusyChange?.(busy); }, [busy, onBusyChange]);
   useEffect(() => { onDirtyChange?.(changed); }, [changed, onDirtyChange]);
-  useEffect(() => {
-    let subscribed = true;
-    callFactory<{ modelAvailable: boolean; campaigns: FactoryRecord[] }>().then(result => {
-      if (!subscribed) return;
-      setReady(result.modelAvailable);
-      setCampaigns(result.campaigns);
-    }).catch(reason => {
-      if (!subscribed) return;
-      setLoadError(reason instanceof Error ? reason.message : '无法读取历史活动。');
-    });
-    return () => { subscribed = false; onBusyChange?.(false); onDirtyChange?.(false); };
-  }, [onBusyChange, onDirtyChange]);
-
-  async function refresh() {
+  const refresh = useCallback(async () => {
+    campaignRead.current?.abort();
+    const read = new AbortController();
+    campaignRead.current = read;
+    const revision = campaignWriteRevision.current;
     setReading(true);
     setLoadError('');
     try {
-      const result = await callFactory<{ modelAvailable: boolean; campaigns: FactoryRecord[] }>();
-      setCampaigns(result.campaigns);
+      const result = await callFactory<{ modelAvailable: boolean; campaigns: FactoryRecord[] }>(undefined, read.signal);
+      if (read.signal.aborted) return;
+      if (revision === campaignWriteRevision.current) setCampaigns(result.campaigns);
       setReady(result.modelAvailable);
     } catch (reason) {
-      setLoadError(reason instanceof Error ? reason.message : '无法读取历史活动。');
+      if (!read.signal.aborted) setLoadError(reason instanceof Error ? reason.message : '无法读取历史活动。');
     } finally {
-      setReading(false);
+      if (!read.signal.aborted) setReading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    mounted.current = true;
+    void refresh();
+    return () => {
+      mounted.current = false;
+      campaignRead.current?.abort();
+    };
+  }, [refresh]);
+  useEffect(() => () => { onBusyChange?.(false); onDirtyChange?.(false); }, [onBusyChange, onDirtyChange]);
+
+  async function openHistory() {
+    setHistoryOpen(true);
+    setHistoryError('');
+    if (History) return;
+    try {
+      const module = await import('./FactoryHistory');
+      if (mounted.current) setHistory(() => module.default);
+    } catch {
+      if (mounted.current) setHistoryError('历史素材加载失败，请重试。');
+    }
+  }
+
+  function selectResultFromKeyboard(event: KeyboardEvent<HTMLButtonElement>, channel: FactoryChannel) {
+    const index = availableTabs.indexOf(channel);
+    const last = availableTabs.length - 1;
+    let next: number;
+    switch (event.key) {
+      case 'ArrowLeft': next = index === 0 ? last : index - 1; break;
+      case 'ArrowRight': next = index === last ? 0 : index + 1; break;
+      case 'Home': next = 0; break;
+      case 'End': next = last; break;
+      default: return;
+    }
+    event.preventDefault();
+    setResultTab(availableTabs[next]);
+    const tabs = event.currentTarget.parentElement;
+    const tab = tabs?.querySelectorAll<HTMLButtonElement>('[role=tab]')[next];
+    if (tab && tabs) {
+      tab.focus({ preventScroll: true });
+      const bounds = tab.getBoundingClientRect();
+      const strip = tabs.getBoundingClientRect();
+      if (bounds.left < strip.left) tabs.scrollLeft -= strip.left - bounds.left;
+      if (bounds.right > strip.right) tabs.scrollLeft += bounds.right - strip.right;
     }
   }
 
@@ -156,6 +202,7 @@ export default function ContentFactory({ notify, onBusyChange, onDirtyChange }: 
         version: asNew ? 0 : current?.version ?? 0, document: next,
       });
       const record = result.record;
+      campaignWriteRevision.current += 1;
       setCurrent(record);
       setDocument(record.document);
       setCampaigns(items => [record, ...items.filter(item => item.id !== record.id)].slice(0, 20));
@@ -193,6 +240,7 @@ export default function ContentFactory({ notify, onBusyChange, onDirtyChange }: 
       : '';
     setReviewTarget(id);
     setScheduleDate(local);
+    setScheduleError('');
     setError('');
     setReviewOpen(true);
   }
@@ -203,7 +251,7 @@ export default function ContentFactory({ notify, onBusyChange, onDirtyChange }: 
     if (!chosen.length) return;
     const date = scheduleDate ? new Date(scheduleDate) : null;
     if (date && (!Number.isFinite(date.valueOf()) || date.valueOf() <= Date.now())) {
-      setError('请选择未来的排期时间。');
+      setScheduleError('请选择未来的排期时间。');
       return;
     }
     const next: FactoryDocument = {
@@ -230,7 +278,10 @@ export default function ContentFactory({ notify, onBusyChange, onDirtyChange }: 
   async function exportPoster(board: StudioBoard) {
     setOperation('export');
     setError('');
-    try { downloadStudioBlob(await renderStudioBoardPng(board), `${board.name.replace(/[\\/:*?"<>|]/g, '-') || '海报'}.png`); }
+    try {
+      const { downloadStudioBlob, renderStudioBoardPng } = await import('../lib/creative-studio-export');
+      downloadStudioBlob(await renderStudioBoardPng(board), `${safeFile(board.name)}.png`);
+    }
     catch (reason) { setError(reason instanceof Error ? reason.message : '海报导出失败。'); }
     finally { setOperation(null); }
   }
@@ -239,13 +290,19 @@ export default function ContentFactory({ notify, onBusyChange, onDirtyChange }: 
     setOperation('export');
     setError('');
     try {
+      const [{ downloadStudioBlob, renderStudioBoardPng }, { zip }] = await Promise.all([
+        import('../lib/creative-studio-export'), import('fflate'),
+      ]);
       const files: Record<string, Uint8Array> = {};
       for (let index = 0; index < boards.length; index++) {
         const board = boards[index];
         const png = await renderStudioBoardPng(board);
         files[`${index + 1}-${safeFile(board.name)}.png`] = new Uint8Array(await png.arrayBuffer());
       }
-      downloadStudioBlob(new Blob([zipSync(files)], { type: 'application/zip' }), `${safeFile(brief.topic)}-海报.zip`);
+      const archive = await new Promise<Uint8Array>((resolve, reject) => {
+        zip(files, { level: 0 }, (error, data) => error ? reject(error) : resolve(data));
+      });
+      downloadStudioBlob(new Blob([Uint8Array.from(archive)], { type: 'application/zip' }), `${safeFile(brief.topic)}-海报.zip`);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '海报导出失败。');
     } finally {
@@ -265,7 +322,7 @@ export default function ContentFactory({ notify, onBusyChange, onDirtyChange }: 
           <option value="">历史活动</option>{campaigns.map(item => <option key={item.id} value={item.id}>{item.document.brief.topic || '未命名活动'}</option>)}
         </select>}
         {current && <button className="button ghost" disabled={busy} onClick={() => openCampaign('')}><Plus size={15} />新建活动</button>}
-        <button className="button ghost" disabled={busy} onClick={() => setHistoryOpen(true)}><Archive size={15} />历史素材</button>
+        <button className="button ghost" disabled={busy} onClick={() => void openHistory()}><Archive size={15} />历史素材</button>
         <button className="button secondary" disabled={busy || !changed} onClick={() => void save()}>保存活动</button>
         <button className="button secondary" disabled={busy} onClick={() => setQueueOpen(true)}><ListPlus size={16} />发布队列{queue.length ? ` · ${queue.length}` : ''}</button>
         <button className="button primary" disabled={busy || !hasDrafts} onClick={() => openReview()}><CalendarDays size={16} />送审并排期</button>
@@ -308,9 +365,15 @@ export default function ContentFactory({ notify, onBusyChange, onDirtyChange }: 
             <div><h3><FileText size={16} />渠道文案</h3>{generated && <p>{generated.copy.length} 份文案 · {generated.posters.length} 版海报 · 最近生成 {dateLabel(generated.generatedAt)}</p>}</div>
             {copy && <button className="button secondary" disabled={busy || !canQueueCopy} onClick={() => void copyText(copy)}><Clipboard size={15} />复制</button>}
           </div>
-          {availableTabs.length > 0 && <div className="cf-result-tabs" role="group" aria-label="生成结果渠道">
-            {availableTabs.map(channel => <button key={channel} type="button" aria-pressed={active === channel} onClick={() => setResultTab(channel)}>{FACTORY_CHANNELS[channel]}</button>)}
+          {availableTabs.length > 0 && <div className="cf-result-tabs" role="tablist" aria-label="生成结果渠道">
+            {availableTabs.map(channel => <button key={channel} id={`${channelIds}-tab-${channel}`} role="tab" type="button"
+              aria-selected={active === channel} tabIndex={active === channel ? 0 : -1}
+              onKeyDown={event => selectResultFromKeyboard(event, channel)}
+              onClick={() => setResultTab(channel)}>{FACTORY_CHANNELS[channel]}</button>)}
           </div>}
+          <div className="cf-channel-panel" role={active ? 'tabpanel' : undefined}
+            aria-labelledby={active ? `${channelIds}-tab-${active}` : undefined}
+            tabIndex={active && !copy && !(active === 'poster' && generated?.posters.length) ? 0 : undefined}>
           {copy ? <div className="cf-copy">
             <div className="cf-preview"><strong>{FACTORY_CHANNELS[copy.channel]}</strong><span>{Array.from(copy.body.trim()).length} 字</span></div>
             <label className="cf-field">{copy.channel === 'email' ? '邮件主题行' : '标题'}<input value={copy.title} maxLength={160} disabled={busy} onChange={event => updateCopy(copy.channel, 'title', event.target.value)} /></label>
@@ -336,6 +399,7 @@ export default function ContentFactory({ notify, onBusyChange, onDirtyChange }: 
             <h4>{active && generated ? `还没有${FACTORY_CHANNELS[active]}` : '从一次活动开始'}</h4>
             <p>填写活动主题，再生成所选渠道的草稿。</p>
           </div>}
+          </div>
         </section>
         {generated?.audience && <section className="cf-insight cf-panel" aria-label="AI 人群洞察">
           <div className="cf-panel-head"><div><h3><Users size={16} />AI 人群洞察</h3><p>基于本次填写的活动需求</p></div></div>
@@ -347,9 +411,14 @@ export default function ContentFactory({ notify, onBusyChange, onDirtyChange }: 
       </div>
     </div>
 
-    {historyOpen && <FactoryHistory onClose={() => setHistoryOpen(false)} />}
+    {historyOpen && <Overlay title="历史素材" className="cf-queue cf-history-dialog" onClose={() => { if (!historyBusy) setHistoryOpen(false); }}>
+      {History ? <History onBusyChange={setHistoryBusy} /> : <div className="cf-copy">
+        {historyError ? <><p role="alert">{historyError}</p><button className="button secondary" onClick={() => void openHistory()}>重新加载</button></> :
+          <p role="status">正在加载历史素材…</p>}
+      </div>}
+    </Overlay>}
 
-    {queueOpen && !reviewOpen && <Overlay title="发布队列" className="cf-queue" onClose={() => { if (!busy) setQueueOpen(false); }}>
+    {queueOpen && <Overlay title="发布队列" className="cf-queue" onClose={() => { if (!busy) setQueueOpen(false); }}>
       <div className="cf-copy">
         <p>在这里登记审核和计划时间。审核与发布由团队人工完成。</p>
         {error && <p className="cf-feedback" role="alert">{error}</p>}
@@ -370,7 +439,11 @@ export default function ContentFactory({ notify, onBusyChange, onDirtyChange }: 
     {reviewOpen && <Overlay title="送审并排期" className="cf-queue" onClose={() => { if (!busy) setReviewOpen(false); }}>
       <form className="cf-copy" onSubmit={event => void submitReview(event)}>
         <p>将 {reviewTarget ? 1 : queue.filter(item => item.status === 'draft').length} 条内容登记为待审核。计划时间可稍后补充。</p>
-        <label className="cf-field">计划发布时间<input type="datetime-local" value={scheduleDate} disabled={busy} onChange={event => setScheduleDate(event.target.value)} /></label>
+        <label className="cf-field">计划发布时间<input type="datetime-local" value={scheduleDate} disabled={busy}
+          data-dialog-initial-focus aria-invalid={scheduleError ? true : undefined}
+          aria-describedby={scheduleError ? reviewNoteId : undefined}
+          onChange={event => { setScheduleDate(event.target.value); setScheduleError(''); }} /></label>
+        {scheduleError && <p id={reviewNoteId} className="cf-feedback" role="alert">{scheduleError}</p>}
         {error && <p className="cf-feedback" role="alert">{error}</p>}
         <div className="cf-actions"><button className="button secondary" type="button" disabled={busy} onClick={() => setReviewOpen(false)}>取消</button>
           <button className="button primary" type="submit" disabled={busy}><BadgeCheck size={15} />确认送审</button></div>
@@ -381,7 +454,7 @@ export default function ContentFactory({ notify, onBusyChange, onDirtyChange }: 
       <div className="cf-copy"><p>当前草稿有改动。保存后再切换，或放弃这次改动。</p>
         {error && <p className="cf-feedback" role="alert">{error}</p>}
         <div className="cf-actions">
-          <button className="button secondary" disabled={busy} onClick={() => setReplaceTarget(null)}>继续编辑</button>
+          <button className="button secondary" disabled={busy} data-dialog-initial-focus onClick={() => setReplaceTarget(null)}>继续编辑</button>
           <button className="button secondary" disabled={busy} onClick={() => selectCampaign(replaceTarget)}>放弃并切换</button>
           <button className="button primary" disabled={busy} onClick={async () => { if (await save()) selectCampaign(replaceTarget); }}><Check size={15} />保存并切换</button>
         </div></div>

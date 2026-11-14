@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from 'react';
 import { Download } from 'lucide-react';
-import { Overlay } from './CoreViews';
 import StudioAssets from './StudioAssets';
 import { downloadStudioCopy, studioRequest } from '../lib/creative-studio-client';
 import { buildStudioCodeZip, downloadStudioBlob } from '../lib/creative-studio-export';
@@ -10,13 +9,14 @@ import type { StudioRecord, StudioSummary } from '../lib/creative-studio-types';
 import type { PublicMaterialTask } from '../lib/marketing-material-types';
 import './creative-studio.css';
 
-export default function FactoryHistory({ onClose }: { onClose: () => void }) {
+export default function FactoryHistory({ onBusyChange }: { onBusyChange: (busy: boolean) => void }) {
   const [tasks, setTasks] = useState<PublicMaterialTask[]>([]);
   const [projects, setProjects] = useState<StudioSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [mediaError, setMediaError] = useState('');
   const [projectError, setProjectError] = useState('');
+  useEffect(() => { onBusyChange(busy); return () => onBusyChange(false); }, [busy, onBusyChange]);
 
   async function loadMedia() {
     setLoading(true);
@@ -71,8 +71,7 @@ export default function FactoryHistory({ onClose }: { onClose: () => void }) {
     }
   }
 
-  return <Overlay title="历史素材" className="cf-queue cf-history-dialog" onClose={() => { if (!busy) onClose(); }}>
-    <div className="cf-copy">
+  return <div className="cf-copy">
       <StudioAssets tasks={tasks} loading={loading} busy={busy} error={mediaError} onReload={() => void loadMedia()} onRefresh={task => void refreshTask(task)} />
       {projectError && <p className="cf-feedback" role="alert">{projectError}</p>}
       {projects.length > 0 && <section aria-label="历史创作">
@@ -81,6 +80,5 @@ export default function FactoryHistory({ onClose }: { onClose: () => void }) {
           <span>{project.title}</span><button className="button secondary" type="button" disabled={busy} onClick={() => void exportProject(project)}><Download size={15} />导出</button>
         </li>)}</ul>
       </section>}
-    </div>
-  </Overlay>;
+  </div>;
 }

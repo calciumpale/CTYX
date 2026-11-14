@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { ArrowUp, ChevronDown, Loader2, Sparkles, X } from 'lucide-react';
 import { TalkTrackPicker } from './TalkLibraryView';
 import type { TalkTrack } from '../lib/talktrack-types';
@@ -14,19 +14,27 @@ export function BrandMark({ small = false }: { small?: boolean }) {
 
 export function Overlay({ children, title, onClose, className = '', wide = false, actions }: { children: ReactNode; title: string; onClose: () => void; className?: string; wide?: boolean; actions?: ReactNode }) {
   const ref = useRef<HTMLDialogElement>(null);
+  const titleId = useId();
   const closeRef = useRef(onClose);
-  useEffect(() => { closeRef.current = onClose; }, [onClose]);
-  useEffect(() => {
+  useLayoutEffect(() => { closeRef.current = onClose; }, [onClose]);
+  useLayoutEffect(() => {
     const dialog = ref.current;
-    const previous = document.activeElement as HTMLElement | null;
-    if (!dialog?.open) dialog?.showModal();
-    dialog?.querySelector<HTMLButtonElement>('[data-dialog-initial-focus]')?.focus({preventScroll:true});
-    const cancel = (e: Event) => { e.preventDefault(); closeRef.current(); };
-    dialog?.addEventListener('cancel', cancel);
-    return () => { dialog?.removeEventListener('cancel', cancel); dialog?.close(); previous?.focus(); };
+    if (!dialog) return;
+    const cancel = (event: Event) => { event.preventDefault(); closeRef.current(); };
+    dialog.addEventListener('cancel', cancel);
+    const initialFocus = dialog.querySelector<HTMLElement>('[data-dialog-initial-focus]');
+    initialFocus?.setAttribute('autofocus', '');
+    if (!dialog.open) dialog.showModal();
+    return () => {
+      dialog.removeEventListener('cancel', cancel);
+      if (dialog.open) dialog.close();
+    };
   }, []);
-  const close = <button className="icon-button" onClick={onClose} aria-label="关闭"><X size={19} /></button>;
-  return <dialog ref={ref} className={`overlay ${wide ? 'wide' : ''} ${className}`} aria-label={title} onClick={e => { if (e.target === e.currentTarget) onClose(); }}><div className="overlay-body"><div className="overlay-heading"><h2>{title}</h2>{actions ? <div className="overlay-heading-actions">{actions}{close}</div> : close}</div>{children}</div></dialog>;
+  const close = <button className="icon-button" type="button" onClick={onClose} aria-label="关闭"><X size={19} /></button>;
+  return <dialog ref={ref} className={`overlay ${wide ? 'wide' : ''} ${className}`} aria-labelledby={titleId}
+    onClick={event => { if (event.target === event.currentTarget) onClose(); }}>
+    <div className="overlay-body"><div className="overlay-heading"><h2 id={titleId}>{title}</h2>{actions ? <div className="overlay-heading-actions">{actions}{close}</div> : close}</div>{children}</div>
+  </dialog>;
 }
 
 export function DiscardChangesDialog({ title, onCancel, onDiscard }: {

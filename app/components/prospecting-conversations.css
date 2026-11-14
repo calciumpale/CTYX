@@ -37,7 +37,7 @@
 
 .prospect-chat-panel > .prospect-inbox-panel-header {
   display: grid;
-  grid-template: "identity actions close" auto / minmax(0, 1fr) auto auto;
+  grid-template: "identity actions close" auto / minmax(280px, 1fr) minmax(0, max-content) auto;
   align-items: center;
   gap: 4px 8px;
   padding: 8px 12px;
@@ -234,7 +234,7 @@
 @media (max-width: 850px) {
   .prospect-chat-filters .prospect-chat-filter-search { flex-basis: 132px; flex-shrink: 0; }
 }
-@container prospecting-detail (max-width: 690px) {
+@container prospecting-detail (max-width: 800px) {
   .prospect-chat-panel > .prospect-inbox-panel-header {
     grid-template: "identity identity" auto "actions close" auto / minmax(0, 1fr) auto;
     gap: 3px 6px;

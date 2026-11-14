@@ -141,23 +141,26 @@ test('conversation settings preserve drafts, save the loaded enabled state, and 
       const splitWidth = panelBounds.x + panelBounds.width - rosterBounds.x;
       assert.ok(panelBounds.width / splitWidth >= 0.7, `The detail has at least 70% of the workspace at ${width}px`);
     };
-    await expectWideDetail(960);
-    await expectWideDetail(1280);
     const heading = panel.getByRole('heading', { name: '王女士', exact: true });
     const profileLink = panel.getByRole('link', { name: '抖音主页', exact: true });
     const statusBadge = panel.locator('.prospect-conversation-meta').getByText('需人工处理', { exact: true });
     assert.equal(await profileLink.getAttribute('href'), profileUrl);
-    const [headingBounds, statusBounds, profileBounds] = await Promise.all([heading.boundingBox(), statusBadge.boundingBox(), profileLink.boundingBox()]);
     const centerY = bounds => bounds.y + bounds.height / 2;
-    assert.ok(statusBounds.x >= headingBounds.x + headingBounds.width - 1 && profileBounds.x >= statusBounds.x + statusBounds.width - 1);
-    assert.ok([statusBounds, profileBounds].every(bounds => Math.abs(centerY(bounds) - centerY(headingBounds)) <= 4), 'status and profile link are inline after the customer name');
     const syncGroup = panel.locator('.prospect-conversation-sync');
     const sync = syncGroup.getByRole('button', { name: '立即同步', exact: true });
     const syncDetails = panel.locator('.prospect-chat-sync-status');
     const syncTime = syncGroup.locator(`time[datetime="${lastSyncedAt}"]`);
     await syncTime.waitFor();
-    const [syncBounds, timeBounds] = await Promise.all([sync.boundingBox(), syncTime.boundingBox()]);
-    assert.ok(Math.abs(centerY(syncBounds) - centerY(timeBounds)) <= 4, 'last sync time is inline with the sync button');
+    for (const width of [960, 1239, 1280, 1440]) {
+      await expectWideDetail(width);
+      const [headingBounds, statusBounds, profileBounds, syncBounds, timeBounds] = await Promise.all([
+        heading.boundingBox(), statusBadge.boundingBox(), profileLink.boundingBox(), sync.boundingBox(), syncTime.boundingBox(),
+      ]);
+      assert.ok(statusBounds.x >= headingBounds.x + headingBounds.width - 1 && profileBounds.x >= statusBounds.x + statusBounds.width - 1);
+      assert.ok([statusBounds, profileBounds].every(bounds => Math.abs(centerY(bounds) - centerY(headingBounds)) <= 4), `status and profile link are inline at ${width}px`);
+      assert.ok(Math.abs(centerY(syncBounds) - centerY(timeBounds)) <= 4, `last sync time is inline at ${width}px`);
+    }
+    await page.setViewportSize({ width: 1280, height: 1000 });
     assert.match(await syncDetails.textContent(), /上次同步.*15:45/);
     assert.match(await syncDetails.textContent(), /同步失败/);
     assert.match(await syncDetails.textContent(), /核验.*账号.*重新同步/);

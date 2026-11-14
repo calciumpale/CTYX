@@ -96,7 +96,10 @@
 .workbench-chat-launcher:hover { transform: translateY(-2px); }
 .workbench-chat-launcher:focus-visible { outline: 2px solid var(--cds-text-primary); outline-offset: 2px; }
 .app-shell:has(.prospect-chat-panel) .workbench-chat-launcher { bottom: calc(18px + var(--app-frame-inset)); }
-.app-shell:has(.prospect-chat-panel) .prospect-chat-composer-foot { padding-inline-end: 46px; }
+.app-shell:has(.workbench-chat-launcher) .prospect-chat-composer { padding-inline-end: 56px; }
+@media (max-width: 1200px) {
+  .app-shell:has(.workbench-chat-launcher) .cw-composer-dock { padding-inline-end: max(var(--cw-chat-gutter), 60px); }
+}
 @media (max-width: 850px) {
   .sidebar:not(.mobile-open) { visibility: hidden; }
   .sidebar-account-actions { inset-inline-end: -32px; }

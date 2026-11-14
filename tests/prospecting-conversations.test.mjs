@@ -60,9 +60,10 @@ test('conversation settings preserve drafts, save the loaded enabled state, and 
   let syncStatus = 'failed';
   let syncError = '读取会话期间登录账号发生变化。';
   let lastSyncedAt = '2026-11-07T07:45:00Z';
+  const profileUrl = 'https://www.douyin.com/user/fixture-profile';
   const policies = { 'campaign-a': defaultPolicy(), 'campaign-b': defaultPolicy() };
   const snapshot = campaignId => {
-    const base = { campaignId, leadId: 'lead-1', recipientId: 'recipient-1', profileUrl: '', mode: 'human', status: 'active', version: 1, lastMessageAt: '2026-11-07T08:00:00Z', lastMessagePreview: '想了解面积和预算', handoffReason, lastSyncedAt, updatedAt: '2026-11-07T08:00:00Z' };
+    const base = { campaignId, leadId: 'lead-1', recipientId: 'recipient-1', profileUrl, mode: 'human', status: 'active', version: 1, lastMessageAt: '2026-11-07T08:00:00Z', lastMessagePreview: '想了解面积和预算', handoffReason, lastSyncedAt, updatedAt: '2026-11-07T08:00:00Z' };
     return { enabled, online: true, policy: policies[campaignId], libraries: [{ id: 'public-info', name: '已审核招商资料' }, { id: 'public-faq', name: '客户常见问题' }], conversations: [
       { ...base, id: 'conversation-1', nickname: '王女士', taskMemory: {sessionId:'session-a',campaignId,activeCampaignId:campaignId,isActive:true,ready:true,sessionVersion:1,bindingVersion:1,state:{schemaVersion:2,facts:[{id:'area-fact',key:'area',value:'80–100 平方米',status:'confirmed',sourceMessageId:'message-0',sourceText:'希望80–100平方米',actor:'customer',sourceAt:'2026-11-07T08:00:00Z',updatedAt:'2026-11-07T08:00:00Z'}],events:[],ignoredSourceIds:[],sourceWatermark:1,summary:'希望临街，待确认租期。',updatedAt:'2026-11-07T08:00:00Z',contact:{captured:false,declined:true,submittedInvites:1,legacyInvites:1,pendingInvites:0,uncertainInvites:0}}}, memory: { needs: { area: '80–100 平方米', category: '咖啡', budget: '每月 1.5 万元', location: '一楼临街', timing: '明年三月', visit: '周五下午' }, stage: 'qualifying', contactCaptured: false, contactDeclines: 1, contactAsks: 2, summary: '希望临街，待确认租期。' } },
       { ...base, id: 'conversation-closed', nickname: '已退订客户', status: 'closed', closeReason: '客户明确要求停止联系', memory: { needs: {}, stage: 'closed', contactCaptured: false, contactDeclines: 2, contactAsks: 2, summary: '' } },
@@ -142,8 +143,21 @@ test('conversation settings preserve drafts, save the loaded enabled state, and 
     };
     await expectWideDetail(960);
     await expectWideDetail(1280);
-    const syncDetails = page.locator('.prospect-chat-sync-status');
-    await syncDetails.locator(`time[datetime="${lastSyncedAt}"]`).waitFor();
+    const heading = panel.getByRole('heading', { name: '王女士', exact: true });
+    const profileLink = panel.getByRole('link', { name: '抖音主页', exact: true });
+    const statusBadge = panel.locator('.prospect-conversation-meta').getByText('需人工处理', { exact: true });
+    assert.equal(await profileLink.getAttribute('href'), profileUrl);
+    const [headingBounds, statusBounds, profileBounds] = await Promise.all([heading.boundingBox(), statusBadge.boundingBox(), profileLink.boundingBox()]);
+    const centerY = bounds => bounds.y + bounds.height / 2;
+    assert.ok(statusBounds.x >= headingBounds.x + headingBounds.width - 1 && profileBounds.x >= statusBounds.x + statusBounds.width - 1);
+    assert.ok([statusBounds, profileBounds].every(bounds => Math.abs(centerY(bounds) - centerY(headingBounds)) <= 4), 'status and profile link are inline after the customer name');
+    const syncGroup = panel.locator('.prospect-conversation-sync');
+    const sync = syncGroup.getByRole('button', { name: '立即同步', exact: true });
+    const syncDetails = panel.locator('.prospect-chat-sync-status');
+    const syncTime = syncGroup.locator(`time[datetime="${lastSyncedAt}"]`);
+    await syncTime.waitFor();
+    const [syncBounds, timeBounds] = await Promise.all([sync.boundingBox(), syncTime.boundingBox()]);
+    assert.ok(Math.abs(centerY(syncBounds) - centerY(timeBounds)) <= 4, 'last sync time is inline with the sync button');
     assert.match(await syncDetails.textContent(), /上次同步.*15:45/);
     assert.match(await syncDetails.textContent(), /同步失败/);
     assert.match(await syncDetails.textContent(), /核验.*账号.*重新同步/);

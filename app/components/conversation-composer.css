@@ -1,0 +1,74 @@
+.conversation-composer {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 10px 11px 8px;
+  border: 1px solid var(--cds-border-strong);
+  border-radius: var(--radius-2xl);
+  background: var(--cds-surface-2);
+  box-shadow: var(--cds-shadow-sm);
+  text-align: start;
+}
+
+.conversation-composer:focus-within { border-color: var(--cds-focus-color); }
+.conversation-composer:has(> textarea:focus-visible) { box-shadow: 0 0 0 1px var(--cds-focus-color); }
+
+:is(.prospect-workspace, .customer-workspace) .conversation-composer > .conversation-composer-input {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  max-height: clamp(66px, 25dvh, 164px);
+  field-sizing: content;
+  padding: 4px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--cds-text-primary);
+  resize: none;
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.conversation-composer-input::placeholder { color: var(--cds-text-secondary); opacity: 1; }
+.conversation-composer-input:disabled { color: var(--cds-text-secondary); }
+.conversation-composer-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+.conversation-composer-toolbar > .conversation-composer-note {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding-inline-start: 4px;
+  color: var(--cds-text-secondary);
+  font-size: 11px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.conversation-composer-count { margin-inline-end: 2px; font-size: 11px; font-variant-numeric: tabular-nums; color: var(--cds-text-secondary); white-space: nowrap; }
+.conversation-composer-toolbar > .conversation-composer-send {
+  --control-radius: var(--cds-radius-pill);
+  width: var(--control-height);
+  aspect-ratio: 1;
+  padding: 0;
+  flex: none;
+}
+.conversation-composer-toolbar > .conversation-composer-send:disabled {
+  opacity: 1;
+  background: var(--cds-surface-0);
+  color: var(--cds-text-secondary);
+}
+@media (max-width: 850px) {
+  :is(.prospect-workspace, .customer-workspace) .conversation-composer > .conversation-composer-input { font-size: 16px; }
+  .conversation-composer { gap: 4px; padding: 7px 8px; }
+  .conversation-composer-toolbar { gap: 5px; }
+}
+@media (max-width: 360px) {
+  .conversation-composer-toolbar > .conversation-composer-note { font-size: 10px; }
+}

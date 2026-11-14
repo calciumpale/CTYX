@@ -26,9 +26,9 @@ export function ProspectingList({ rows, selectedId, onSelect, label = '线索列
   </table></div>;
 }
 
-export function ProspectingPanel({ title, onClose, children, className, header, closeLabel = '关闭详情' }: {
-  title: string; onClose: () => void; children: ReactNode; className?: string; closeLabel?: string;
-  header?: { avatar?: ReactNode; metadata?: ReactNode; actions?: ReactNode; status?: ReactNode };
+export function ProspectingPanel({ title, onClose, children, className, header, pointerOpened, closeLabel = '关闭详情' }: {
+  title: string; onClose: () => void; children: ReactNode; className?: string; closeLabel?: string; pointerOpened?: boolean;
+  header?: { avatar?: ReactNode; metadata?: ReactNode; actions?: ReactNode };
 }) {
   const heading = useRef<HTMLHeadingElement>(null);
   useEffect(() => {
@@ -37,17 +37,16 @@ export function ProspectingPanel({ title, onClose, children, className, header, 
   }, []);
   const focusKey = header ? null : title;
   useEffect(() => { heading.current?.focus({ preventScroll: true }); }, [focusKey]);
-  const titleElement = <h2 ref={heading} tabIndex={-1}>{title}</h2>;
+  const titleElement = <h2 ref={heading} tabIndex={-1} data-pointer-open={pointerOpened || undefined}>{title}</h2>;
   return <aside className={`prospect-inbox-panel${className ? ` ${className}` : ''}`} aria-label={title} onKeyDown={event => {
     if (event.key === 'Escape' && !event.defaultPrevented) { event.stopPropagation(); onClose(); }
   }}>
     <header className="prospect-inbox-panel-header">
       {header ? <div className="prospect-inbox-panel-identity">
-        {header.avatar}<div>{titleElement}{header.metadata}</div>
+        {header.avatar}<div className="prospect-conversation-heading">{titleElement}{header.metadata}</div>
       </div> : titleElement}
       {header?.actions}
       <button type="button" className="icon-button" aria-label={closeLabel} title={closeLabel} onClick={onClose}><X size={19} aria-hidden="true" /></button>
-      {header?.status}
     </header>
     <div className="prospect-inbox-panel-body">{children}</div>
   </aside>;

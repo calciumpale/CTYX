@@ -102,6 +102,45 @@ test('project chat and the assistant show live progress and preserve the project
           const lookupRow = progress.getByRole('listitem').filter({ hasText: lookup.title });
           const answer = view.getByText(gate.answer, { exact: true });
           await composer.fill(query);
+          if (project) {
+            const form = page.locator('.conversation-composer').filter({ has: composer });
+            const agent = form.getByRole('combobox', { name: '选择 AI 助手', exact: true });
+            assert.equal(await form.count(), 1, 'project chat uses the shared composer shell');
+            for (const width of [1440, 960, 851, 850, 700, 390, 320]) {
+              await page.setViewportSize({ width, height: width === 1440 ? 900 : 720 });
+              if (width < 960) {
+                await openProject(page);
+                await composer.fill(query);
+              }
+              assert.equal(await composer.inputValue(), query, 'changing widths preserves the edited draft');
+              await send.scrollIntoViewIfNeeded();
+              const style = await composer.evaluate(input => ({
+                field: input.classList.contains('conversation-composer-input'),
+                border: getComputedStyle(input).borderTopWidth,
+                fontSize: parseFloat(getComputedStyle(input).fontSize),
+                radius: parseFloat(getComputedStyle(input.closest('.conversation-composer')).borderTopLeftRadius),
+              }));
+              assert.equal(style.field, true);
+              assert.equal(style.border, '0px');
+              assert.ok(style.radius >= 16, 'one rounded shell frames the composer');
+              if (width <= 850) assert.ok(style.fontSize >= 16, 'the mobile input uses a readable font size');
+              const [agentBounds, sendBounds] = await Promise.all([agent.boundingBox(), send.boundingBox()]);
+              assert.ok(sendBounds.x >= agentBounds.x + agentBounds.width - 1);
+              const target = await send.evaluate(button => {
+                const { x, y, width, height } = button.getBoundingClientRect();
+                const hit = document.elementFromPoint(x + width / 2, y + height / 2);
+                return {
+                  shared: button.classList.contains('conversation-composer-send'), inside: button.contains(hit),
+                  hit: hit?.closest('button')?.getAttribute('aria-label') ?? hit?.className ?? hit?.tagName,
+                  rect: { x, y, width, height },
+                };
+              });
+              assert.ok(target.shared && target.inside, `the send control is obscured at ${width}px: ${JSON.stringify(target)}`);
+            }
+            await page.setViewportSize({ width: 1440, height: 900 });
+            await openProject(page);
+            await composer.fill(query);
+          }
           await send.click();
 
           await view.getByText('处理过程', { exact: true }).last().waitFor();

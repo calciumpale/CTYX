@@ -81,7 +81,7 @@
 /* Prose fields share the inset and outline shape, while retaining their own row count.
    Conversation and document editors deliberately own their layout and typography. */
 :root body textarea:not([hidden]):not([class*="sr-only"]):not(:where(
-  .composer textarea, .studio-reply-composer textarea,
+  .composer textarea, .conversation-composer textarea, .studio-reply-composer textarea,
   .contract-text-field textarea, .prospect-credentials > textarea
 )) {
   padding: 9px var(--control-padding-inline) !important;

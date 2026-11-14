@@ -24,6 +24,7 @@ import { ProjectIntake } from './ProjectIntake';
 import { ProjectSalesIntelligence } from './ProjectSalesIntelligence';
 import './answer-content.css';
 import './customer-workspace.css';
+import './conversation-composer.css';
 
 export type CustomerWorkspaceProps = ViewProps & {
   member: MemberSession;
@@ -111,11 +112,18 @@ export function CustomerWorkspace({ state, member, mutate, notify, initialDealId
   const onIntakeDirty = useCallback((value: boolean) => setIntakeDirty(value), []);
 
   useEffect(() => {
-    setProfileOpen(window.matchMedia('(min-width: 1201px)').matches);
+    const wide = window.matchMedia('(min-width: 1201px)');
+    const updateProfile = () => setProfileOpen(wide.matches);
     const media = window.matchMedia('(max-width: 700px)');
     const update = () => setIsMobile(media.matches);
-    update(); media.addEventListener('change', update);
-    return () => media.removeEventListener('change', update);
+    updateProfile();
+    update();
+    wide.addEventListener('change', updateProfile);
+    media.addEventListener('change', update);
+    return () => {
+      wide.removeEventListener('change', updateProfile);
+      media.removeEventListener('change', update);
+    };
   }, []);
   useEffect(() => { if (selectedId) onSelectedDealChange?.(selectedId); }, [selectedId, onSelectedDealChange]);
   useEffect(() => { dirtyRef.current = dirty; onDirtyChange?.(dirty); }, [dirty, onDirtyChange]);
@@ -287,13 +295,26 @@ export function CustomerWorkspace({ state, member, mutate, notify, initialDealId
         </div>
         <div className="cw-composer-dock">
           {showJump && <button className="button secondary cw-jump" onClick={jumpToLatest}><ArrowDown size={14} />最新消息</button>}
-          <form className="cw-composer" onSubmit={submitChat}>
+          <form className="cw-composer conversation-composer" onSubmit={submitChat}>
             <label htmlFor={`${id}-query`} className="sr-only">向 AI 询问当前项目</label>
-            <textarea ref={composer} id={`${id}-query`} value={draft.query} onChange={event => updateDraft({ query: event.target.value })} disabled={locked} maxLength={6000} rows={1} placeholder="询问当前项目…" aria-describedby={`${id}-composer-note`} onKeyDown={event => { if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} />
-            <label className="cw-composer-agent" htmlFor={`${id}-agent`}><span className="sr-only">选择 AI 助手</span><select id={`${id}-agent`} value={draft.agent} onChange={event => updateDraft({ agent: event.target.value as Draft['agent'] })} disabled={locked}><option value="" aria-label="自动选择助手">自动</option>{AGENTS.map(agent => <option key={agent.id} value={agent.id}>{agent.name}</option>)}</select></label>
-            <button className="button primary cw-send" type="submit" disabled={locked || !draft.query.trim()} aria-label="发送当前项目问题" title="发送当前项目问题">{pending ? <Loader2 size={17} className="spin" /> : <ArrowUp size={18} />}</button>
+            <textarea className="conversation-composer-input" ref={composer} id={`${id}-query`} value={draft.query} onChange={event => updateDraft({ query: event.target.value })} disabled={locked} maxLength={6000} rows={2} placeholder="询问当前项目…" aria-describedby={`${id}-composer-note`} onKeyDown={event => {
+              if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && !event.nativeEvent.isComposing && event.keyCode !== 229) {
+                event.preventDefault();
+                event.currentTarget.form?.requestSubmit();
+              }
+            }} />
+            <div className="conversation-composer-toolbar">
+              <p className="conversation-composer-note" id={`${id}-composer-note`}>{state.model.connected ? '结合当前项目资料' : '客户洞察需连接大模型'}</p>
+              <label className="cw-composer-agent" htmlFor={`${id}-agent`}>
+                <span className="sr-only">选择 AI 助手</span>
+                <select id={`${id}-agent`} value={draft.agent} onChange={event => updateDraft({ agent: event.target.value as Draft['agent'] })} disabled={locked}>
+                  <option value="" aria-label="自动选择助手">自动</option>
+                  {AGENTS.map(agent => <option key={agent.id} value={agent.id}>{agent.name}</option>)}
+                </select>
+              </label>
+              <button className="button primary conversation-composer-send" type="submit" disabled={locked || !draft.query.trim()} aria-label="发送当前项目问题" title="发送当前项目问题">{pending ? <Loader2 size={17} className="spin" /> : <ArrowUp size={18} />}</button>
+            </div>
           </form>
-          <p className="cw-composer-note" id={`${id}-composer-note`}>{state.model.connected ? '结合当前项目资料' : '客户洞察需连接大模型'}</p>
         </div>
       </> : <div className="cw-no-selection"><Building2 size={32} /><h2>{unavailable ? '该项目不可访问' : '选择一家企业，开始推进'}</h2><p>{unavailable ? '项目可能已移除，或当前账号没有访问权限。请从企业通讯录选择可访问项目。' : '企业资料、对话和下一步建议都会保留在这里。'}</p><button className="button secondary cw-mobile-show-directory" onClick={() => setMobilePanel('directory')}>查看企业通讯录</button><button className="button secondary" disabled={locked} onClick={() => openForm('create', true)}><Plus size={15} />新建企业或项目</button></div>}
     </section>

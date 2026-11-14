@@ -84,17 +84,33 @@ for (const viewport of [{width:1440,height:900},{width:1280,height:560},{width:3
    const scroll=await transcript.evaluate(el=>{el.scrollTop=0;const max=el.scrollHeight-el.clientHeight;el.scrollTop=max;return {max,top:el.scrollTop,height:el.clientHeight}});
    assert.ok(scroll.height>40,`transcript needs a usable viewport: ${JSON.stringify(scroll)}`);
    assert.ok(scroll.max>0 && scroll.top>0,`transcript must scroll internally: ${JSON.stringify(scroll)}`);
-   await page.locator('.prospect-chat-composer textarea').scrollIntoViewIfNeeded();
-   const composer=await page.locator('.prospect-chat-composer textarea').boundingBox();
+   const reply=page.getByRole('textbox',{name:'人工回复客户',exact:true});
+   await reply.scrollIntoViewIfNeeded();
+   const composer=await reply.boundingBox();
    assert.ok(composer.y>=0 && composer.y+composer.height<=viewport.height-(viewport.width<=700?60:0),JSON.stringify(composer));
    const send=page.getByRole('button',{name:'发送回复',exact:true});
+   assert.equal(await page.locator('.conversation-composer').filter({has:reply}).count(),1,'prospecting chat uses the shared composer shell');
+   const style=await reply.evaluate(input=>({
+    field:input.classList.contains('conversation-composer-input'),
+    border:getComputedStyle(input).borderTopWidth,
+    fontSize:parseFloat(getComputedStyle(input).fontSize),
+    radius:parseFloat(getComputedStyle(input.closest('.conversation-composer')).borderTopLeftRadius),
+   }));
+   assert.equal(style.field,true);
+   assert.equal(style.border,'0px');
+   assert.ok(style.radius>=16,'one rounded shell frames the composer');
+   if(viewport.width<=700) assert.ok(style.fontSize>=16,'the mobile input uses a readable font size');
    await send.scrollIntoViewIfNeeded();
    const sendRect=await send.boundingBox();
    assert.ok(sendRect.y>=0 && sendRect.y+sendRect.height<=viewport.height-(viewport.width<=700?60:0),JSON.stringify(sendRect));
    if(process.env.PROSPECT_PANE_SCREENSHOTS) await page.screenshot({path:path.join(process.env.PROSPECT_PANE_SCREENSHOTS,`prospect-panes-${viewport.width}x${viewport.height}.png`)});
-   await page.locator('.prospect-chat-composer textarea').fill('仅本地草稿');
+   await reply.fill('仅本地草稿');
+   assert.equal(await send.evaluate(button=>{
+    const {x,y,width,height}=button.getBoundingClientRect();
+    return button.classList.contains('conversation-composer-send') && button.contains(document.elementFromPoint(x+width/2,y+height/2));
+   }),true,'the shared send control is unobscured');
    assert.equal(await page.evaluate(()=>window.scrollY),0);
-   await page.locator('.prospect-chat-composer textarea').fill('');
+   await reply.fill('');
    await page.getByRole('button',{name:'返回会话列表',exact:true}).click();
    await roster.waitFor();
    await page.getByRole('button',{name:'任务与采集',exact:true}).click();

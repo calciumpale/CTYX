@@ -6,6 +6,7 @@ import type { ProspectChatConversation, ProspectChatGrade, ProspectChatMessage, 
 import { defaultChatPolicy, normalizeChatPolicy, withinChatHours } from '../lib/prospecting-chat-policy';
 import { useChatScroll } from '../lib/use-chat-scroll';
 import './prospecting-conversations.css';
+import './conversation-composer.css';
 import { ProspectingMemory, prospectMessageId } from './ProspectingMemory';
 import { ProspectingFilters, ProspectingList, ProspectingPanel } from './ProspectingInbox';
 
@@ -87,6 +88,7 @@ export function ProspectingConversations({ campaignId, active, view, blocked, pa
   const [observedAt, setObservedAt] = useState(0);
   const [scope, setScope] = useState<'campaign' | 'global'>(campaignId ? 'campaign' : 'global');
   const [selectedId, setSelectedId] = useState('');
+  const [pointerOpened, setPointerOpened] = useState(false);
   const [toolsConversationId, setToolsConversationId] = useState('');
   const [selectedPoolId, setSelectedPoolId] = useState('');
   const [showSettings, setShowSettings] = useState(false);
@@ -218,10 +220,11 @@ export function ProspectingConversations({ campaignId, active, view, blocked, pa
     selectedRow.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   }
 
-  function selectConversation(id: string) {
+  function selectConversation(id: string, fromPointer: boolean) {
     if (!canChangeDetail()) return;
     rememberRow();
     setShowSettings(false);
+    setPointerOpened(fromPointer);
     if (id !== selectedId) setToolsConversationId('');
     selectedRef.current = id; setSelectedId(id); setReadError(''); setError(''); setNotice('');
   }
@@ -299,10 +302,10 @@ export function ProspectingConversations({ campaignId, active, view, blocked, pa
     if (view === 'pool') onViewChange('chat');
   }
 
-  function showCapturedConversation(conversationId: string) {
+  function showCapturedConversation(conversationId: string, fromPointer: boolean) {
     if (!canChangeDetail()) return;
     setSelectedPoolId(''); setScope('global');
-    selectConversation(conversationId); onViewChange('chat');
+    selectConversation(conversationId, fromPointer); onViewChange('chat');
   }
 
   function sendReply(event?: FormEvent) {
@@ -369,7 +372,7 @@ export function ProspectingConversations({ campaignId, active, view, blocked, pa
               <button type="button" className="prospect-chat-roster-row" aria-label={`查看${username}详情`}
                 aria-expanded={!settingsOpen && item.id === selectedId} aria-describedby={metaId} onClick={event => {
                   event.currentTarget.focus({ preventScroll: true });
-                  selectConversation(item.id);
+                  selectConversation(item.id, event.detail > 0);
                 }}>
                 <span className="prospect-chat-roster-name">{username}</span>
                 <span className="prospect-chat-roster-meta" id={metaId}>
@@ -415,7 +418,7 @@ export function ProspectingConversations({ campaignId, active, view, blocked, pa
               <div className="prospect-chat-policy-footer"><p id={`${prefix}-policy-status`} role={settingsError && policyDirty ? 'alert' : 'status'}>{settingsError && policyDirty ? settingsError : paused ? '任务暂停中，恢复后继续跟进。' : !modelReady ? '请联系管理员配置模型。' : !snapshot.online ? '连接并核验抖音账号后开始跟进。' : '保存后用于当前任务，人工接管的会话保持接管。'}</p><button className="button secondary" disabled={mutationBlocked || !policyReady || !policyDirty || Boolean(settingsError)} aria-describedby={`${prefix}-policy-status`}>{busy === 'chatSettings' ? <Loader2 size={14} className="spin" /> : <Check size={14} />}{busy === 'chatSettings' ? '正在保存' : '保存设置'}</button></div>
             </form>
       </ProspectingPanel>}
-      {view === 'chat' && selectedId && !settingsOpen && <ProspectingPanel key={selectedId} title={conversationTitle} closeLabel="返回会话列表" onClose={returnToList} className="prospect-chat-panel" header={{
+      {view === 'chat' && selectedId && !settingsOpen && <ProspectingPanel key={selectedId} title={conversationTitle} closeLabel="返回会话列表" onClose={returnToList} className="prospect-chat-panel" pointerOpened={pointerOpened} header={{
         avatar: <ConversationAvatar nickname={conversationTitle === '未提供昵称' ? undefined : conversationTitle} />,
         metadata: conversation && <div className="prospect-conversation-meta">
           <span className={`prospect-chat-badge${conversation.mode === 'human' && conversation.status !== 'closed' ? ' is-human' : ''}`}>
@@ -424,10 +427,16 @@ export function ProspectingConversations({ campaignId, active, view, blocked, pa
           {profile && <a href={profile} target="_blank" rel="noopener noreferrer">抖音主页<ExternalLink size={12} aria-hidden="true" /></a>}
         </div>,
         actions: conversation && <div className="prospect-conversation-actions">
-          {syncAvailable && <button type="button" className="button ghost" disabled={mutationBlocked || syncPending}
-            onClick={() => void execute('chatSync', { conversationId: conversation.id })}>
-            {syncPending ? <Loader2 size={15} className="spin" /> : <RefreshCw size={15} />}立即同步
-          </button>}
+          <div className="prospect-conversation-sync">
+            <div className={`prospect-chat-sync-status${syncIssue || syncStalled ? ' needs-attention' : ''}`} role="status">
+              <span>{hasSynced ? <>上次同步 <time dateTime={conversation.lastSyncedAt}>{dateLabel(conversation.lastSyncedAt)}</time></> : '尚未完成可靠同步'}</span>
+              {syncLabel && <span>{syncLabel}</span>}
+            </div>
+            {syncAvailable && <button type="button" className="button ghost" disabled={mutationBlocked || syncPending}
+              onClick={() => void execute('chatSync', { conversationId: conversation.id })}>
+              {syncPending ? <Loader2 size={15} className="spin" /> : <RefreshCw size={15} />}立即同步
+            </button>}
+          </div>
           {!readOnlyConversation && <button type="button" className="button secondary" disabled={mutationBlocked || conversation.status === 'closed'} onClick={() => changeMode(conversation)}>
             {busy === 'chatTakeover' || busy === 'chatResume' ? <Loader2 size={15} className="spin" /> : conversation.mode === 'human' ? <Bot size={15} /> : <UserRound size={15} />}
             {conversation.mode === 'human' ? '交还 AI 助手' : '人工接管'}
@@ -438,10 +447,6 @@ export function ProspectingConversations({ campaignId, active, view, blocked, pa
             }}>
             会话工具<ChevronDown size={14} aria-hidden="true" />
           </button>
-        </div>,
-        status: conversation && <div className={`prospect-chat-sync-status${syncIssue || syncStalled ? ' needs-attention' : ''}`} role="status">
-          <span>{hasSynced ? <>上次同步 <time dateTime={conversation.lastSyncedAt}>{dateLabel(conversation.lastSyncedAt)}</time></> : '尚未完成可靠同步'}</span>
-          {syncLabel && <span>{syncLabel}</span>}
         </div>,
       }}>
           {conversation ? <div className="prospect-conversation-detail">
@@ -490,19 +495,18 @@ export function ProspectingConversations({ campaignId, active, view, blocked, pa
               {showJump && <button className="button secondary prospect-chat-jump" onClick={jumpToLatest}><ArrowDown size={14} />查看最新消息</button>}
             </div>
             {!readOnlyConversation && <form className="prospect-chat-composer" onSubmit={sendReply}>
-              <div className="prospect-chat-compose-box">
-                <label htmlFor={`${prefix}-reply`}>{conversation.mode === 'human' ? '人工回复客户' : '接管后可手动回复'}</label>
-                <textarea ref={replyInput} id={`${prefix}-reply`} value={draft} rows={2} maxLength={1000}
+              <div className="conversation-composer">
+                <label className="prospect-sr-only" htmlFor={`${prefix}-reply`}>{conversation.mode === 'human' ? '人工回复客户' : '接管后可手动回复'}</label>
+                <textarea className="conversation-composer-input" ref={replyInput} id={`${prefix}-reply`} value={draft} rows={2} maxLength={1000} aria-describedby={`${prefix}-reply-note`}
                   disabled={conversation.mode !== 'human' || mutationBlocked || conversation.status === 'closed'}
                   onChange={event => setDrafts(current => ({ ...current, [selectedId]: event.target.value }))}
                   onKeyDown={event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.nativeEvent.isComposing && event.keyCode !== 229) { event.preventDefault(); sendReply(); } }}
-                  placeholder={conversation.mode === 'human' ? '输入你的回复，发送前核对客户与内容' : '点击顶部“人工接管”后，可在此回复客户'} />
-                <div className="prospect-chat-composer-foot">
-                  <p>{conversation.status === 'closed' ? '此会话已结束，消息记录保留。' : conversation.mode !== 'human' ? '接管后，AI 助手会停止回复此会话。' : paused ? '任务已暂停，恢复任务后可发送。' : !sendingAvailable ? '请先连接助手，并在助手中确认发信账号后再发送。' : '⌘ / Ctrl + Enter 发送 · 发送状态不代表对方已读'}
-                    <span>{draft.length} / 1000</span>
-                  </p>
-                  <button className="button primary" disabled={!canReply || !draft.trim()}>
-                    {busy === 'chatReply' ? <Loader2 size={15} className="spin" /> : <Send size={15} />}发送回复
+                  placeholder={conversation.mode === 'human' ? '输入回复…' : '接管后可回复客户'} />
+                <div className="conversation-composer-toolbar">
+                  <p className="conversation-composer-note" id={`${prefix}-reply-note`}>{conversation.status === 'closed' ? '会话已结束' : conversation.mode !== 'human' ? '人工接管后可回复' : paused ? '恢复任务后可发送' : !sendingAvailable ? '连接并确认发信账号后可发送' : '⌘ / Ctrl + Enter 发送'}</p>
+                  {draft.length > 0 && <span className="conversation-composer-count">{draft.length} / 1000</span>}
+                  <button type="submit" className="button primary conversation-composer-send" disabled={!canReply || !draft.trim()} aria-label="发送回复" title="发送回复">
+                    {busy === 'chatReply' ? <Loader2 size={17} className="spin" /> : <Send size={17} aria-hidden="true" />}
                   </button>
                 </div>
               </div>
@@ -519,7 +523,7 @@ export function ProspectingConversations({ campaignId, active, view, blocked, pa
             <div><dt>更新时间</dt><dd><time dateTime={selectedCapture.updatedAt}>{dateLabel(selectedCapture.updatedAt)}</time></dd></div>
             <div><dt>分级原因</dt><dd>{selectedCapture.reason || '暂无分级说明'}</dd></div>
           </dl>
-          <button className="button secondary" disabled={mutationBlocked} onClick={() => showCapturedConversation(selectedCapture.conversationId)}>查看会话</button>
+          <button className="button secondary" disabled={mutationBlocked} onClick={event => showCapturedConversation(selectedCapture.conversationId, event.detail > 0)}>查看会话</button>
         </section>
       </ProspectingPanel>}
     </div>}

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import react from '@vitejs/plugin-react';
 import { createServer } from 'vite';
 import { chromium } from '../tools/douyin-bridge/node_modules/playwright/index.mjs';
+import { generateFactory, parseFactoryBrief } from '../app/lib/content-factory.ts';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const entry = path.join(root, '__content-factory-ui.jsx');
@@ -29,7 +30,7 @@ const generated = {
   generatedAt: now,
 };
 
-test('content factory edits generated channel copy and saves a local publication queue', { timeout: 60000 }, async () => {
+test('content factory edits channel copy, saves the publication queue, and exports a separately generated poster', { timeout: 60000 }, async () => {
   const cacheDir = await mkdtemp(path.join(tmpdir(), 'content-factory-ui-'));
   const initialRead = Promise.withResolvers();
   const initialReadFinished = Promise.withResolvers();
@@ -61,6 +62,7 @@ test('content factory edits generated channel copy and saves a local publication
     page.setDefaultTimeout(7000);
     const pageErrors = [];
     const requests = [];
+    let poster;
     const unexpected = [];
     const records = new Map();
     let hasReadCampaigns = false;
@@ -88,6 +90,12 @@ test('content factory edits generated channel copy and saves a local publication
       requests.push(body);
       if (body.action === 'generate') {
         if (body.channel === 'xiaohongshu') return route.fulfill({ json: { generated: { ...generated, copy: [generated.copy[1]], audience: null } } });
+        if (body.channel === 'poster') {
+          const response = await generateFactory(parseFactoryBrief(body.brief), { channel: 'poster' }, async () =>
+            JSON.stringify({ posters: [{ title: topic, subtitle: '周末来逛市集', callToAction: '了解摊位安排' }] }));
+          [poster] = response.generated.posters;
+          return route.fulfill({ json: response });
+        }
         return route.fulfill({ json: { generated: { ...generated, copy: [generated.copy[0]] }, copyError: '小红书笔记未生成，可切换到对应渠道重试。' } });
       }
       assert.equal(body.action, 'save');
@@ -216,6 +224,44 @@ test('content factory edits generated channel copy and saves a local publication
     await page.getByRole('button', { name: /^发布队列/ }).click();
     await queue.getByText(editedTitle, { exact: true }).waitFor();
     if (artifacts) await page.screenshot({ path: path.join(artifacts, 'content-factory-mobile-queue.png'), animations: 'disabled' });
+    await queue.getByRole('button', { name: '关闭', exact: true }).click();
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.getByRole('group', { name: /投放渠道/ }).getByRole('button', { name: '海报配图', exact: true }).click();
+    await resultTabs.getByRole('tab', { name: '海报配图', exact: true }).click();
+    const posterPanel = page.getByRole('tabpanel', { name: '海报配图', exact: true });
+    const requestsBeforePoster = requests.length;
+    await posterPanel.getByRole('button', { name: '生成当前渠道', exact: true }).click();
+    await posterPanel.getByRole('button', { name: /^预览/ }).first().waitFor();
+    assert.ok(poster);
+    const previewButton = posterPanel.getByRole('button', { name: `预览${poster.name}`, exact: true });
+    assert.deepEqual(requests.slice(requestsBeforePoster), [{
+      action: 'generate', channel: 'poster',
+      brief: { ...document.brief, channels: ['wechat', 'xiaohongshu', 'poster'] },
+    }]);
+    assert.equal(await posterPanel.getByText('1080 × 1440', { exact: true }).count(), 2);
+    await previewButton.click();
+    const preview = page.getByRole('dialog', { name: poster.name, exact: true });
+    const posterArt = preview.locator('.cf-poster-art');
+    await posterArt.getByText(topic, { exact: true }).waitFor();
+    assert.equal(await posterArt.evaluate(art => getComputedStyle(art).aspectRatio), '1080 / 1440');
+    const [download] = await Promise.all([
+      page.waitForEvent('download'),
+      preview.getByRole('button', { name: '下载 PNG', exact: true }).click(),
+    ]);
+    assert.equal(download.suggestedFilename(), `${poster.name}.png`);
+    const png = await readFile(await download.path());
+    assert.equal(png.subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
+    assert.equal(png.toString('ascii', 12, 16), 'IHDR');
+    assert.deepEqual([png.readUInt32BE(16), png.readUInt32BE(20)], [1080, 1440]);
+    await preview.getByRole('button', { name: '关闭', exact: true }).click();
+    await wechatTab.click();
+    assert.equal(await title.inputValue(), editedTitle);
+    assert.equal(await body.inputValue(), editedCopy);
+    await xhsTab.click();
+    assert.equal(await title.inputValue(), generated.copy[1].title);
+    assert.equal(await body.inputValue(), generated.copy[1].body);
+    await page.getByRole('region', { name: 'AI 人群洞察' }).getByText(generated.audience.summary, { exact: true }).waitFor();
     assert.deepEqual(unexpected, []);
     assert.deepEqual(pageErrors, []);
   } finally {

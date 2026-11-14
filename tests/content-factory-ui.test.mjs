@@ -86,7 +86,10 @@ test('content factory edits generated channel copy and saves a local publication
       assert.equal(request.method(), 'POST');
       const body = request.postDataJSON();
       requests.push(body);
-      if (body.action === 'generate') return route.fulfill({ json: { generated } });
+      if (body.action === 'generate') {
+        if (body.channel === 'xiaohongshu') return route.fulfill({ json: { generated: { ...generated, copy: [generated.copy[1]], audience: null } } });
+        return route.fulfill({ json: { generated: { ...generated, copy: [generated.copy[0]] }, copyError: '小红书笔记未生成，可切换到对应渠道重试。' } });
+      }
       assert.equal(body.action, 'save');
       const previous = records.get(body.id);
       assert.equal(body.version, previous?.version ?? 0);
@@ -128,13 +131,23 @@ test('content factory edits generated channel copy and saves a local publication
     const editedCopy = '本周日来现场看摊位，请先确认意向时段。';
     await title.fill(editedTitle);
     await body.fill(editedCopy);
+    await page.getByRole('alert').filter({ hasText: '小红书笔记未生成' }).waitFor();
+    const channelTabs = page.getByRole('tablist', { name: '生成结果渠道' });
+    await channelTabs.getByRole('tab', { name: '小红书笔记' }).click();
+    await page.getByRole('button', { name: '生成当前渠道' }).click();
+    await title.waitFor();
+    assert.equal(await title.inputValue(), generated.copy[1].title);
+    assert.equal(requests[2].channel, 'xiaohongshu');
+    await channelTabs.getByRole('tab', { name: '公众号长文' }).click();
+    assert.equal(await title.inputValue(), editedTitle);
+    assert.equal(await body.inputValue(), editedCopy);
     await page.getByRole('region', { name: 'AI 人群洞察' }).getByText(generated.audience.summary, { exact: true }).waitFor();
     await page.getByRole('button', { name: '加入发布队列', exact: true }).click();
 
     const response = saveResponse();
     await save.click();
     assert.equal((await response).status(), 200);
-    assert.equal(requests[2].document.queue[0].status, 'draft');
+    assert.equal(requests[3].document.queue[0].status, 'draft');
 
     await page.getByRole('button', { name: '送审并排期', exact: true }).click();
     const review = page.getByRole('dialog', { name: '送审并排期', exact: true });
@@ -156,8 +169,8 @@ test('content factory edits generated channel copy and saves a local publication
     }
     await queue.getByRole('button', { name: '关闭', exact: true }).click();
 
-    const document = requests[3].document;
-    assert.deepEqual(requests.map(request => request.action), ['save', 'generate', 'save', 'save']);
+    const document = requests[4].document;
+    assert.deepEqual(requests.map(request => request.action), ['save', 'generate', 'generate', 'save', 'save']);
     const saves = requests.filter(request => request.action === 'save');
     assert.deepEqual(saves.map(request => request.version), [0, 1, 2]);
     assert.ok(saves.every(request => request.id === saves[0].id));
@@ -177,6 +190,7 @@ test('content factory edits generated channel copy and saves a local publication
     const resultTabs = page.getByRole('tablist', { name: '生成结果渠道', exact: true });
     const wechatTab = resultTabs.getByRole('tab', { name: '公众号长文', exact: true });
     const xhsTab = resultTabs.getByRole('tab', { name: '小红书笔记', exact: true });
+    assert.equal(await wechatTab.evaluate(tab => getComputedStyle(tab, '::after').content), 'none');
     await wechatTab.focus();
     for (const [key, tab, expected] of [
       ['ArrowRight', xhsTab, generated.copy[1].title],

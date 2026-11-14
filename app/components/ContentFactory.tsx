@@ -65,6 +65,8 @@ export default function ContentFactory({ notify, onBusyChange, onDirtyChange }: 
   const availableTabs = channels.filter(channel => brief.channels.includes(channel) || generated?.copy.some(item => item.channel === channel) || channel === 'poster' && generated?.posters.length);
   const active = availableTabs.includes(resultTab) ? resultTab : availableTabs[0];
   const copy = generated?.copy.find(item => item.channel === active);
+  const showPosters = active === 'poster' && Boolean(generated?.posters.length);
+  const canGenerateActive = active && brief.topic.trim() && brief.channels.includes(active) && ready !== false;
 
   useEffect(() => { onBusyChange?.(busy); }, [busy, onBusyChange]);
   useEffect(() => { onDirtyChange?.(changed); }, [changed, onDirtyChange]);
@@ -170,9 +172,12 @@ export default function ContentFactory({ notify, onBusyChange, onDirtyChange }: 
         if (!original) return { ...item, generated: incoming };
         if (!channel) return { ...item, generated: {
           ...incoming,
-          copy: result.copyError ? original.copy.filter(entry => brief.channels.includes(entry.channel)) : incoming.copy,
+          copy: result.copyError ? [
+            ...incoming.copy,
+            ...original.copy.filter(entry => brief.channels.includes(entry.channel) && !incoming.copy.some(draft => draft.channel === entry.channel)),
+          ] : incoming.copy,
           posters: result.posterError ? original.posters : incoming.posters,
-          audience: result.copyError ? original.audience : incoming.audience,
+          audience: incoming.audience,
         } };
         return { ...item, generated: {
           ...original, generatedAt: incoming.generatedAt,
@@ -373,7 +378,7 @@ export default function ContentFactory({ notify, onBusyChange, onDirtyChange }: 
           </div>}
           <div className="cf-channel-panel" role={active ? 'tabpanel' : undefined}
             aria-labelledby={active ? `${channelIds}-tab-${active}` : undefined}
-            tabIndex={active && !copy && !(active === 'poster' && generated?.posters.length) ? 0 : undefined}>
+            tabIndex={active && !copy && !showPosters && (!canGenerateActive || busy) ? 0 : undefined}>
           {copy ? <div className="cf-copy">
             <div className="cf-preview"><strong>{FACTORY_CHANNELS[copy.channel]}</strong><span>{Array.from(copy.body.trim()).length} 字</span></div>
             <label className="cf-field">{copy.channel === 'email' ? '邮件主题行' : '标题'}<input value={copy.title} maxLength={160} disabled={busy} onChange={event => updateCopy(copy.channel, 'title', event.target.value)} /></label>
@@ -396,8 +401,10 @@ export default function ContentFactory({ notify, onBusyChange, onDirtyChange }: 
             </article>)}</div>
           </div> : <div className="cf-empty">
             {active === 'poster' ? <Image size={23} /> : active === 'video' ? <Video size={23} /> : <FileText size={23} />}
-            <h4>{active && generated ? `还没有${FACTORY_CHANNELS[active]}` : '从一次活动开始'}</h4>
-            <p>填写活动主题，再生成所选渠道的草稿。</p>
+            <h4>{active && (generated || error) ? `还没有${FACTORY_CHANNELS[active]}` : '从一次活动开始'}</h4>
+            {canGenerateActive && active
+              ? <button type="button" className="button secondary" disabled={busy} onClick={() => void generate(active)}><RefreshCw size={15} />生成当前渠道</button>
+              : <p>填写活动主题，再生成所选渠道的草稿。</p>}
           </div>}
           </div>
         </section>

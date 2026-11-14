@@ -254,7 +254,6 @@
 }
 
 .cf .cf-result-tabs button {
-  position: relative;
   flex: none;
   white-space: nowrap;
 }
@@ -263,14 +262,6 @@
   border-color: var(--cf-rule-strong);
   background: var(--cf-selection);
   color: var(--cf-ink);
-}
-
-.cf .cf-result-tabs button[aria-selected="true"]::after {
-  position: absolute;
-  inset: auto 9px 2px;
-  border-block-end: 2px solid currentColor;
-  border-radius: 1px;
-  content: "";
 }
 
 .cf .cf-result-tabs button:not([aria-selected="true"]):not(:hover) { border-color: transparent; background: transparent; }

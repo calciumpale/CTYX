@@ -65,3 +65,47 @@ test('validates drafts, queue schedule status and rejects external poster assets
   }
   assert.throws(() => parseFactoryDocument({ brief, generated: { ...generated, posters: [{ ...board, layers: [{ ...board.layers[0], kind: 'image', assetUrl: '/api/marketing-materials/result?taskId=private-id&fileIndex=0' }] }] }, queue: [] }), { status: 400 });
 });
+
+test('accepts model preambles and localized channels for the auction brief and retries only the missing draft', async () => {
+  const auction = parseFactoryBrief({
+    ...brief,
+    topic: '2026年第13次城投商铺公开拍租',
+    audience: '潜在的承租户',
+    brand: '海盐城投的商铺',
+    requirements: '总共有12个铺，共5030平方米，业态不限',
+    channels: ['wechat', 'xiaohongshu'],
+  });
+  const requests: string[][] = [];
+  const result = await generateFactory(auction, {}, async messages => {
+    const selected: string[] = JSON.parse(messages[1].content).生成渠道;
+    requests.push(selected);
+    if (requests.length === 1) {
+      return '以下是活动文案：\n```json\n' + JSON.stringify({
+        copy: [
+          { channel: '公众号长文', title: '第13次商铺公开拍租', body: '共12间商铺，合计5,030㎡，业态不限。' },
+          { channel: '小红书笔记', title: '海盐看铺', body: '本次有18间商铺，合计8999平方米。' },
+        ],
+      }) + '\n```';
+    }
+    return JSON.stringify({ copy: [{ channel: '小红书笔记', title: '海盐看铺', body: '海盐城投有12个铺，合计5030平方米，业态不限。' }] });
+  });
+  assert.deepEqual(requests, [['wechat', 'xiaohongshu'], ['xiaohongshu']]);
+  assert.deepEqual(result.generated.copy.map(item => item.channel), ['wechat', 'xiaohongshu']);
+  assert.equal(result.generated.copy[0].alternateTitle, '');
+  assert.match(result.generated.copy[0].body, /5,030㎡/);
+  assert.doesNotMatch(JSON.stringify(result), /8999|18间/);
+  assert.equal(result.copyError, undefined);
+});
+
+test('returns successful channels when one channel gives malformed drafts twice', async () => {
+  const selected = parseFactoryBrief({ ...brief, channels: ['wechat', 'xiaohongshu'] });
+  let calls = 0;
+  const response = await generateFactory(selected, {}, async () => {
+    calls++;
+    return calls === 1 ? JSON.stringify({ copy: [copy], audience: { tags: '错误格式' } }) : '文本，不是 JSON';
+  });
+  assert.equal(calls, 2);
+  assert.deepEqual(response.generated.copy, [copy]);
+  assert.equal(response.generated.audience, null);
+  assert.match(response.copyError ?? '', /小红书笔记未生成/);
+});

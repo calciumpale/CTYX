@@ -35,12 +35,13 @@ const label = (value: string) => value.normalize('NFKC').trim().toLowerCase();
 const modelId = (value: unknown): value is string => typeof value === 'string' && /^[\w.:-]{1,120}$/.test(value);
 
 function providerError(status: number): DomainError {
+  if (status >= 300 && status < 400) return new DomainError(`APIMart 返回重定向（HTTP ${status}），连接未返回模型结果。`, 502);
   if (status === 400) return new DomainError('APIMart 拒绝了模型或请求参数，请检查采样引擎。', 400);
   if (status === 401 || status === 403) return new DomainError('APIMart 密钥无效或没有该模型权限，请在 API 连接设置中检查。', status);
   if (status === 402) return new DomainError('APIMart 余额不足，请补充余额后重试。', 402);
   if (status === 404) return new DomainError('APIMart 暂未提供该模型或接口，请检查采样计划。', 404);
   if (status === 429) return new DomainError('APIMart 达到限流或配额上限，请稍后重试。', 429);
-  return new DomainError('APIMart 暂未返回可用结果，请稍后重试。', 502);
+  return new DomainError(`APIMart 请求失败（HTTP ${status}），请稍后重试。`, 502);
 }
 
 async function requestJson(request: typeof fetch, key: string, path: string, timeout: number, input?: Record<string, unknown>) {
@@ -48,31 +49,37 @@ async function requestJson(request: typeof fetch, key: string, path: string, tim
   let response: Response;
   try {
     response = await request(base + path, {
-      method: input ? 'POST' : 'GET', redirect: 'error',
+      method: input ? 'POST' : 'GET', redirect: 'manual',
       headers: { Authorization: `Bearer ${key}`, ...(input ? { 'Content-Type': 'application/json' } : {}) },
       signal,
       ...(input ? { body: JSON.stringify(input) } : {}),
     });
   } catch {
     if (signal.aborted) throw new DomainError('APIMart 请求超时，请检查该条记录后重试。', 504);
-    throw providerError(502);
+    throw new DomainError('工作台暂未连通 APIMart 的 API 服务。', 502);
   }
   if (!response.ok) {
     void response.body?.cancel().catch(() => {});
-    if (response.status >= 500) throw new DomainError(`APIMart 服务暂不可用（HTTP ${response.status}）。`, 502);
     throw providerError(response.status);
   }
+  let data: Record<string, unknown> | undefined;
   try {
-    const data = record(JSON.parse(new TextDecoder().decode(await boundedMaterialBytes(response, 1024 * 1024))));
-    if (!data || data.error || data.success === false) throw new Error();
-    return data;
+    data = record(JSON.parse(new TextDecoder().decode(await boundedMaterialBytes(response, 1024 * 1024))));
   } catch {
     if (signal.aborted) throw new DomainError('APIMart 请求超时，请检查该条记录后重试。', 504);
-    throw providerError(502);
+    throw new DomainError('APIMart 返回的内容无法解析为 API 数据。', 502);
   }
+  if (!data) throw new DomainError('APIMart 返回的 API 数据格式异常。', 502);
+  if (data.error || data.success === false) {
+    const code = record(data.error)?.code ?? data.code;
+    const status = typeof code === 'string' && /^\d{3}$/.test(code) ? Number(code) : code;
+    if (typeof status === 'number' && status >= 400 && status <= 599) throw providerError(status);
+    throw new DomainError('APIMart 拒绝了本次请求，请在 APIMart 控制台检查模型权限和余额。', 502);
+  }
+  return data;
 }
 
-function structuredCitations(annotations: Record<string, unknown>[]) {
+export function geoProviderCitations(annotations: Record<string, unknown>[]) {
   const citations: CaptureResult['citations'] = [];
   const seen = new Set<string>();
   for (const item of annotations) {
@@ -121,7 +128,7 @@ async function responses(request: typeof fetch, key: string, model: string, inpu
   const annotations = parts.flatMap(part => objects(part.annotations));
   if ((data.status && data.status !== 'completed') || !answer) throw providerError(502);
   const searched = output.some(item => item.type === 'web_search_call' && item.status === 'completed');
-  if (search && !searched && !structuredCitations(annotations).length) {
+  if (search && !searched && !geoProviderCitations(annotations).length) {
     throw new DomainError('APIMart 未返回联网执行记录，无法保存为联网样本。', 502);
   }
   return { answer, annotations, id: data.id };
@@ -186,7 +193,7 @@ export async function readGeoAIConnection(ownerId: string, env: MaterialEnvironm
       if (result.answer.length > 12000) throw new DomainError('APIMart 答复超过单条采样上限，请缩短提问后重试。', 502);
       return {
         rawAnswer: result.answer,
-        citations: structuredCitations(result.annotations),
+        citations: geoProviderCitations(result.annotations),
         model, webSearch,
         requestId: typeof result.id === 'string' && /^[\w.:-]{1,120}$/.test(result.id) ? result.id : undefined,
       };

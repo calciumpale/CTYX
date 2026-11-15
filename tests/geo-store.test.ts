@@ -87,12 +87,32 @@ test('GEO workflow stores actual answers and measures matched before/after sampl
   const proposed={priority:'P1',title:'补齐活动细节',evidenceAnswerIds:[baseline.id],action:'完善官网活动日历',expectedImpact:'补充可核对的活动依据'};
   const generated=await diagnoseGeoGaps(project,async messages=>{
     assert.match(messages[1].content,/可以看看示例市集/);
+    const context=JSON.parse(messages[1].content);
+    assert.deepEqual(context.samples.map((sample:{id:string})=>sample.id),['S1']);
+    assert.ok(!messages[1].content.includes(baseline.id));
     return JSON.stringify({gaps:[proposed]});
   });
   assert.equal(generated.length,1);
   assert.match(generated[0].id,/^[0-9a-f-]{36}$/);
   assert.deepEqual(generated[0],{...proposed,id:generated[0].id,status:'open'});
-  await assert.rejects(diagnoseGeoGaps(project,async()=>JSON.stringify({gaps:[{...proposed,evidenceAnswerIds:['nonexistent']}]})),{status:502});
+  let repairCalls=0;
+  const repaired=await diagnoseGeoGaps(project,async messages=>{
+    repairCalls++;
+    if(repairCalls===1)return JSON.stringify({gaps:[{...proposed,evidenceAnswerIds:['S17']}]});
+    assert.match(messages.at(-1)!.content,/S1/);
+    assert.ok(!messages.at(-1)!.content.includes('S17'));
+    return '```json\n'+JSON.stringify([{priority:'p1',title:proposed.title,evidenceAnswerId:'s1',action:proposed.action}])+'\n```';
+  });
+  assert.equal(repairCalls,2);
+  assert.deepEqual(repaired[0].evidenceAnswerIds,[baseline.id]);
+  assert.equal(repaired[0].expectedImpact,'');
+  let invalidCalls=0;
+  await assert.rejects(diagnoseGeoGaps(project,async()=>{
+    invalidCalls++;
+    return invalidCalls===1?'暂未生成合法 JSON':JSON.stringify({gaps:[{...proposed,evidenceAnswerIds:['S1','nonexistent']}]});
+  }),{status:502});
+  assert.equal(invalidCalls,2);
+  assert.deepEqual(await diagnoseGeoGaps(project,async()=>JSON.stringify({gaps:[]})),[]);
   assert.deepEqual((await store.get(author,project.id)).workflow?.gaps,gaps);
   assert.deepEqual(selectGeoGapGuidance(project,['gap-1']),[{title:gaps[0].title,action:gaps[0].action}]);
   assert.throws(()=>selectGeoGapGuidance(project,['unavailable']),{status:400});

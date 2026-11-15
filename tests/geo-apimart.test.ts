@@ -32,7 +32,7 @@ test('GEO uses the encrypted owner connection and only advertises eligible model
   let paidCalls = 0;
   const connection = await readGeoAIConnection(owner, env, async (input, init) => {
     assert.equal(new Headers(init?.headers).get('Authorization'), `Bearer ${key}`);
-    assert.equal(init?.redirect, 'error');
+    assert.equal(init?.redirect, 'manual');
     if (init?.method === 'GET') {
       assert.equal(String(input), 'https://api.apimart.ai/v1/models');
       return Response.json({ data: [
@@ -119,7 +119,7 @@ test('GEO uses the enabled workspace text connection when APIMart has no text mo
     return Response.json({ choices: [{ finish_reason: 'stop', message: { content: '选型时应结合使用条件。' } }] });
   });
   assert.equal(provider.apimart.status, 'no_text_models');
-  assert.deepEqual(provider.engines, ['DeepSeek']);
+  assert.deepEqual(provider.engines, ['DeepSeek', 'DeepSeek 联网']);
   assert.equal(provider.models.DeepSeek.provider, 'workspace');
   const answer = await provider.capture('DeepSeek', '用原始问题采样。');
   assert.equal(answer.provider, 'workspace');
@@ -128,4 +128,32 @@ test('GEO uses the enabled workspace text connection when APIMart has no text mo
   assert.equal(provider.supports?.('DeepSeek', { provider: 'apimart' }), false);
   await assert.rejects(provider.capture('DeepSeek', '用原始问题采样。', { provider: 'workspace', model: 'deepseek-chat' }), { status: 404 });
   assert.deepEqual(seen, ['https://api.apimart.ai/v1/models', model.url]);
+});
+
+test('direct DeepSeek web samples retain cited evidence, never ordinary generated links', async () => {
+  const env = await environment(false);
+  const model = { name: 'deepseek-flash', url: 'https://api.deepseek.com/chat/completions', key: 'workspace-key' };
+  let searched = true;
+  const fetcher: typeof fetch = async (input, init) => {
+    assert.equal(String(input), model.url);
+    const body = JSON.parse(String(init?.body));
+    assert.equal(body.messages[0].content, '查找今天的公开资料。');
+    assert.deepEqual(body.tools, [{ type: 'deepseek_web_search' }]);
+    return Response.json({ id: 'search-123', choices: [{ finish_reason: 'stop', message: {
+      content: '模型回答 https://example.org/generated',
+      server_tool_calls: [{ calls: [{ type: 'deepseek_web_search', status: searched ? 'completed' : 'failed' }] }],
+      annotations: [{ type: 'url_citation', url_citation: { url: 'https://example.org/public', title: '公开资料' } }],
+    } }] });
+  };
+  const provider = await readGeoCaptureProvider(owner, env, async () => model, fetcher);
+  const selection = { provider: 'workspace', model: 'deepseek-flash', webSearch: true } as const;
+  assert.ok(provider.supports?.('DeepSeek 联网', selection));
+  assert.equal(provider.supports?.('DeepSeek', selection), false);
+  const result = await provider.capture('DeepSeek 联网', '查找今天的公开资料。', selection);
+  assert.equal(result.webSearch, true);
+  assert.deepEqual(result.citations, [{ url: 'https://example.org/public', title: '公开资料' }]);
+  searched = false;
+  await assert.rejects(provider.capture('DeepSeek 联网', '查找今天的公开资料。', selection), { status: 400 });
+  const relay = await readGeoCaptureProvider(owner, env, async () => ({ ...model, url: 'https://relay.example.org/v1/chat/completions' }), fetcher);
+  assert.deepEqual(relay.engines, ['DeepSeek']);
 });

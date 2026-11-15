@@ -1,3 +1,4 @@
+import { buildGeoStructuredData } from '../app/lib/geo-structured-data.ts';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {checkGeoQuality, generateGeoArticle, geoPublicUrl, parseGeoBrief, parseGeoDocument} from '../app/lib/geo-content.ts';
@@ -65,4 +66,21 @@ test('generation sends explicitly numbered evidence and rejects model citations 
   assert.deepEqual(output, article);
   await assert.rejects(generateGeoArticle(brief, async () => JSON.stringify({...article, markdown: '正文中的引用不正确。[5]'})), {status: 502});
   await assert.rejects(generateGeoArticle({...brief, sources: []}, async () => assert.fail('未提供证据时不应调用模型')), {status: 400});
+});
+
+
+test('structured GEO export reflects only the article, public citations and complete visible FAQ text', () => {
+  const source = { title: '正式说明', url: 'https://example.com/guide', excerpt: '已提供内容' };
+  const document = {
+    brief: { brand: '品牌', topic: '主题', audience: '', question: '', sources: [source, source] },
+    article: { title: '真实标题', summary: '真实摘要', markdown: '正文内容 [1]', faq: [{ question: '一个问题', answer: '回答' }, { question: '缺失回答', answer: '' }] },
+  };
+  assert.deepEqual(buildGeoStructuredData(document, { url: 'https://example.com/article', channel: '官网', recordedAt: '2026-11-15T03:00:00.000Z' }), {
+    '@context': 'https://schema.org',
+    '@graph': [
+      { '@type': 'Article', url: 'https://example.com/article', headline: '真实标题', articleBody: '正文内容 [1]', description: '真实摘要', citation: [source.url] },
+      { '@type': 'FAQPage', url: 'https://example.com/article', mainEntity: [{ '@type': 'Question', name: '一个问题', acceptedAnswer: { '@type': 'Answer', text: '回答' } }] },
+    ],
+  });
+  assert.equal(buildGeoStructuredData({ ...document, article: { ...document.article, markdown: ' ' } }), null);
 });

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp, rm} from 'node:fs/promises';
+import {mkdtemp, readFile, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {fileURLToPath, pathToFileURL} from 'node:url';
@@ -57,6 +57,11 @@ test('full workbench opens projects, submits a GEO draft and guards material dra
   let reads=0;
   let geoProject;
   const geoActions=[];
+  const geoQuestion='如何核对园区办公条件？';
+  const geoSample='可先核对园区交付标准，再比较同类场地。';
+  const gapTitle='还未引用品牌交付指南';
+  const gapAction='补充可核对的园区交付指南。';
+  const geoSteps=['提问空间建模','答案级抓取','信源缺口诊断','结构化补齐与复测'];
   const article={title:'如何核对园区办公条件',summary:'提前核对园区交付条件。',markdown:'## 交付条件\n核对租期与交付标准 [1]。',faq:[{question:'要核对什么？',answer:'租期与交付标准 [1]。'}]};
   await page.route('**/api/**',async route=>{
    const request=route.request(),url=new URL(request.url()),pathname=url.pathname;
@@ -141,11 +146,29 @@ test('full workbench opens projects, submits a GEO draft and guards material dra
     }
     if(body.action==='check')return route.fulfill({json:{quality:checkGeoQuality(body.document)}});
     if(body.action==='save'){
-      geoProject={id:body.id,version:1,updatedAt:'2026-11-12T00:00:00Z',status:'draft',document:body.document,quality:checkGeoQuality(body.document),
-        reviewNote:'',observations:[],canEdit:true,canReview:false,canRecord:false};
+      assert.equal(body.version,geoProject?.version??0);
+      const workflow=body.workflow?{...body.workflow,answers:geoProject?.workflow?.answers??[],gaps:geoProject?.workflow?.gaps??[]}:geoProject?.workflow;
+      geoProject={id:body.id,version:(geoProject?.version??0)+1,updatedAt:'2026-11-12T00:00:00Z',status:'draft',document:body.document,quality:checkGeoQuality(body.document),
+        reviewNote:'',observations:[],workflow,canEditWorkflow:true,canEdit:true,canReview:false,canRecord:false};
+    }else if(body.action==='capture'){
+      assert.equal(body.version,geoProject.version);
+      const question=geoProject.workflow.questions.find(item=>item.id===body.answer.questionId);
+      assert.equal(question.prompt,geoQuestion);
+      assert.ok(geoProject.workflow.engines.includes(body.answer.engine));
+      assert.equal(body.answer.phase,'baseline');
+      assert.equal(body.answer.sample,1);
+      assert.equal(body.answer.rawAnswer,geoSample);
+      assert.equal(body.answer.brandMentions,0);
+      assert.equal(body.answer.brandRank,null);
+      const answer={...body.answer,prompt:question.prompt,dimension:question.dimension,intent:question.intent,brand:geoProject.document.brief.brand,method:'manual',recordedAt:geoProject.updatedAt};
+      geoProject={...geoProject,version:geoProject.version+1,workflow:{...geoProject.workflow,answers:[answer]}};
+    }else if(body.action==='gaps'){
+      assert.equal(body.version,geoProject.version);
+      assert.deepEqual(body.gaps.map(({title,action,evidenceAnswerIds})=>({title,action,evidenceAnswerIds})),[{title:gapTitle,action:gapAction,evidenceAnswerIds:[geoProject.workflow.answers[0].id]}]);
+      geoProject={...geoProject,version:geoProject.version+1,workflow:{...geoProject.workflow,gaps:body.gaps}};
     }else{
       assert.equal(body.action,'submit');assert.equal(body.version,geoProject.version);assert.equal(geoProject.quality.ready,true);
-      geoProject={...geoProject,version:2,status:'in_review',canEdit:false};
+      geoProject={...geoProject,version:geoProject.version+1,status:'in_review',canEdit:false};
     }
     return route.fulfill({json:{project:geoProject}});
    }
@@ -306,9 +329,49 @@ test('full workbench opens projects, submits a GEO draft and guards material dra
   await page.locator('.geo-workspace').waitFor();
   assert.equal(new URL(page.url()).searchParams.get('view'),'geo');
   await page.getByRole('button',{name:'新建内容项目',exact:true}).click();
+  const geoFlow=page.getByRole('navigation',{name:'GEO 工作流程',exact:true});
+  await geoFlow.getByRole('button',{name:geoSteps[0],exact:true}).waitFor();
+  assert.deepEqual(await geoFlow.getByRole('button').evaluateAll(items=>items.map(item=>item.getAttribute('aria-label'))),geoSteps);
+  const openGeoStep=async index=>{
+   const step=geoFlow.getByRole('button',{name:geoSteps[index],exact:true});
+   await step.click();
+   await page.getByRole('heading',{name:geoSteps[index],exact:true}).waitFor();
+   assert.equal(await step.getAttribute('aria-current'),'step');
+  };
   await page.getByLabel('品牌',{exact:true}).fill('某示例园区');
   await page.getByLabel('选题',{exact:true}).fill('园区办公');
-  await page.getByLabel('用户主要问题',{exact:true}).fill('如何核对园区办公条件？');
+  await page.getByLabel('用户主要问题',{exact:true}).fill(geoQuestion);
+  await page.getByRole('button',{name:'使用主要问题',exact:true}).click();
+  await page.getByRole('checkbox',{name:'DeepSeek',exact:true}).check();
+  await page.getByRole('button',{name:'保存建模',exact:true}).click();
+  await openGeoStep(1);
+  const baselineForm=page.getByRole('form',{name:'人工录入基线答案',exact:true});
+  assert.equal(await baselineForm.getByRole('combobox',{name:'采样问题',exact:true}).locator('option:checked').textContent({timeout:5000}),geoQuestion);
+  assert.equal(await baselineForm.getByRole('combobox',{name:'采样引擎',exact:true}).inputValue(),'DeepSeek');
+  await page.getByLabel('答案原文',{exact:true}).fill(geoSample);
+  await page.getByRole('button',{name:'保存答案记录',exact:true}).click();
+  await page.getByText('未提及',{exact:true}).waitFor();
+  await openGeoStep(2);
+  const visibility=page.getByRole('region',{name:'品牌可见性诊断',exact:true});
+  await visibility.getByText('基线 · 1 份答案',{exact:true}).waitFor();
+  assert.match(await visibility.getByText('品牌提及率',{exact:true}).locator('..').innerText(),/0\s*%/);
+  await page.getByRole('button',{name:'添加缺口',exact:true}).click();
+  await page.getByLabel('缺口标题',{exact:true}).fill(gapTitle);
+  await page.getByLabel('补齐建议',{exact:true}).fill(gapAction);
+  await page.getByLabel('预期影响',{exact:true}).fill('让答案能引用具名的交付要求。');
+  await page.getByRole('combobox',{name:'关联答案证据',exact:true}).selectOption(geoProject.workflow.answers[0].id);
+  await page.getByRole('button',{name:'保存缺口清单',exact:true}).click();
+  await openGeoStep(3);
+  const retestPanel=page.getByRole('region',{name:'复测对照',exact:true});
+  await retestPanel.getByText(/登记实际发布回执后/).waitFor();
+  assert.equal(await retestPanel.getByLabel('答案原文',{exact:true}).count(),0);
+  const reportReady=page.waitForEvent('download');
+  await retestPanel.getByRole('button',{name:'导出诊断报告',exact:true}).click();
+  const report=await reportReady;
+  assert.equal(report.suggestedFilename(),'某示例园区 信源诊断报告.md');
+  const markdown=await readFile(await report.path(),'utf8');
+  assert.ok(markdown.includes(gapTitle));
+  assert.ok(markdown.includes('答案证据：DeepSeek · 第 1 次'));
   await page.getByText('从知识库选取资料',{exact:true}).click();
   await page.getByLabel('知识库关键词').fill('园区办公');
   await page.getByRole('button',{name:'检索',exact:true}).click();
@@ -320,7 +383,8 @@ test('full workbench opens projects, submits a GEO draft and guards material dra
   await page.getByRole('button',{name:'保存草稿',exact:true}).click();
   await page.getByRole('button',{name:'提交审核',exact:true}).click();
   await page.locator('.geo-title').getByText('待审核',{exact:true}).waitFor();
-  assert.deepEqual(geoActions,['generate','check','save','submit']);
+  assert.deepEqual(geoActions,['save','capture','gaps','generate','check','save','submit']);
+  await openGeoStep(0);
   assert.equal(await page.getByLabel('品牌',{exact:true}).isDisabled(),true);
   await businessNav.getByRole('link',{name:'AI营销素材',exact:true}).click();
   await page.getByLabel('活动 / 主题',{exact:true}).fill('保留的活动主题');

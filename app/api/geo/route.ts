@@ -4,6 +4,7 @@ import { readEffectiveModel } from '../../lib/connection-store.ts';
 import { DomainError } from '../../lib/domain.ts';
 import { checkGeoQuality, generateGeoArticle, parseGeoBrief, parseGeoDocument } from '../../lib/geo-content.ts';
 import { createGeoStore, type GeoActor } from '../../lib/geo-store.ts';
+import { diagnoseGeoGaps } from '../../lib/geo-workflow.ts';
 import { boundedMaterialBytes } from '../../lib/marketing-material.ts';
 import { requireMemberRole } from '../../lib/member-policy.ts';
 import { requestModelText } from '../../lib/model-client.ts';
@@ -44,11 +45,15 @@ function projectVersion(value: unknown, minimum = 1): number {
 }
 
 const commands = {
-  save: ['id', 'version', 'document'],
+  save: ['id', 'version', 'document', 'workflow'],
   submit: ['id', 'version'],
   review: ['id', 'version', 'decision', 'note'],
   publish: ['id', 'version', 'url', 'channel'],
   observe: ['id', 'version', 'engine', 'query', 'result', 'evidence'],
+  workflow: ['id', 'version', 'workflow'],
+  capture: ['id', 'version', 'answer'],
+  gaps: ['id', 'version', 'gaps'],
+  diagnose: ['id', 'version'],
   generate: ['brief'],
   check: ['document'],
 } as const;
@@ -110,11 +115,22 @@ export async function POST(request: Request) {
     const version = projectVersion(body.version, action === 'save' ? 0 : 1);
     const db = store();
     switch (action) {
-      case 'save': return json({ project: await db.save(actor, id, version, parseGeoDocument(body.document)) });
+      case 'save': return json({ project: await db.save(actor, id, version, parseGeoDocument(body.document), body.workflow) });
       case 'submit': return json({ project: await db.submit(actor, id, version) });
       case 'review': return json({ project: await db.review(actor, id, version, body.decision, body.note) });
       case 'publish': return json({ project: await db.publish(actor, id, version, body.url, body.channel) });
       case 'observe': return json({ project: await db.observe(actor, id, version, body.engine, body.query, body.result, body.evidence) });
+      case 'workflow': return json({ project: await db.workflow(actor, id, version, body.workflow) });
+      case 'capture': return json({ project: await db.capture(actor, id, version, body.answer) });
+      case 'gaps': return json({ project: await db.gaps(actor, id, version, body.gaps) });
+      case 'diagnose': {
+        const project = await db.ownedProject(actor, id, version);
+        const model = await readEffectiveModel(actor.ownerId, new URL(request.url).origin);
+        if (!model) throw new DomainError('请先在服务连接中配置并启用大模型', 503);
+        const gaps = await diagnoseGeoGaps(project, messages => requestModelText(model, messages));
+        await db.ownedProject(actor, id, version);
+        return json({ gaps });
+      }
     }
   } catch (error) { return failure(error); }
 }

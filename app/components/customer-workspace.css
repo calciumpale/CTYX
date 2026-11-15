@@ -117,11 +117,13 @@
   min-height: 0;
   padding: clamp(26px, 5vh, 52px) var(--cw-chat-gutter) 22px;
   overscroll-behavior-y: contain;
-  scrollbar-width: thin;
-  scrollbar-color: var(--cds-border-strong) transparent;
+  scrollbar-color: var(--app-scroll-thumb) transparent;
+  background-color: var(--cds-surface-2);
+  background-image: var(--app-chat-texture);
+  background-size: 20px 20px, 100% 100%;
 }
 .cw-chat-welcome { min-height: 100%; display: flex; align-items: center; justify-content: center; flex-direction: column; text-align: center; gap: 12px; max-width: 540px; margin: 0 auto; padding: 28px 0 44px; }
-.cw-welcome-mark { width: 44px; height: 44px; display: grid; place-items: center; border-radius: 15px; color: var(--cds-text-secondary); background: var(--cds-surface-0); }
+.cw-welcome-mark { width: 44px; height: 44px; display: grid; place-items: center; border-radius: 15px; color: var(--app-accent-contrast); background: var(--app-accent); }
 .cw-chat-welcome h3 { font-size: clamp(20px, 2vw, 26px); font-weight: 600; letter-spacing: -.018em; line-height: 1.45; text-wrap: balance; overflow-wrap: anywhere; }
 .cw-chat-welcome > p { color: var(--cds-text-secondary); font-size: 14px; line-height: 1.8; max-width: 30em; text-wrap: pretty; }
 .cw-chat-welcome > div:last-child { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 8px; }
@@ -135,7 +137,8 @@
   margin-inline-start: auto;
   padding: 12px 17px;
   border-radius: 19px;
-  background: var(--cds-surface-0);
+  background: var(--cds-clay-light);
+  border: 1px solid var(--cds-border);
   font-size: 15px;
   line-height: 1.65;
   white-space: pre-wrap;
@@ -144,7 +147,7 @@
 .cw-assistant-label { display: flex; gap: 7px; align-items: center; flex-wrap: wrap; margin: 26px 0 10px; color: var(--cds-text-secondary); font-size: 12px; }
 .cw-assistant-label strong { font-weight: 550; }
 .cw-assistant-label > span { border-radius: var(--cds-radius-pill); padding: 2px 6px; background: var(--cds-alpha-1); font-size: 11px; }
-.cw-chat-turn .answer-content { font-size: 16px; line-height: 1.8; }
+.cw-chat-turn .answer-content { font-size: 16px; line-height: 1.8; background: var(--cds-surface-2); border: 1px solid var(--cds-border); border-radius: var(--cds-panel-radius); padding: clamp(12px, 2vw, 18px); }
 .cw-chat-turn .answer-prose { max-width: 100%; }
 .cw-chat-turn .answer-prose blockquote { border-radius: var(--radius-2xl); }
 

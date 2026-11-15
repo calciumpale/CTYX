@@ -19,6 +19,51 @@ export interface GeoObservation {
   evidence: string;
   recordedAt: string;
 }
+export const GEO_QUESTION_DIMENSIONS = { category: '品类', scenario: '场景', budget: '预算', competitor: '竞品', after_sales: '售后' } as const;
+export const GEO_QUESTION_INTENTS = { awareness: '认知', comparison: '比较', decision: '决策', after_sales: '售后' } as const;
+export type GeoQuestionDimension = keyof typeof GEO_QUESTION_DIMENSIONS;
+export type GeoQuestionIntent = keyof typeof GEO_QUESTION_INTENTS;
+export type GeoPhase = 'baseline' | 'retest';
+
+export interface GeoQuestion { id: string; dimension: GeoQuestionDimension; intent: GeoQuestionIntent; prompt: string }
+export interface GeoCitation { title: string; url: string; brandSource: boolean }
+export interface GeoCompetitorMention { name: string; count: number }
+export interface GeoAnswerInput {
+  id: string;
+  questionId: string;
+  engine: string;
+  phase: GeoPhase;
+  sample: number;
+  rawAnswer: string;
+  citations: GeoCitation[];
+  brandMentions: number;
+  brandRank: number | null;
+  competitorMentions: GeoCompetitorMention[];
+}
+export interface GeoAnswer extends GeoAnswerInput {
+  prompt: string;
+  intent: GeoQuestionIntent;
+  dimension: GeoQuestionDimension;
+  brand: string;
+  method: 'manual';
+  recordedAt: string;
+}
+export interface GeoGap {
+  id: string;
+  priority: 'P0' | 'P1' | 'P2';
+  title: string;
+  evidenceAnswerIds: string[];
+  action: string;
+  expectedImpact: string;
+  status: 'open' | 'done';
+}
+export interface GeoWorkflowPlan { questions: GeoQuestion[]; engines: string[]; repeats: number; competitors: string[] }
+export interface GeoWorkflow extends GeoWorkflowPlan { answers: GeoAnswer[]; gaps: GeoGap[] }
+
+export function emptyGeoWorkflow(): GeoWorkflow {
+  return { questions: [], engines: [], repeats: 1, competitors: [], answers: [], gaps: [] };
+}
+
 export interface GeoSummary { id: string; topic: string; title: string; status: GeoStatus; updatedAt: string; mine: boolean }
 export interface GeoProject {
   id: string;
@@ -30,6 +75,8 @@ export interface GeoProject {
   reviewNote: string;
   publication?: GeoPublication;
   observations: GeoObservation[];
+  workflow?: GeoWorkflow;
+  canEditWorkflow?: boolean;
   canEdit: boolean;
   canReview: boolean;
   canRecord: boolean;

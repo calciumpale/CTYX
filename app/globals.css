@@ -33,7 +33,7 @@
   --color-sidebar-border: var(--sidebar-border); --color-sidebar-ring: var(--sidebar-ring);
 }
 * { box-sizing: border-box; }
-html { min-width: 320px; background: var(--app-backdrop); color: var(--cds-text-primary); color-scheme: light; }
+html { min-width: 320px; background: var(--app-backdrop); color: var(--cds-text-primary); color-scheme: light; accent-color: var(--app-accent); }
 html[data-mode="dark"] { color-scheme: dark; }
 body { margin: 0; background: var(--app-backdrop); color: var(--cds-text-primary); font-family: var(--font-sans); font-size: 14px; -webkit-font-smoothing: antialiased; }
 button, input, select, textarea { font: inherit; }
@@ -53,8 +53,14 @@ svg { flex-shrink: 0; }
 input, textarea { caret-color: var(--brand); }
 a { text-underline-offset: 3px; }
 ::selection { background: var(--cds-clay-light); color: var(--cds-text-primary); }
-::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-thumb { border-radius: 10px; background: var(--cds-alpha-3); }
+html, .sidebar, .cw-chat-stream { scrollbar-color: var(--app-scroll-thumb) transparent; }
+@supports not (scrollbar-color: auto) {
+  ::-webkit-scrollbar { width: 9px; height: 9px; }
+  ::-webkit-scrollbar-thumb { border-radius: 10px; background: var(--app-scroll-thumb); }
+}
+@media (forced-colors: active) {
+  html, .sidebar, .cw-chat-stream { scrollbar-color: auto; }
+}
 .number, time, .count-badge, .manager-summary strong, .deals-overview strong { font-variant-numeric: tabular-nums; }
 .muted { color: var(--cds-text-muted); }
 .full { width: 100%; }
@@ -96,16 +102,16 @@ a { text-underline-offset: 3px; }
 .business-page { max-width: 1280px; padding: 28px 32px 32px; margin: auto; }
 .app-shell { min-height: 100dvh; display: flex; padding: var(--app-frame-inset); background: var(--app-backdrop); }
 .sidebar {
-  /* Scope the existing component tokens to the persistent charcoal navigation. */
+  /* Navigation uses the same theme with its own surface and selection colors. */
   --brand: var(--nav-text); --cds-clay: var(--nav-muted); --cds-clay-hover: var(--nav-text);
   --cds-text-primary: var(--nav-text); --cds-text-secondary: var(--nav-muted); --cds-text-muted: var(--nav-muted);
   --cds-border: var(--nav-border); --cds-border-strong: var(--nav-border);
   --cds-surface-0: var(--nav-bg); --cds-surface-1: var(--nav-raised); --cds-surface-2: var(--nav-bg); --cds-surface-3: var(--nav-raised);
-  --cds-fill-ghost-hover: var(--nav-hover); --cds-fill-ghost-selected: var(--nav-selected); --cds-alpha-2: rgb(255 255 255 / 8%); --cds-alpha-3: rgb(255 255 255 / 22%);
+  --cds-fill-ghost-hover: var(--nav-hover); --cds-fill-ghost-selected: var(--nav-selected); --cds-alpha-2: color-mix(in srgb, var(--nav-text) 8%, transparent); --cds-alpha-3: color-mix(in srgb, var(--nav-text) 22%, transparent);
   width: var(--app-sidebar-width); min-width: var(--app-sidebar-width); position: fixed;
   inset: var(--app-frame-inset) auto var(--app-frame-inset) var(--app-frame-inset);
   display: flex; flex-direction: column; overflow-y: auto; scrollbar-width: thin;
-  background: var(--nav-bg); color: var(--nav-text); border: 0;
+  background: var(--nav-bg); color: var(--nav-text); border-inline-end: 1px solid var(--nav-border);
   border-radius: var(--app-frame-radius) 0 0 var(--app-frame-radius); padding: 16px 9px 14px; z-index: 30;
 }
 .brand-mark { width: 49px; height: 49px; color: var(--cds-clay); }
@@ -114,8 +120,8 @@ a { text-underline-offset: 3px; }
 .sidebar nav { display: flex; flex-direction: column; gap: 3px; }
 .nav-item { text-decoration: none; min-height: 36px; display: flex; align-items: center; gap: 12px; background: transparent; border: 0; border-radius: 12px; color: var(--cds-text-secondary); text-align: left; padding: 10px 12px; font-size: .875rem; }
 .nav-item:hover { background: var(--cds-fill-ghost-hover); }
-.nav-item.active { background: var(--cds-fill-ghost-selected); color: var(--cds-text-primary); font-weight: 550; box-shadow: inset 0 0 0 1px rgb(255 255 255 / 8%); }
-.nav-item.active > svg { color: var(--brand); }
+.nav-item.active { background: var(--cds-fill-ghost-selected); color: var(--app-accent-ink); font-weight: 600; box-shadow: inset 0 0 0 1px var(--nav-border); }
+.nav-item.active > svg { color: var(--app-accent-ink); }
 .nav-item small { margin-left: auto; font-weight: 450; font-size: 10px; background: var(--cds-surface-1); padding: 0 5px; border-radius: 4px; }
 .sidebar-recent { margin-top: 38px; }
 .status-dot { height: 5px; width: 5px; background: var(--cds-clay); display: inline-block; border-radius: 50%; flex-shrink: 0; }

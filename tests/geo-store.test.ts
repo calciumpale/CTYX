@@ -5,6 +5,8 @@ import test from 'node:test';
 import { createGeoStore } from '../app/lib/geo-store.ts';
 import { emptyGeoDocument } from '../app/lib/geo-types.ts';
 import type { GeoDocument } from '../app/lib/geo-types.ts';
+import { compareGeoMetrics, computeGeoMetrics } from '../app/lib/geo-metrics.ts';
+import { diagnoseGeoGaps } from '../app/lib/geo-workflow.ts';
 import { assertMemberApi } from '../app/lib/member-policy.ts';
 
 const author = { ownerId: 'tenant', memberId: 'author', role: 'sales' as const };
@@ -49,6 +51,49 @@ test('GEO API is available only to authenticated business roles', () => {
   assert.doesNotThrow(() => assertMemberApi('manager', '/api/geo', 'GET'));
   assert.throws(() => assertMemberApi('admin', '/api/geo', 'GET'), { status: 403 });
   assert.throws(() => assertMemberApi('manager', '/api/geo', 'DELETE'), { status: 403 });
+});
+
+test('GEO workflow stores actual answers and measures matched before/after samples without changing article review', async t => {
+  const {sqlite,store}=fixture();t.after(()=>sqlite.close());
+  const plan={questions:[{id:'q1',dimension:'scenario',intent:'decision',prompt:'周末有什么活动？'}],engines:['豆包'],repeats:2,competitors:['示例市集']};
+  const baseline={id:'answer-first',questionId:'q1',engine:'豆包',phase:'baseline',sample:1,rawAnswer:'可以看看示例市集。',citations:[],
+    brandMentions:0,brandRank:null,competitorMentions:[{name:'示例市集',count:1}]};
+  let project=await store.save(author,'track-one',0,document,plan);
+  assert.deepEqual(project.workflow?.questions,plan.questions);
+  assert.equal(computeGeoMetrics(project.workflow!,'baseline').mentionRate,null);
+  project=await store.capture(author,project.id,project.version,baseline);
+  assert.equal(project.status,'draft');assert.equal(project.workflow?.answers[0].method,'manual');
+  assert.equal(project.workflow?.answers[0].prompt,plan.questions[0].prompt);
+  await assert.rejects(store.capture(author,project.id,project.version,{...baseline,id:'duplicate'}),{status:409});
+  await assert.rejects(store.capture(author,project.id,project.version,{...baseline,id:'other',phase:'retest'}),{status:409});
+  const gaps=[{id:'gap-1',priority:'P0',title:'缺少活动明细',evidenceAnswerIds:[baseline.id],action:'公开活动时间',expectedImpact:'帮助回答列出活动',status:'open'}];
+  await assert.rejects(store.gaps(author,project.id,project.version,[{...gaps[0],evidenceAnswerIds:['made-up']}]),{status:400});
+  project=await store.gaps(author,project.id,project.version,gaps);
+  await assert.rejects(store.gaps(author,project.id,project.version-2,gaps),{status:409});
+  project=await store.save(author,project.id,project.version,document);
+  assert.equal(project.workflow?.answers.length,1);assert.deepEqual(project.workflow?.gaps,gaps);
+  project=await store.submit(author,project.id,project.version);
+  await assert.rejects(store.capture(manager,project.id,project.version,{...baseline,id:'other',sample:2}),{status:403});
+  project=await store.review(manager,project.id,project.version,'approve','');
+  project=await store.publish(author,project.id,project.version,'https://brand.example.org/events','官网');
+  const retest={...baseline,id:'after',phase:'retest',rawAnswer:'推荐晨光商圈。',brandMentions:1,brandRank:1,
+    citations:[{title:'活动介绍',url:'https://brand.example.org/events',brandSource:true}],competitorMentions:[]};
+  await assert.rejects(store.capture(author,project.id,project.version,{...retest,sample:2}),{status:409});
+  project=await store.capture(author,project.id,project.version,retest);
+  const comparison=compareGeoMetrics(project.workflow!);
+  assert.equal(comparison.samples,1);
+  assert.deepEqual([comparison.mentionDelta,comparison.firstRecommendationDelta,comparison.citationDelta],[100,100,100]);
+
+  const proposed={priority:'P1',title:'补齐活动细节',evidenceAnswerIds:[baseline.id],action:'完善官网活动日历',expectedImpact:'补充可核对的活动依据'};
+  const generated=await diagnoseGeoGaps(project,async messages=>{
+    assert.match(messages[1].content,/可以看看示例市集/);
+    return JSON.stringify({gaps:[proposed]});
+  });
+  assert.equal(generated.length,1);
+  assert.match(generated[0].id,/^[0-9a-f-]{36}$/);
+  assert.deepEqual(generated[0],{...proposed,id:generated[0].id,status:'open'});
+  await assert.rejects(diagnoseGeoGaps(project,async()=>JSON.stringify({gaps:[{...proposed,evidenceAnswerIds:['nonexistent']}]})),{status:502});
+  assert.deepEqual((await store.get(author,project.id)).workflow?.gaps,gaps);
 });
 
 test('GEO drafts are private until submitted and returned changes become private on save', async t => {

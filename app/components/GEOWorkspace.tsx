@@ -1,15 +1,27 @@
 'use client';
 
-import { Check, ChevronRight, CircleAlert, Download, FileText, Plus, RotateCcw, Save, Sparkles, Trash2 } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Check, ChevronRight, CircleAlert, Download, FileText, Plus, RotateCcw, Save, Sparkles, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { StudioRequestError, studioRequest } from '../lib/creative-studio-client';
-import { emptyGeoDocument, GEO_STATUS_LABELS, type GeoArticle, type GeoBrief, type GeoDocument, type GeoObservation, type GeoProject, type GeoQuality, type GeoStatus, type GeoSummary } from '../lib/geo-types';
+import { buildGeoStructuredData } from '../lib/geo-structured-data';
+import { emptyGeoDocument, emptyGeoWorkflow, GEO_STATUS_LABELS, type GeoArticle, type GeoBrief, type GeoDocument, type GeoGap, type GeoObservation, type GeoProject, type GeoQuality, type GeoStatus, type GeoSummary, type GeoWorkflow } from '../lib/geo-types';
 import type { MemberSession } from '../lib/member-types';
 import { preferredScrollBehavior } from '../lib/scroll-behavior';
 import GeoKnowledgePicker from './GeoKnowledgePicker';
+import {
+  downloadGeoFile, downloadGeoReport, emptyCapture, GeoAnswerCapture, GeoAnswerLog, GeoGapEditor, GeoPlanEditor, GeoRetestComparison,
+  GeoVisibility, type CaptureDraft, type CaptureInput, type GeoPlan,
+} from './GeoWorkflowPanels';
 import './geo-workspace.css';
 
 const PATH = '/api/geo';
+const STEPS = [
+  { title: '提问空间建模', detail: '品牌、问题与采样范围' },
+  { title: '答案级抓取', detail: '答案、引用和提及位次' },
+  { title: '信源缺口诊断', detail: '可见性与补齐优先级' },
+  { title: '结构化补齐与复测', detail: '内容交付与前后验证' },
+] as const;
+type GeoStep = 0 | 1 | 2 | 3;
 const observations = { mentioned: '有提及', not_mentioned: '未提及', unclear: '无法判断' } as const;
 const timestamp = new Intl.DateTimeFormat('zh-CN', {
   dateStyle: 'short', timeStyle: 'short', timeZone: 'Asia/Shanghai',
@@ -20,6 +32,15 @@ const initialForms = {
 };
 const readProject = (id: string) => studioRequest<{ project: GeoProject }>(`?id=${encodeURIComponent(id)}`, undefined, PATH);
 const postGeo = <T,>(body: object) => studioRequest<T>('', body, PATH);
+const EMPTY_WORKFLOW = emptyGeoWorkflow();
+const readPlan = ({ questions, engines, repeats, competitors }: GeoWorkflow): GeoPlan => ({ questions, engines, repeats, competitors });
+const EMPTY_PLAN = readPlan(EMPTY_WORKFLOW);
+const initialCaptures = () => ({ baseline: emptyCapture(), retest: emptyCapture() });
+
+function validPlanNames(values: string[]) {
+  const names = values.map(value => value.trim().normalize('NFKC').toLowerCase());
+  return names.every(Boolean) && new Set(names).size === names.length;
+}
 
 function httpsUrl(value: string) {
   try {
@@ -43,34 +64,33 @@ function downloadMarkdown({ brief, article }: GeoDocument) {
     faq.length ? `## 常见问题\n\n${faq.join('\n\n')}` : '',
     sources.length ? `## 参考资料\n\n${sources.join('\n')}` : '',
   ].filter(Boolean).join('\n\n') + '\n';
-  const href = URL.createObjectURL(new Blob([markdown], { type: 'text/markdown;charset=utf-8' }));
-  const link = document.createElement('a');
-  link.href = href;
-  link.download = `${title.replace(/[\\/:*?"<>|]/g, '-').slice(0, 70) || 'GEO 稿件'}.md`;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  window.setTimeout(() => URL.revokeObjectURL(href), 1000);
+  downloadGeoFile(title || 'GEO 稿件', 'md', 'text/markdown', markdown);
 }
 
 function Status({ status }: { status: GeoStatus }) {
   return <span className="geo-status" data-status={status}>{GEO_STATUS_LABELS[status]}</span>;
 }
 
-function BriefEditor({ brief, onChange, onRemoveSource, editable, busy }: {
-  brief: GeoBrief; onChange: (brief: GeoBrief) => void; onRemoveSource: (index: number) => void; editable: boolean; busy: boolean;
+function BriefEditor({ brief, onChange, disabled }: {
+  brief: GeoBrief; onChange: (brief: GeoBrief) => void; disabled: boolean;
 }) {
-  return <fieldset className="geo-fields" disabled={busy || !editable}>
-    <label>品牌<input className="input" value={brief.brand} maxLength={120} onChange={e => onChange({ ...brief, brand: e.target.value })} /></label>
-    <label>选题<input className="input" value={brief.topic} maxLength={120} onChange={e => onChange({ ...brief, topic: e.target.value })} /></label>
+  return <fieldset className="geo-fields" disabled={disabled}>
+    <legend className="geo-visually-hidden">建模范围</legend>
+    <div className="geo-field-pair">
+      <label>品牌<input className="input" value={brief.brand} maxLength={120} onChange={e => onChange({ ...brief, brand: e.target.value })} /></label>
+      <label>选题<input className="input" value={brief.topic} maxLength={120} onChange={e => onChange({ ...brief, topic: e.target.value })} /></label>
+    </div>
     <label>目标受众<input className="input" value={brief.audience} maxLength={300} onChange={e => onChange({ ...brief, audience: e.target.value })} /></label>
     <label>用户主要问题<textarea className="textarea" rows={2} value={brief.question} maxLength={600}
       placeholder="例如：选择园区办公空间时，需要核对哪些条件？" onChange={e => onChange({ ...brief, question: e.target.value })} /></label>
-    <div className="geo-field-heading">
-      <h4>可信来源</h4>
-      <button type="button" className="button ghost" disabled={brief.sources.length >= 8}
-        onClick={() => onChange({ ...brief, sources: [...brief.sources, { title: '', url: '', excerpt: '' }] })}><Plus size={15} aria-hidden="true" />添加来源</button>
-    </div>
+  </fieldset>;
+}
+
+function SourceEditor({ brief, onChange, onRemoveSource, editable, busy }: {
+  brief: GeoBrief; onChange: (brief: GeoBrief) => void; onRemoveSource: (index: number) => void; editable: boolean; busy: boolean;
+}) {
+  return <fieldset className="geo-fields" disabled={busy || !editable}>
+    <legend className="geo-visually-hidden">可信来源</legend>
     <p className="geo-muted">填写核实过的原文摘录。公开链接使用 HTTPS，内部资料可留空。正文用 [1]、[2] 对应来源编号。</p>
     {editable && <GeoKnowledgePicker disabled={busy || brief.sources.length >= 8}
       onSelect={source => onChange({ ...brief, sources: [...brief.sources, source] })} />}
@@ -88,11 +108,14 @@ function BriefEditor({ brief, onChange, onRemoveSource, editable, busy }: {
         <label>证据摘录<textarea className="textarea" rows={3} value={source.excerpt} maxLength={1800} onChange={e => patch({ excerpt: e.target.value })} /></label>
       </div>;
     })}
+    {editable && <div className="geo-actions"><button type="button" className="button ghost" disabled={brief.sources.length >= 8}
+      onClick={() => onChange({ ...brief, sources: [...brief.sources, { title: '', url: '', excerpt: '' }] })}><Plus size={15} aria-hidden="true" />添加来源</button></div>}
   </fieldset>;
 }
 
 function ArticleEditor({ article, onChange, disabled }: { article: GeoArticle; onChange: (article: GeoArticle) => void; disabled: boolean }) {
   return <fieldset className="geo-fields" disabled={disabled}>
+    <legend className="geo-visually-hidden">文章内容</legend>
     <label>文章标题<input className="input" value={article.title} maxLength={160} onChange={e => onChange({ ...article, title: e.target.value })} /></label>
     <label>摘要<textarea className="textarea" rows={3} value={article.summary} maxLength={500} onChange={e => onChange({ ...article, summary: e.target.value })} /></label>
     <label>正文 Markdown<textarea className="textarea geo-markdown" rows={12} value={article.markdown} maxLength={24000}
@@ -145,6 +168,9 @@ export default function GEOWorkspace({ member, notify, onDirtyChange, onBusyChan
   const [projects, setProjects] = useState<GeoSummary[]>([]);
   const [project, setProject] = useState<GeoProject>();
   const [draft, setDraft] = useState<GeoDocument>();
+  const [plan, setPlan] = useState(EMPTY_PLAN);
+  const [gaps, setGaps] = useState<GeoGap[]>([]);
+  const [captures, setCaptures] = useState(initialCaptures);
   const [checked, setChecked] = useState<{ document: GeoDocument; quality: GeoQuality }>();
   const [forms, setForms] = useState(initialForms);
   const [modelAvailable, setModelAvailable] = useState(false);
@@ -154,13 +180,30 @@ export default function GEOWorkspace({ member, notify, onDirtyChange, onBusyChan
   const [error, setError] = useState('');
   const [conflict, setConflict] = useState(false);
   const [projectsOpen, setProjectsOpen] = useState(true);
+  const [step, setStep] = useState<GeoStep>(0);
   const mounted = useRef(false);
   const inFlight = useRef(false);
   const listEpoch = useRef(0);
   const qualityRef = useRef<HTMLElement>(null);
+  const errorRef = useRef<HTMLDivElement>(null);
+  const stepHeading = useRef<HTMLHeadingElement>(null);
+  const focusStepFrame = useRef<number | null>(null);
   const busy = Boolean(pending);
   const changed = Boolean(draft && project && JSON.stringify(draft) !== JSON.stringify(project.document));
-  const dirty = changed || Object.values(forms).some(value => value.trim().length > 0);
+  const workflow = project?.workflow ?? EMPTY_WORKFLOW;
+  const savedBrand = project?.document.brief.brand ?? '';
+  const hasCurrentBaseline = workflow.answers.some(answer => answer.phase === 'baseline' && answer.brand === savedBrand);
+  const structure = step === 3 && project?.version ? buildGeoStructuredData(project.document, project.publication) : null;
+  const planChanged = Boolean(project && JSON.stringify(plan) !== JSON.stringify(readPlan(workflow)));
+  const planInvalid = plan.questions.some(item => !item.prompt.trim()) || !validPlanNames(plan.engines) || !validPlanNames(plan.competitors);
+  const gapsChanged = Boolean(project && JSON.stringify(gaps) !== JSON.stringify(workflow.gaps));
+  const captureChanged = Object.values(captures).some(value =>
+    Boolean(value.rawAnswer.trim() || value.citations.length || value.brandMentions || value.competitorMentions.some(item => item.count)));
+  const dirty = changed || planChanged || gapsChanged || captureChanged || Object.values(forms).some(value => value.trim().length > 0);
+  const canEditWorkflow = project?.canEditWorkflow ?? Boolean(project?.canEdit || project?.canRecord);
+  const checkpoints = [workflow.questions.length > 0 && workflow.engines.length > 0,
+    workflow.answers.some(answer => answer.phase === 'baseline'), workflow.gaps.length > 0,
+    Boolean(project?.publication && workflow.answers.some(answer => answer.phase === 'retest'))];
   const quality = checked?.document === draft ? checked?.quality ?? null : !changed && project?.version ? project.quality : null;
   const readyBrief = Boolean(draft?.brief.brand.trim() && draft.brief.topic.trim() && draft.brief.question.trim() &&
     draft.brief.sources.some(source => source.title.trim() && (!source.url.trim() || httpsUrl(source.url)) && source.excerpt.trim()));
@@ -188,6 +231,7 @@ export default function GEOWorkspace({ member, notify, onDirtyChange, onBusyChan
     return () => {
       mounted.current = false;
       window.clearTimeout(timer);
+      if (focusStepFrame.current !== null) window.cancelAnimationFrame(focusStepFrame.current);
     };
   }, [loadList]);
   useEffect(() => { onDirtyChange?.(dirty); }, [dirty, onDirtyChange]);
@@ -198,13 +242,29 @@ export default function GEOWorkspace({ member, notify, onDirtyChange, onBusyChan
       qualityRef.current?.scrollIntoView({ block: 'nearest', behavior: preferredScrollBehavior() });
     }
   }, [checked, draft]);
+  useEffect(() => {
+    if (error) errorRef.current?.scrollIntoView({ block: 'nearest', behavior: preferredScrollBehavior() });
+  }, [error]);
 
   function applyProject(next: GeoProject) {
     setProject(next);
     setDraft(next.document);
+    setPlan(readPlan(next.workflow ?? EMPTY_WORKFLOW));
+    setGaps(next.workflow?.gaps ?? []);
+    setCaptures(initialCaptures());
     setChecked(undefined);
     setForms(initialForms);
     setProjectsOpen(false);
+  }
+
+  function goToStep(next: GeoStep) {
+    setStep(next);
+    if (focusStepFrame.current !== null) window.cancelAnimationFrame(focusStepFrame.current);
+    focusStepFrame.current = window.requestAnimationFrame(() => {
+      focusStepFrame.current = null;
+      stepHeading.current?.focus({ preventScroll: true });
+      stepHeading.current?.scrollIntoView({ block: 'nearest' });
+    });
   }
 
   function canLeave() {
@@ -235,6 +295,7 @@ export default function GEOWorkspace({ member, notify, onDirtyChange, onBusyChan
       quality: { score: 0, ready: false, checks: [] }, reviewNote: '', observations: [],
       canEdit: true, canReview: false, canRecord: false,
     });
+    goToStep(0);
     setError('');
     setConflict(false);
   }
@@ -244,7 +305,10 @@ export default function GEOWorkspace({ member, notify, onDirtyChange, onBusyChan
     if (!canLeave()) return;
     void run('正在读取项目…', async () => {
       const response = await readProject(id);
-      if (mounted.current) applyProject(response.project);
+      if (mounted.current) {
+        applyProject(response.project);
+        goToStep(reload ? step : response.project.status === 'draft' ? 0 : 3);
+      }
     });
   }
 
@@ -275,13 +339,24 @@ export default function GEOWorkspace({ member, notify, onDirtyChange, onBusyChan
     if (needsRepair) notify('已用 [0] 标出失去来源的引用，请替换或删除。');
   }
 
-  function mutate(action: 'save' | 'submit' | 'review' | 'publish' | 'observe', fields: object, pendingText: string, success: string) {
+  function mutate(action: 'save' | 'submit' | 'review' | 'publish' | 'observe' | 'workflow' | 'capture' | 'gaps', fields: object, pendingText: string, success: string,
+    onSuccess?: () => void) {
     if (!project) return;
     void run(pendingText, async () => {
       const response = await postGeo<{ project: GeoProject }>({ action, id: project.id, version: project.version, ...fields });
       if (!mounted.current) return;
       const next = response.project;
-      applyProject(next);
+      setProject(next);
+      if (action === 'save') {
+        setDraft(next.document);
+        setChecked(undefined);
+      }
+      if (action === 'workflow' || (action === 'save' && 'workflow' in fields)) setPlan(readPlan(next.workflow ?? EMPTY_WORKFLOW));
+      if (action === 'gaps') setGaps(next.workflow?.gaps ?? []);
+      if (action === 'review') setForms(current => ({ ...current, reviewNote: '' }));
+      if (action === 'publish') setForms(current => ({ ...current, url: '', channel: '' }));
+      if (action === 'observe') setForms(current => ({ ...current, engine: '', query: '', result: '', evidence: '' }));
+      if (action !== 'save' && action !== 'workflow' && action !== 'capture' && action !== 'gaps' && !changed) setDraft(next.document);
       if (loading) {
         void loadList();
       } else {
@@ -291,6 +366,41 @@ export default function GEOWorkspace({ member, notify, onDirtyChange, onBusyChan
         }, ...current.filter(item => item.id !== next.id)]);
       }
       notify(success);
+      onSuccess?.();
+    }, true);
+  }
+
+  function savePlan() {
+    if (!project || !draft || !canEditWorkflow || planInvalid) return;
+    if (project.canEdit) {
+      mutate('save', { document: draft, workflow: plan }, '正在保存建模…', '建模已保存');
+    } else {
+      mutate('workflow', { workflow: plan }, '正在保存建模…', '建模已保存');
+    }
+  }
+
+  function recordCapture(answer: CaptureInput) {
+    mutate('capture', { answer }, '正在保存答案记录…', '答案记录已保存',
+      () => setCaptures(current => ({ ...current, [answer.phase]: emptyCapture() })));
+  }
+
+  function saveGaps() {
+    if (gaps.some(gap => !gap.title.trim() || !gap.action.trim() || !gap.evidenceAnswerIds.length)) {
+      setError('每条缺口需要标题、补齐建议和至少一条关联答案证据。');
+      return;
+    }
+    mutate('gaps', { gaps }, '正在保存缺口清单…', '缺口清单已保存');
+  }
+
+  function diagnose() {
+    if (!project || !modelAvailable || !hasCurrentBaseline) return;
+    if (gapsChanged && !window.confirm('用新生成的建议替换当前未保存的缺口编辑？')) return;
+    void run('正在诊断信源缺口…', async () => {
+      const response = await postGeo<{ gaps: GeoGap[] }>({ action: 'diagnose', id: project.id, version: project.version });
+      if (!mounted.current) return;
+      const existing = project.workflow?.gaps ?? [];
+      setGaps([...existing, ...response.gaps].slice(0, 60));
+      notify(response.gaps.length ? '缺口建议已生成。核对证据后保存。' : '本批答案未生成可核实的缺口建议。');
     }, true);
   }
 
@@ -345,39 +455,104 @@ export default function GEOWorkspace({ member, notify, onDirtyChange, onBusyChan
           {projects.map(item => <li key={item.id}><button type="button" className="geo-project-button" aria-current={project?.id === item.id ? 'page' : undefined}
             disabled={busy} onClick={() => open(item.id)}><strong>{item.title || item.topic || '未命名项目'}</strong><Status status={item.status} /></button></li>)}
         </ul>
-        {!loading && !listError && !projects.length && !project && <p className="geo-muted">已保存的稿件会显示在这里。</p>}
+        {!loading && !listError && !projects.length && !project && <p className="geo-muted">暂无已保存的项目。</p>}
       </div>
     </aside>
-    <div className="geo-main">
+    <div className="geo-main" role="region" aria-label="GEO 项目内容" tabIndex={0}>
       {pending && <p role="status" className="geo-notice">{pending}</p>}
-      {error && <div role="alert" className="geo-alert">{error}
+      {error && <div role="alert" className="geo-alert" ref={errorRef}>{error}
         {conflict && project && <button type="button" className="button secondary" disabled={busy} onClick={() => open(project.id, true)}><RotateCcw size={15} aria-hidden="true" />读取最新版本</button>}
       </div>}
       {!project || !draft ? <div className="geo-empty">
         <FileText size={25} aria-hidden="true" />
-        <h3>用可信资料回答用户的问题</h3>
-        <p>整理品牌资料和可核验的引用，经质检与人工审核后导出稿件。发布后可登记回执并记录 AI 提及情况。</p>
+        <h3>查看品牌在 AI 回答中的表现</h3>
+        <p>从用户可能提出的问题出发，记录实际答案和引用，找出需要补齐的信源，并在发布后复测。</p>
         <button type="button" className="button primary" disabled={busy} onClick={start}><Plus size={16} aria-hidden="true" />新建内容项目</button>
       </div> : <>
         <header className="geo-header">
           <div>
             <div className="geo-title"><h3>{draft.article.title || draft.brief.topic || '新建内容项目'}</h3><Status status={project.status} /></div>
-            <p className="geo-muted">{changed || !project.version ? '未保存' : `版本 ${project.version} · ${timestamp.format(new Date(project.updatedAt))}`}</p>
+            <p className="geo-muted">{dirty || !project.version ? '有未保存的编辑' : `版本 ${project.version} · ${timestamp.format(new Date(project.updatedAt))}`}</p>
           </div>
           <div className="geo-actions">
-            {project.canEdit && <>
+            {step === 0 && canEditWorkflow && <button type="button" className="button primary" disabled={busy || planInvalid || (!changed && !planChanged)}
+              onClick={savePlan}><Save size={16} aria-hidden="true" />保存建模</button>}
+            {step === 3 && project.canEdit && <>
               <button type="button" className="button secondary" disabled={busy} onClick={check}>检查质量</button>
               <button type="button" className="button primary" disabled={busy || !changed}
                 onClick={() => mutate('save', { document: draft }, '正在保存草稿…', '草稿已保存')}><Save size={16} aria-hidden="true" />保存草稿</button>
             </>}
-            {(project.status === 'approved' || project.status === 'published') &&
+            {step === 3 && (project.status === 'approved' || project.status === 'published') &&
               <button type="button" className="button primary" disabled={busy} onClick={() => downloadMarkdown(project.document)}><Download size={16} aria-hidden="true" />导出 Markdown</button>}
+            {structure && <button type="button" className="button secondary" disabled={busy}
+              onClick={() => downloadGeoFile(`${project.document.article.title} - 结构化数据`, 'json', 'application/ld+json', JSON.stringify(structure, null, 2) + '\n')}>
+              <Download size={16} aria-hidden="true" />导出结构化数据
+            </button>}
           </div>
         </header>
+        <nav aria-label="GEO 工作流程" className="geo-steps">
+          <ol>{STEPS.map((item, index) => <li key={item.title}>
+            <button type="button" data-complete={checkpoints[index]} aria-label={item.title}
+              aria-describedby={`geo-step-description-${index}`} aria-current={index === step ? 'step' : undefined}
+              aria-controls="geo-step-content" disabled={busy} onClick={() => goToStep(index as GeoStep)}>
+              <span className="geo-step-index" aria-hidden="true">{checkpoints[index] && index !== step ? <Check size={15} /> : index + 1}</span>
+              <span className="geo-step-label"><strong>{item.title}</strong><small id={`geo-step-description-${index}`}>{item.detail}{checkpoints[index] ? ' · 已有记录' : ''}</small></span>
+            </button>
+          </li>)}</ol>
+        </nav>
+        <section className="geo-step-content" id="geo-step-content" aria-labelledby="geo-active-step">
+          <div className="geo-step-heading">
+            <h3 key={step} ref={stepHeading} id="geo-active-step" tabIndex={-1}>{STEPS[step].title}</h3>
+            <div className="geo-actions">
+              {step > 0 && <button type="button" className="button ghost" disabled={busy} onClick={() => goToStep((step - 1) as GeoStep)}><ArrowLeft size={15} aria-hidden="true" />上一步</button>}
+              {step < 3 && <button type="button" className="button secondary" disabled={busy} onClick={() => goToStep((step + 1) as GeoStep)}>下一步<ArrowRight size={15} aria-hidden="true" /></button>}
+            </div>
+          </div>
+          {step === 0 && <>
+            <section className="geo-panel" aria-label="建模范围">
+              <h3>建模范围</h3>
+              <BriefEditor brief={draft.brief} disabled={busy || !project.canEdit}
+                onChange={brief => updateDraft({ ...draft, brief })} />
+            </section>
+            <GeoPlanEditor plan={plan} mainQuestion={draft.brief.question} disabled={busy || !canEditWorkflow} onChange={setPlan} />
+            {planInvalid && <p className="geo-muted">请填写每条追踪问题与引擎、竞品名称，再移除重复的引擎或竞品名称。</p>}
+          </>}
+          {step === 1 && <>
+            <section className="geo-panel" aria-label="基线采样">
+              <div className="geo-field-heading"><h3>基线采样</h3><span className="geo-count">人工采样</span></div>
+              {planChanged && <p className="geo-muted">采样按已保存的计划执行。要应用当前的更改，请先保存建模。</p>}
+              {canEditWorkflow && project.version > 0 && project.document.brief.brand.trim() ? <GeoAnswerCapture
+                workflow={workflow} brand={project.document.brief.brand} phase="baseline" draft={captures.baseline} disabled={busy}
+                onChange={(next: CaptureDraft) => setCaptures(current => ({ ...current, baseline: next }))} onSave={recordCapture} /> :
+                <p className="geo-muted">{canEditWorkflow ? '保存品牌、追踪问题和引擎后，即可录入基线答案。' : '项目作者可以录入基线答案。'}</p>}
+            </section>
+            <section className="geo-panel" aria-label="基线答案记录">
+              <div className="geo-field-heading"><h3>基线答案记录</h3><span className="geo-count">{workflow.answers.filter(answer => answer.phase === 'baseline').length} 份</span></div>
+              <GeoAnswerLog answers={workflow.answers} phase="baseline" />
+            </section>
+          </>}
+          {step === 2 && <>
+            <GeoVisibility workflow={workflow} brand={savedBrand} />
+            {hasCurrentBaseline && <details className="geo-panel geo-evidence-panel">
+              <summary>查看基线答案及其引用</summary>
+              <GeoAnswerLog answers={workflow.answers.filter(answer => answer.brand === savedBrand)} phase="baseline" />
+            </details>}
+            <section className="geo-panel" aria-label="信源缺口清单">
+              <div className="geo-field-heading"><h3>信源缺口清单</h3>
+                {canEditWorkflow && <div className="geo-actions">
+                  {modelAvailable && hasCurrentBaseline &&
+                    <button type="button" className="button secondary" disabled={busy || gaps.length >= 60} onClick={diagnose}><Sparkles size={16} aria-hidden="true" />AI 建议信源缺口</button>}
+                  <button type="button" className="button primary" disabled={busy || !gapsChanged} onClick={saveGaps}>保存缺口清单</button>
+                </div>}
+              </div>
+              <GeoGapEditor gaps={gaps} answers={workflow.answers} disabled={busy || !canEditWorkflow} onChange={setGaps} />
+            </section>
+          </>}
+          {step === 3 && <>
         <div className="geo-columns">
           <section className="geo-panel" aria-label="创作资料">
-            <h3>创作资料</h3>
-            <BriefEditor key={project.id} brief={draft.brief} editable={project.canEdit} busy={busy}
+            <h3>可信来源</h3>
+            <SourceEditor key={project.id} brief={draft.brief} editable={project.canEdit} busy={busy}
               onChange={brief => updateDraft({ ...draft, brief })} onRemoveSource={removeSource} />
           </section>
           <section className="geo-panel" aria-label="文章稿件">
@@ -387,6 +562,7 @@ export default function GEOWorkspace({ member, notify, onDirtyChange, onBusyChan
                 <Sparkles size={16} aria-hidden="true" />AI 生成稿件
               </button>}
             </div>
+            {structure && <p className="geo-muted">结构化数据按已保存的稿件导出。请只保留发布页面上实际可见的问答。</p>}
             {project.canEdit && !modelAvailable && <p className="geo-muted">可手动编辑。启用工作台大模型后可以生成稿件。</p>}
             {project.canEdit && modelAvailable && !readyBrief && <p className="geo-muted">填写品牌、选题、主要问题及至少一条完整来源，即可生成稿件。</p>}
             <ArticleEditor article={draft.article} disabled={busy || !project.canEdit} onChange={article => updateDraft({ ...draft, article })} />
@@ -430,6 +606,18 @@ export default function GEOWorkspace({ member, notify, onDirtyChange, onBusyChan
           </form>}
           {!project.publication && !project.canRecord && <p className="geo-muted">等待作者登记发布回执。</p>}
         </section>}
+        <section className="geo-panel" aria-label="复测对照">
+          <div className="geo-field-heading"><h3>复测对照</h3>
+            {workflow.answers.length > 0 && <button type="button" className="button secondary"
+              onClick={() => downloadGeoReport(project.document.brief, workflow)}><Download size={16} aria-hidden="true" />导出诊断报告</button>}
+          </div>
+          {project.publication ? <>
+            <GeoRetestComparison workflow={workflow} brand={savedBrand} />
+            {canEditWorkflow && <GeoAnswerCapture workflow={workflow} brand={project.document.brief.brand} phase="retest"
+              draft={captures.retest} disabled={busy} onChange={next => setCaptures(current => ({ ...current, retest: next }))} onSave={recordCapture} />}
+            <GeoAnswerLog answers={workflow.answers} phase="retest" />
+          </> : <p className="geo-muted">登记实际发布回执后，按基线的同一问题、引擎和轮次录入复测答案。</p>}
+        </section>
         {project.status === 'published' && <section className="geo-panel geo-workflow" aria-label="AI 可见性观察">
           <h3>AI 可见性观察</h3>
           <p className="geo-muted">记录实际查询时看到的结果。观察结论对应本次查询和证据。</p>
@@ -453,6 +641,8 @@ export default function GEOWorkspace({ member, notify, onDirtyChange, onBusyChan
             </li>)}
           </ul> : <p className="geo-muted">暂无观察记录。</p>}
         </section>}
+          </>}
+        </section>
       </>}
     </div>
   </section>;

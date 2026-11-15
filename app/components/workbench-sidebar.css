@@ -25,9 +25,9 @@
   width: 32px;
   aspect-ratio: 1;
   flex: none;
-  border-radius: var(--cds-radius-pill);
-  background: var(--nav-selected);
-  color: var(--nav-text);
+  border-radius: var(--radius-lg);
+  background: var(--app-accent);
+  color: var(--app-accent-contrast);
   font-size: 12px;
   font-weight: 650;
 }
@@ -63,7 +63,7 @@
 .sidebar-account-actions button + button:last-child { border-top: 1px solid var(--nav-border); }
 .sidebar-account-actions button:hover { background: var(--nav-hover); }
 .sidebar-account-actions svg { flex: none; color: var(--nav-muted); }
-.sidebar-account :is(summary, button):focus-visible { outline: 2px solid var(--nav-text); outline-offset: -2px; }
+.sidebar-account :is(summary, button):focus-visible { outline: 2px solid var(--app-accent); outline-offset: -2px; }
 .sidebar .nav-item { gap: 8px; padding-inline: 10px; }
 .sidebar .nav-item > svg { flex: none; }
 .sidebar .nav-item > span { min-width: 0; }

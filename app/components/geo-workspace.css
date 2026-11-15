@@ -605,3 +605,56 @@
   .geo-steps button[aria-current="step"] { border-color: Highlight; }
   .geo-steps button[aria-current="step"] .geo-step-index { color: HighlightText; background: Highlight; forced-color-adjust: none; }
 }
+
+.geo-ai-sampling {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--cds-border);
+  border-radius: var(--radius-lg);
+  background: var(--cds-surface-0);
+}
+
+.geo-capture-progress { display: grid; gap: 5px; }
+.geo-capture-progress progress {
+  inline-size: min(18rem, 100%);
+  accent-color: var(--app-accent);
+}
+
+.geo-metric-detail {
+  display: block;
+  margin-block-start: 4px;
+  color: var(--cds-text-secondary);
+  font-size: 11px;
+}
+
+.geo-gap-targets {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.geo-gap-targets li {
+  display: flex;
+  align-items: start;
+  gap: 8px;
+  overflow-wrap: anywhere;
+  line-height: 1.65;
+}
+
+.geo-gap-sources {
+  padding: 9px 11px;
+  border: 1px solid var(--cds-border);
+  border-radius: var(--radius-lg);
+}
+
+.geo-gap-sources summary { cursor: pointer; font-weight: 650; }
+.geo-gap-sources[open] summary { margin-block-end: 8px; }
+.geo-gap-sources .geo-gap-evidence { margin-block-start: 6px; }
+.geo-gap-sources .geo-gap-evidence li { border-block-start: 1px solid var(--cds-border); padding-block: 6px; }
+.geo-gap-sources .geo-gap-evidence li div { display: grid; min-width: 0; flex: 1; gap: 2px; }
+.geo-gap-sources .geo-gap-evidence a { color: inherit; text-decoration: underline; text-underline-offset: 3px; }
+.geo-gap-sources .geo-gap-evidence small { color: var(--cds-text-secondary); }

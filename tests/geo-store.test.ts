@@ -6,7 +6,7 @@ import { createGeoStore } from '../app/lib/geo-store.ts';
 import { emptyGeoDocument } from '../app/lib/geo-types.ts';
 import type { GeoDocument } from '../app/lib/geo-types.ts';
 import { compareGeoMetrics, computeGeoMetrics } from '../app/lib/geo-metrics.ts';
-import { diagnoseGeoGaps } from '../app/lib/geo-workflow.ts';
+import { diagnoseGeoGaps, selectGeoGapGuidance } from '../app/lib/geo-workflow.ts';
 import { assertMemberApi } from '../app/lib/member-policy.ts';
 
 const author = { ownerId: 'tenant', memberId: 'author', role: 'sales' as const };
@@ -94,6 +94,71 @@ test('GEO workflow stores actual answers and measures matched before/after sampl
   assert.deepEqual(generated[0],{...proposed,id:generated[0].id,status:'open'});
   await assert.rejects(diagnoseGeoGaps(project,async()=>JSON.stringify({gaps:[{...proposed,evidenceAnswerIds:['nonexistent']}]})),{status:502});
   assert.deepEqual((await store.get(author,project.id)).workflow?.gaps,gaps);
+  assert.deepEqual(selectGeoGapGuidance(project,['gap-1']),[{title:gaps[0].title,action:gaps[0].action}]);
+  assert.throws(()=>selectGeoGapGuidance(project,['unavailable']),{status:400});
+});
+
+test('API Mart captures use the exact prompt, retry idempotently, and retest against the same verified model and mode', async t => {
+  const {sqlite,store}=fixture();t.after(()=>sqlite.close());
+  const question={id:'q1',dimension:'scenario',intent:'decision',prompt:'周末带小孩到哪里？'};
+  const slot={questionId:'q1',engine:'ChatGPT',phase:'baseline',sample:1};
+  const plan={questions:[question],engines:[slot.engine],repeats:2,competitors:['示例市集']};
+  const calls: Array<{engine:string;prompt:string;options?:{model?:string;webSearch?:boolean}}> = [];
+  const result={rawAnswer:'## 推荐榜单\n1. **晨光商圈**：周六公开活动。\n2. 示例市集：周日开放。',
+    citations:[{title:'公告',url:'https://events.example.org/weekend#time'},{title:'非公开',url:'https://127.0.0.1/private'}],
+    model:'gpt-test',requestId:'provider-request-1',webSearch:true};
+  const provider={engines:['ChatGPT'],capture:async(engine:string,prompt:string,options?:{model?:string;webSearch?:boolean})=>{
+    calls.push({engine,prompt,options});return result;
+  }};
+  let project=await store.save(author,'paid-capture',0,document,plan);
+  const originalVersion=project.version;
+  const saved=await store.captureAI(author,project.id,originalVersion,slot,'capture-one',async()=>provider);
+  assert.equal(saved.capture.status,'saved');assert.equal(saved.project.version,originalVersion+2);
+  const answer=saved.project.workflow!.answers[0];
+  assert.deepEqual(calls,[{engine:slot.engine,prompt:question.prompt,options:undefined}]);
+  assert.equal(answer.rawAnswer,result.rawAnswer);assert.equal(answer.brandMentions,1);assert.equal(answer.brandRank,1);
+  assert.deepEqual(answer.citations,[{...result.citations[0],brandSource:true}]);
+  assert.deepEqual(answer.provenance,{provider:'apimart',model:'gpt-test',requestId:'provider-request-1',webSearch:true,annotations:'provider',captureId:'capture-one'});
+  assert.equal((await store.captureAI(author,project.id,originalVersion,slot,'capture-one',async()=>assert.fail('replay must not use APIMart'))).capture.status,'saved');
+  await assert.rejects(store.captureAI(author,project.id,saved.project.version,slot,'capture-duplicate',async()=>provider),{status:409});
+  assert.equal(calls.length,1);
+  project=await store.submit(author,project.id,saved.project.version);
+  project=await store.review(manager,project.id,project.version,'approve','');
+  project=await store.publish(author,project.id,project.version,'https://events.example.org/weekend','官网');
+  const retest={...slot,phase:'retest'};
+  await assert.rejects(store.capture(author,project.id,project.version,{...retest,id:'manual-retest',rawAnswer:'人工',citations:[],brandMentions:0,brandRank:null,competitorMentions:[]}),{status:409});
+  const checked=await store.captureAI(author,project.id,project.version,retest,'retest-one',async()=>provider);
+  assert.deepEqual(calls[1].options,{model:'gpt-test',webSearch:true});
+  assert.equal(compareGeoMetrics(checked.project.workflow!).samples,1);
+});
+
+test('simultaneous and ambiguous paid captures hold the persisted claim and never fabricate measurements',async t=>{
+  const {sqlite,store}=fixture();t.after(()=>sqlite.close());
+  const plan={questions:[{id:'q1',dimension:'category',intent:'awareness',prompt:'有哪些品牌？'}],engines:['Gemini'],repeats:1,competitors:[]};
+  const slot={questionId:'q1',engine:'Gemini',phase:'baseline',sample:1};
+  const project=await store.save(author,'abandoned-capture',0,document,plan);
+  let entered: ()=>void;
+  let release: ()=>void;
+  const started=new Promise<void>(resolve=>{entered=resolve;});
+  const wait=new Promise<void>(resolve=>{release=resolve;});
+  let calls=0;
+  const provider={engines:['Gemini'],capture:async()=>{calls++;entered();await wait;throw new Error('temporary transport detail');}};
+  const pending=store.captureAI(author,project.id,project.version,slot,'first-attempt',async()=>provider);
+  await started;
+  const running=await store.captureAI(author,project.id,project.version,slot,'first-attempt',async()=>provider);
+  assert.equal(running.capture.status,'running');
+  await assert.rejects(store.captureAI(author,project.id,running.project.version,slot,'second-attempt',async()=>provider),{status:409});
+  release!();
+  const failed=await pending;
+  assert.equal(failed.capture.status,'unknown');
+  assert.equal(failed.project.workflow!.answers.length,0);assert.equal(computeGeoMetrics(failed.project.workflow!,'baseline').mentionRate,null);
+  assert.equal((await store.captureAI(author,project.id,project.version,slot,'first-attempt',async()=>provider)).capture.status,'unknown');
+  assert.equal(calls,1);
+  const retry=await store.captureAI(author,project.id,failed.project.version,slot,'retry-confirmed',async()=>({engines:['Gemini'],capture:async()=>({
+    rawAnswer:'晨光商圈可供参考。',citations:[],model:'gemini-test',webSearch:false,
+  })}));
+  const metrics=computeGeoMetrics(retry.project.workflow!,'baseline');
+  assert.equal(metrics.mentionRate,100);assert.equal(metrics.firstRecommendationRate,null);assert.equal(metrics.citationRate,null);
 });
 
 test('GEO drafts are private until submitted and returned changes become private on save', async t => {

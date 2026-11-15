@@ -2,10 +2,12 @@ import { env } from 'cloudflare:workers';
 import { assertSameOrigin } from '../../lib/connection-config.ts';
 import { readEffectiveModel } from '../../lib/connection-store.ts';
 import { DomainError } from '../../lib/domain.ts';
-import { checkGeoQuality, generateGeoArticle, parseGeoBrief, parseGeoDocument } from '../../lib/geo-content.ts';
+import { readGeoAIConnection } from '../../lib/geo-apimart.ts';
+import { checkGeoQuality, generateGeoArticle, generateGeoEvidenceDraft, hasGeoSourceEvidence, parseGeoBrief, parseGeoDocument } from '../../lib/geo-content.ts';
 import { createGeoStore, type GeoActor } from '../../lib/geo-store.ts';
-import { diagnoseGeoGaps } from '../../lib/geo-workflow.ts';
+import { diagnoseGeoGaps, selectGeoGapGuidance } from '../../lib/geo-workflow.ts';
 import { boundedMaterialBytes } from '../../lib/marketing-material.ts';
+import type { MaterialEnvironment } from '../../lib/marketing-material-store.ts';
 import { requireMemberRole } from '../../lib/member-policy.ts';
 import { requestModelText } from '../../lib/model-client.ts';
 import { requireUserId } from '../../lib/server.ts';
@@ -14,6 +16,15 @@ import { materialHeaders } from '../marketing-materials/route.ts';
 export const dynamic = 'force-dynamic';
 
 const json = (value: unknown, status = 200) => Response.json(value, { status, headers: materialHeaders });
+const apimart = (ownerId: string) => readGeoAIConnection(ownerId, env as MaterialEnvironment);
+
+async function textGeneration(actor: GeoActor, origin: string) {
+  const connection = await apimart(actor.ownerId).catch(() => null);
+  if (connection?.generationModel) return { generate: connection.generate, provider: 'apimart', model: connection.generationModel };
+  const model = await readEffectiveModel(actor.ownerId, origin);
+  if (!model) throw new DomainError('请先在服务连接中启用 API Mart 或配置工作台大模型。', 503);
+  return { generate: (messages: Parameters<typeof requestModelText>[1]) => requestModelText(model, messages), provider: 'workspace', model: model.name };
+}
 
 function failure(error: unknown) {
   const message = error instanceof DomainError ? error.message : 'GEO 服务暂时不可用，请稍后重试';
@@ -52,9 +63,10 @@ const commands = {
   observe: ['id', 'version', 'engine', 'query', 'result', 'evidence'],
   workflow: ['id', 'version', 'workflow'],
   capture: ['id', 'version', 'answer'],
+  capture_ai: ['id', 'version', 'slot', 'requestId'],
   gaps: ['id', 'version', 'gaps'],
   diagnose: ['id', 'version'],
-  generate: ['brief'],
+  generate: ['brief', 'id', 'version', 'gapIds'],
   check: ['document'],
 } as const;
 
@@ -90,11 +102,13 @@ export async function GET(request: Request) {
     const url = new URL(request.url);
     const db = store();
     if (url.searchParams.has('id')) return json({ project: await db.get(actor, projectId(url.searchParams.get('id'))) });
-    const [projects, model] = await Promise.all([
+    const [projects, model, connection] = await Promise.all([
       db.list(actor),
       readEffectiveModel(actor.ownerId, url.origin).catch(() => null),
+      apimart(actor.ownerId).catch(() => null),
     ]);
-    return json({ projects, modelAvailable: Boolean(model) });
+    return json({ projects, modelAvailable: Boolean(connection?.generationModel || model),
+      aiCapture: { engines: connection?.engines ?? [], models: connection?.models ?? {} } });
   } catch (error) { return failure(error); }
 }
 
@@ -105,10 +119,21 @@ export async function POST(request: Request) {
     const { action, body } = await readCommand(request);
     if (action === 'generate') {
       const brief = parseGeoBrief(body.brief);
-      const model = await readEffectiveModel(actor.ownerId, new URL(request.url).origin);
-      if (!model) throw new DomainError('请先在服务连接中配置并启用大模型', 503);
-      const article = await generateGeoArticle(brief, messages => requestModelText(model, messages));
-      return json({ article });
+      const guided = body.gapIds !== undefined || body.id !== undefined || body.version !== undefined;
+      const id = guided ? projectId(body.id) : undefined;
+      const version = guided ? projectVersion(body.version) : undefined;
+      let guidance: ReturnType<typeof selectGeoGapGuidance> = [];
+      const db = id ? store() : undefined;
+      if (db && id && version !== undefined) {
+        const project = await db.ownedProject(actor, id, version);
+        if (project.document.brief.brand !== brief.brand) throw new DomainError('品牌已变更，请先保存并重新核对待补齐缺口。', 409);
+        guidance = selectGeoGapGuidance(project, body.gapIds);
+      }
+      const { generate, provider, model } = await textGeneration(actor, new URL(request.url).origin);
+      const evidencePending = guided && !hasGeoSourceEvidence(brief);
+      const article = evidencePending ? await generateGeoEvidenceDraft(brief, guidance, generate) : await generateGeoArticle(brief, generate, guidance);
+      if (db && id && version !== undefined) await db.ownedProject(actor, id, version);
+      return json({ article, provider, model, evidencePending });
     }
     if (action === 'check') return json({ quality: checkGeoQuality(parseGeoDocument(body.document)) });
     const id = projectId(body.id);
@@ -122,14 +147,14 @@ export async function POST(request: Request) {
       case 'observe': return json({ project: await db.observe(actor, id, version, body.engine, body.query, body.result, body.evidence) });
       case 'workflow': return json({ project: await db.workflow(actor, id, version, body.workflow) });
       case 'capture': return json({ project: await db.capture(actor, id, version, body.answer) });
+      case 'capture_ai': return json(await db.captureAI(actor, id, version, body.slot, body.requestId, () => apimart(actor.ownerId)));
       case 'gaps': return json({ project: await db.gaps(actor, id, version, body.gaps) });
       case 'diagnose': {
         const project = await db.ownedProject(actor, id, version);
-        const model = await readEffectiveModel(actor.ownerId, new URL(request.url).origin);
-        if (!model) throw new DomainError('请先在服务连接中配置并启用大模型', 503);
-        const gaps = await diagnoseGeoGaps(project, messages => requestModelText(model, messages));
+        const { generate, provider, model } = await textGeneration(actor, new URL(request.url).origin);
+        const gaps = await diagnoseGeoGaps(project, generate);
         await db.ownedProject(actor, id, version);
-        return json({ gaps });
+        return json({ gaps, provider, model });
       }
     }
   } catch (error) { return failure(error); }

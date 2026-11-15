@@ -1,20 +1,23 @@
 'use client';
 
 import { ArrowLeft, ArrowRight, Check, ChevronRight, CircleAlert, Download, FileText, Plus, RotateCcw, Save, Sparkles, Trash2 } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { StudioRequestError, studioRequest } from '../lib/creative-studio-client';
 import { buildGeoStructuredData } from '../lib/geo-structured-data';
-import { emptyGeoDocument, emptyGeoWorkflow, GEO_STATUS_LABELS, type GeoArticle, type GeoBrief, type GeoDocument, type GeoGap, type GeoObservation, type GeoProject, type GeoQuality, type GeoStatus, type GeoSummary, type GeoWorkflow } from '../lib/geo-types';
+import { emptyGeoDocument, emptyGeoWorkflow, GEO_STATUS_LABELS, type GeoArticle, type GeoBrief, type GeoCaptureResponse, type GeoDocument, type GeoGap, type GeoObservation, type GeoPhase, type GeoProject, type GeoQuality, type GeoStatus, type GeoSummary, type GeoWorkflow } from '../lib/geo-types';
 import type { MemberSession } from '../lib/member-types';
 import { preferredScrollBehavior } from '../lib/scroll-behavior';
 import GeoKnowledgePicker from './GeoKnowledgePicker';
 import {
-  downloadGeoFile, downloadGeoReport, emptyCapture, GeoAnswerCapture, GeoAnswerLog, GeoGapEditor, GeoPlanEditor, GeoRetestComparison,
-  GeoVisibility, type CaptureDraft, type CaptureInput, type GeoPlan,
+  availableSlots, downloadGeoFile, downloadGeoReport, emptyCapture, GeoAiCaptureControls, GeoAnswerCapture, GeoAnswerLog,
+  GeoGapEditor, GeoGapSources, GeoPlanEditor, GeoRetestComparison, GeoVisibility, hasCaptureDraft, type CaptureDraft, type CaptureInput,
+  type GeoCaptureProgress, type GeoCaptureRecovery, type GeoPlan, type GeoSampleSlot,
 } from './GeoWorkflowPanels';
 import './geo-workspace.css';
 
 const PATH = '/api/geo';
+const AI_BATCH_SIZE = 4;
+const GAP_GENERATION_LIMIT = 8;
 const STEPS = [
   { title: '提问空间建模', detail: '品牌、问题与采样范围' },
   { title: '答案级抓取', detail: '答案、引用和提及位次' },
@@ -22,6 +25,11 @@ const STEPS = [
   { title: '结构化补齐与复测', detail: '内容交付与前后验证' },
 ] as const;
 type GeoStep = 0 | 1 | 2 | 3;
+type AiOperation = 'start' | 'query' | 'retry';
+type PhaseState<T> = Partial<Record<GeoPhase, T>>;
+type GeoTextSource = { provider?: 'apimart' | 'workspace'; model?: string };
+type AiCaptureAvailability = { engines: string[]; models?: Record<string, { model: string; webSearch: boolean }> };
+const NO_AI_CAPTURE: AiCaptureAvailability = { engines: [] };
 const observations = { mentioned: '有提及', not_mentioned: '未提及', unclear: '无法判断' } as const;
 const timestamp = new Intl.DateTimeFormat('zh-CN', {
   dateStyle: 'short', timeStyle: 'short', timeZone: 'Asia/Shanghai',
@@ -40,6 +48,18 @@ const initialCaptures = () => ({ baseline: emptyCapture(), retest: emptyCapture(
 function validPlanNames(values: string[]) {
   const names = values.map(value => value.trim().normalize('NFKC').toLowerCase());
   return names.every(Boolean) && new Set(names).size === names.length;
+}
+
+function captureRecovery(workflow: GeoWorkflow, slots: GeoSampleSlot[], phase: GeoPhase, local?: GeoCaptureRecovery) {
+  if (local && slots.some(slot => slot.sampleKey === local.sampleKey)) return local;
+  const keys = new Set(slots.map(slot => slot.sampleKey));
+  const latest = workflow.captureAttempts?.filter(item => item.slot.phase === phase && keys.has(item.sampleKey))
+    .sort((first, second) => second.startedAt.localeCompare(first.startedAt))[0];
+  return latest && latest.status !== 'saved' ? { id: latest.id, status: latest.status, sampleKey: latest.sampleKey, message: latest.message } : undefined;
+}
+
+function textSourceLabel({ provider, model }: GeoTextSource) {
+  return provider && model ? `${provider === 'apimart' ? 'APIMart' : '工作台大模型'} · ${model}` : '';
 }
 
 function httpsUrl(value: string) {
@@ -174,6 +194,13 @@ export default function GEOWorkspace({ member, notify, onDirtyChange, onBusyChan
   const [checked, setChecked] = useState<{ document: GeoDocument; quality: GeoQuality }>();
   const [forms, setForms] = useState(initialForms);
   const [modelAvailable, setModelAvailable] = useState(false);
+  const [aiCapture, setAiCapture] = useState<AiCaptureAvailability>(NO_AI_CAPTURE);
+  const [aiPhase, setAiPhase] = useState<GeoPhase>();
+  const [aiProgress, setAiProgress] = useState<PhaseState<GeoCaptureProgress>>({});
+  const [recoveries, setRecoveries] = useState<PhaseState<GeoCaptureRecovery>>({});
+  const [diagnosisSource, setDiagnosisSource] = useState('');
+  const [articleSource, setArticleSource] = useState('');
+  const [stoppingAi, setStoppingAi] = useState(false);
   const [loading, setLoading] = useState(true);
   const [listError, setListError] = useState('');
   const [pending, setPending] = useState('');
@@ -183,6 +210,7 @@ export default function GEOWorkspace({ member, notify, onDirtyChange, onBusyChan
   const [step, setStep] = useState<GeoStep>(0);
   const mounted = useRef(false);
   const inFlight = useRef(false);
+  const stopAi = useRef(false);
   const listEpoch = useRef(0);
   const qualityRef = useRef<HTMLElement>(null);
   const errorRef = useRef<HTMLDivElement>(null);
@@ -192,31 +220,47 @@ export default function GEOWorkspace({ member, notify, onDirtyChange, onBusyChan
   const changed = Boolean(draft && project && JSON.stringify(draft) !== JSON.stringify(project.document));
   const workflow = project?.workflow ?? EMPTY_WORKFLOW;
   const savedBrand = project?.document.brief.brand ?? '';
+  const aiEngines = aiCapture.engines;
+  const supportedEngineNames = useMemo(() => new Set([...aiCapture.engines, ...Object.keys(aiCapture.models ?? {})]
+    .map(engine => engine.normalize('NFKC').trim().toLowerCase())), [aiCapture]);
+  const supportsEngine = (engine: string) => supportedEngineNames.has(engine.normalize('NFKC').trim().toLowerCase());
+  const aiSlots = useMemo(() => {
+    const eligible = (phase: GeoPhase) => availableSlots(workflow, phase, savedBrand, 'apimart');
+    return {
+      baseline: savedBrand && workflow.answers.length < 600 ? eligible('baseline') : [],
+      retest: savedBrand && project?.publication && workflow.answers.length < 600 ? eligible('retest') : [],
+    };
+  }, [workflow, savedBrand, project?.publication]);
   const hasCurrentBaseline = workflow.answers.some(answer => answer.phase === 'baseline' && answer.brand === savedBrand);
   const structure = step === 3 && project?.version ? buildGeoStructuredData(project.document, project.publication) : null;
   const planChanged = Boolean(project && JSON.stringify(plan) !== JSON.stringify(readPlan(workflow)));
   const planInvalid = plan.questions.some(item => !item.prompt.trim()) || !validPlanNames(plan.engines) || !validPlanNames(plan.competitors);
   const gapsChanged = Boolean(project && JSON.stringify(gaps) !== JSON.stringify(workflow.gaps));
-  const captureChanged = Object.values(captures).some(value =>
-    Boolean(value.rawAnswer.trim() || value.citations.length || value.brandMentions || value.competitorMentions.some(item => item.count)));
+  const captureChanged = Object.values(captures).some(hasCaptureDraft);
   const dirty = changed || planChanged || gapsChanged || captureChanged || Object.values(forms).some(value => value.trim().length > 0);
   const canEditWorkflow = project?.canEditWorkflow ?? Boolean(project?.canEdit || project?.canRecord);
   const checkpoints = [workflow.questions.length > 0 && workflow.engines.length > 0,
     workflow.answers.some(answer => answer.phase === 'baseline'), workflow.gaps.length > 0,
     Boolean(project?.publication && workflow.answers.some(answer => answer.phase === 'retest'))];
   const quality = checked?.document === draft ? checked?.quality ?? null : !changed && project?.version ? project.quality : null;
-  const readyBrief = Boolean(draft?.brief.brand.trim() && draft.brief.topic.trim() && draft.brief.question.trim() &&
-    draft.brief.sources.some(source => source.title.trim() && (!source.url.trim() || httpsUrl(source.url)) && source.excerpt.trim()));
+  const readyIdentity = Boolean(draft?.brief.brand.trim() && draft.brief.topic.trim() && draft.brief.question.trim());
+  const readyBrief = readyIdentity && Boolean(draft?.brief.sources.some(source => source.title.trim() &&
+    (!source.url.trim() || httpsUrl(source.url)) && source.excerpt.trim()));
+  const currentAnswerIds = new Set(workflow.answers.filter(answer => answer.brand === savedBrand && answer.phase === 'baseline').map(answer => answer.id));
+  const generationGaps = workflow.gaps.filter(gap => gap.status === 'open' && gap.evidenceAnswerIds.some(id => currentAnswerIds.has(id)))
+    .sort((first, second) => first.priority.localeCompare(second.priority)).slice(0, GAP_GENERATION_LIMIT);
+  const readyGuidedBrief = readyIdentity && Boolean(project?.version && generationGaps.length && draft?.brief.brand.trim() === savedBrand);
 
   const loadList = useCallback(async () => {
     const epoch = ++listEpoch.current;
     setLoading(true);
     setListError('');
     try {
-      const result = await studioRequest<{ projects: GeoSummary[]; modelAvailable: boolean }>('', undefined, PATH);
+      const result = await studioRequest<{ projects: GeoSummary[]; modelAvailable: boolean; aiCapture?: AiCaptureAvailability }>('', undefined, PATH);
       if (mounted.current && epoch === listEpoch.current) {
         setProjects(result.projects);
         setModelAvailable(result.modelAvailable);
+        setAiCapture(result.aiCapture ?? NO_AI_CAPTURE);
       }
     } catch (cause) {
       if (mounted.current && epoch === listEpoch.current) setListError(cause instanceof Error ? cause.message : '读取项目失败，请重试。');
@@ -252,6 +296,12 @@ export default function GEOWorkspace({ member, notify, onDirtyChange, onBusyChan
     setPlan(readPlan(next.workflow ?? EMPTY_WORKFLOW));
     setGaps(next.workflow?.gaps ?? []);
     setCaptures(initialCaptures());
+    if (project?.id !== next.id) {
+      setAiProgress({});
+      setRecoveries({});
+    }
+    setDiagnosisSource('');
+    setArticleSource('');
     setChecked(undefined);
     setForms(initialForms);
     setProjectsOpen(false);
@@ -339,6 +389,18 @@ export default function GEOWorkspace({ member, notify, onDirtyChange, onBusyChan
     if (needsRepair) notify('已用 [0] 标出失去来源的引用，请替换或删除。');
   }
 
+  function rememberProject(next: GeoProject) {
+    setProject(next);
+    if (loading) {
+      void loadList();
+    } else {
+      setProjects(current => [{
+        id: next.id, topic: next.document.brief.topic, title: next.document.article.title,
+        status: next.status, updatedAt: next.updatedAt, mine: current.find(item => item.id === next.id)?.mine ?? true,
+      }, ...current.filter(item => item.id !== next.id)]);
+    }
+  }
+
   function mutate(action: 'save' | 'submit' | 'review' | 'publish' | 'observe' | 'workflow' | 'capture' | 'gaps', fields: object, pendingText: string, success: string,
     onSuccess?: () => void) {
     if (!project) return;
@@ -346,7 +408,7 @@ export default function GEOWorkspace({ member, notify, onDirtyChange, onBusyChan
       const response = await postGeo<{ project: GeoProject }>({ action, id: project.id, version: project.version, ...fields });
       if (!mounted.current) return;
       const next = response.project;
-      setProject(next);
+      rememberProject(next);
       if (action === 'save') {
         setDraft(next.document);
         setChecked(undefined);
@@ -357,14 +419,6 @@ export default function GEOWorkspace({ member, notify, onDirtyChange, onBusyChan
       if (action === 'publish') setForms(current => ({ ...current, url: '', channel: '' }));
       if (action === 'observe') setForms(current => ({ ...current, engine: '', query: '', result: '', evidence: '' }));
       if (action !== 'save' && action !== 'workflow' && action !== 'capture' && action !== 'gaps' && !changed) setDraft(next.document);
-      if (loading) {
-        void loadList();
-      } else {
-        setProjects(current => [{
-          id: next.id, topic: next.document.brief.topic, title: next.document.article.title,
-          status: next.status, updatedAt: next.updatedAt, mine: current.find(item => item.id === next.id)?.mine ?? true,
-        }, ...current.filter(item => item.id !== next.id)]);
-      }
       notify(success);
       onSuccess?.();
     }, true);
@@ -384,6 +438,81 @@ export default function GEOWorkspace({ member, notify, onDirtyChange, onBusyChan
       () => setCaptures(current => ({ ...current, [answer.phase]: emptyCapture() })));
   }
 
+  function captureState(phase: GeoPhase) {
+    const slots = aiSlots[phase];
+    const supported = slots.filter(slot => supportsEngine(slot.engine));
+    const recovery = captureRecovery(workflow, supported.length ? supported : slots, phase, recoveries[phase]);
+    return { slots, supported, recovery };
+  }
+
+  function runAiCapture(phase: GeoPhase, operation: AiOperation) {
+    if (!project?.version || !canEditWorkflow || inFlight.current || hasCaptureDraft(captures[phase])) return;
+    const { slots, supported, recovery } = captureState(phase);
+    const batch = operation === 'start' ? supported.slice(0, AI_BATCH_SIZE)
+      : slots.filter(slot => slot.sampleKey === recovery?.sampleKey && (operation === 'query' || supportsEngine(slot.engine)));
+    if (!batch.length || (operation === 'start' && recovery) ||
+      (operation === 'retry' && (!recovery || recovery.status === 'running'))) return;
+    if (operation === 'retry' && recovery?.status === 'unknown' && !window.confirm('重新发起会提交一次新的模型调用，可能产生新的费用。继续？')) return;
+    const total = batch.length;
+    const label = phase === 'baseline' ? 'AI 基线采样' : 'AI 复测';
+    const update = (completed: number, message: string) => setAiProgress(current => ({ ...current, [phase]: { completed, total, message } }));
+    const remember = (next?: GeoCaptureRecovery) => setRecoveries(current => ({ ...current, [phase]: next }));
+    stopAi.current = false;
+    setStoppingAi(false);
+    setAiPhase(phase);
+    void run(`正在执行${label}…`, async () => {
+      let current = project;
+      let completed = 0;
+      try {
+        for (const { sampleKey, ...slot } of batch) {
+          if (stopAi.current || !mounted.current) break;
+          const requestId = operation === 'query' && recovery ? recovery.id : crypto.randomUUID();
+          update(completed, `已保存 ${completed} / ${total} 份，正在处理 ${slot.engine} 第 ${slot.sample} 次。`);
+          const request = { action: 'capture_ai', id: current.id, version: current.version, slot: { ...slot, phase }, requestId };
+          let result: GeoCaptureResponse;
+          try {
+            result = await postGeo<typeof result>(request);
+          } catch (cause) {
+            if (mounted.current) {
+              if (!(cause instanceof StudioRequestError) || cause.status >= 500) {
+                remember({ id: requestId, sampleKey, status: 'unknown', message: '未能确认上次请求是否完成。' });
+              }
+              update(completed, `本批已保存 ${completed} / ${total} 份，后续位置尚未处理。`);
+            }
+            throw cause;
+          }
+          if (!mounted.current) return;
+          current = result.project;
+          rememberProject(current);
+          if (result.capture.status !== 'saved') {
+            remember({ id: requestId, sampleKey, status: result.capture.status, message: result.capture.message });
+            update(completed, `本批已保存 ${completed} / ${total} 份，当前样本尚未保存。`);
+            return;
+          }
+          remember();
+          completed += 1;
+        }
+        if (!mounted.current) return;
+        update(completed, stopAi.current && completed < total
+          ? `已停止本批，保存了 ${completed} / ${total} 份。` : `本批已保存 ${completed} 份答案。`);
+      } finally {
+        if (mounted.current) {
+          setAiPhase(undefined);
+          setStoppingAi(false);
+        }
+      }
+    }, true);
+  }
+
+  function aiCaptureControls(phase: GeoPhase) {
+    const { supported, recovery } = captureState(phase);
+    return <GeoAiCaptureControls phase={phase} enabledEngines={aiEngines} available={supported.length} batchSize={AI_BATCH_SIZE}
+      active={aiPhase === phase} stopping={stoppingAi} progress={aiProgress[phase]} disabled={busy || hasCaptureDraft(captures[phase])}
+      manualDraft={hasCaptureDraft(captures[phase])} recovery={recovery} canRetry={supported.some(slot => slot.sampleKey === recovery?.sampleKey)}
+      onStart={() => runAiCapture(phase, 'start')} onQuery={() => runAiCapture(phase, 'query')} onRetry={() => runAiCapture(phase, 'retry')}
+      onStop={() => { stopAi.current = true; setStoppingAi(true); }} />;
+  }
+
   function saveGaps() {
     if (gaps.some(gap => !gap.title.trim() || !gap.action.trim() || !gap.evidenceAnswerIds.length)) {
       setError('每条缺口需要标题、补齐建议和至少一条关联答案证据。');
@@ -396,24 +525,34 @@ export default function GEOWorkspace({ member, notify, onDirtyChange, onBusyChan
     if (!project || !modelAvailable || !hasCurrentBaseline) return;
     if (gapsChanged && !window.confirm('用新生成的建议替换当前未保存的缺口编辑？')) return;
     void run('正在诊断信源缺口…', async () => {
-      const response = await postGeo<{ gaps: GeoGap[] }>({ action: 'diagnose', id: project.id, version: project.version });
+      const response = await postGeo<{ gaps: GeoGap[] } & GeoTextSource>({ action: 'diagnose', id: project.id, version: project.version });
       if (!mounted.current) return;
       const existing = project.workflow?.gaps ?? [];
       setGaps([...existing, ...response.gaps].slice(0, 60));
+      setDiagnosisSource(textSourceLabel(response));
       notify(response.gaps.length ? '缺口建议已生成。核对证据后保存。' : '本批答案未生成可核实的缺口建议。');
     }, true);
   }
 
-  function generate() {
-    if (!draft || !readyBrief || !modelAvailable) return;
+  function generate(useGaps = false) {
+    if (!draft || !modelAvailable || (useGaps ? !readyGuidedBrief : !readyBrief)) return;
     if ((draft.article.title || draft.article.markdown || draft.article.summary || draft.article.faq.length) &&
       !window.confirm('用新生成的稿件替换当前稿件？')) return;
     void run('正在生成稿件…', async () => {
-      const { article } = await postGeo<{ article: GeoArticle }>({ action: 'generate', brief: draft.brief });
+      const basis = useGaps && project
+        ? { id: project.id, version: project.version, gapIds: generationGaps.map(gap => gap.id) } : {};
+      const response = await postGeo<{ article: GeoArticle; evidencePending?: boolean } & GeoTextSource>({ action: 'generate', brief: draft.brief, ...basis });
       if (!mounted.current) return;
-      updateDraft({ ...draft, article });
-      notify('稿件已生成，核对事实和引用后保存。');
-    });
+      const document = { ...draft, article: response.article };
+      updateDraft(document);
+      setArticleSource(textSourceLabel(response));
+      notify(response.evidencePending ? '补齐框架已生成，补充可核对的来源后再提交。' : '稿件已生成，核对事实和引用后保存。');
+      if (useGaps) {
+        setPending('正在检查稿件…');
+        const { quality } = await postGeo<{ quality: GeoQuality }>({ action: 'check', document });
+        if (mounted.current) setChecked({ document, quality });
+      }
+    }, useGaps);
   }
 
   function check() {
@@ -514,17 +653,18 @@ export default function GEOWorkspace({ member, notify, onDirtyChange, onBusyChan
               <BriefEditor brief={draft.brief} disabled={busy || !project.canEdit}
                 onChange={brief => updateDraft({ ...draft, brief })} />
             </section>
-            <GeoPlanEditor plan={plan} mainQuestion={draft.brief.question} disabled={busy || !canEditWorkflow} onChange={setPlan} />
+            <GeoPlanEditor plan={plan} mainQuestion={draft.brief.question} disabled={busy || !canEditWorkflow} onChange={setPlan} aiEngines={aiEngines} />
             {planInvalid && <p className="geo-muted">请填写每条追踪问题与引擎、竞品名称，再移除重复的引擎或竞品名称。</p>}
           </>}
           {step === 1 && <>
             <section className="geo-panel" aria-label="基线采样">
-              <div className="geo-field-heading"><h3>基线采样</h3><span className="geo-count">人工采样</span></div>
-              {planChanged && <p className="geo-muted">采样按已保存的计划执行。要应用当前的更改，请先保存建模。</p>}
-              {canEditWorkflow && project.version > 0 && project.document.brief.brand.trim() ? <GeoAnswerCapture
-                workflow={workflow} brand={project.document.brief.brand} phase="baseline" draft={captures.baseline} disabled={busy}
-                onChange={(next: CaptureDraft) => setCaptures(current => ({ ...current, baseline: next }))} onSave={recordCapture} /> :
-                <p className="geo-muted">{canEditWorkflow ? '保存品牌、追踪问题和引擎后，即可录入基线答案。' : '项目作者可以录入基线答案。'}</p>}
+              <h3>基线采样</h3>
+              {(planChanged || draft.brief.brand !== savedBrand) && <p className="geo-muted">采样按已保存的计划执行。要应用当前的更改，请先保存建模。</p>}
+              {canEditWorkflow && project.version > 0 && savedBrand.trim() ? <>
+                {aiCaptureControls('baseline')}
+                <GeoAnswerCapture workflow={workflow} brand={savedBrand} phase="baseline" draft={captures.baseline} disabled={busy}
+                  onChange={(next: CaptureDraft) => setCaptures(current => ({ ...current, baseline: next }))} onSave={recordCapture} />
+              </> : <p className="geo-muted">{canEditWorkflow ? '保存品牌、追踪问题和引擎后，即可采样。' : '项目作者可以保存基线答案。'}</p>}
             </section>
             <section className="geo-panel" aria-label="基线答案记录">
               <div className="geo-field-heading"><h3>基线答案记录</h3><span className="geo-count">{workflow.answers.filter(answer => answer.phase === 'baseline').length} 份</span></div>
@@ -545,10 +685,28 @@ export default function GEOWorkspace({ member, notify, onDirtyChange, onBusyChan
                   <button type="button" className="button primary" disabled={busy || !gapsChanged} onClick={saveGaps}>保存缺口清单</button>
                 </div>}
               </div>
+              {hasCurrentBaseline && modelAvailable && canEditWorkflow && <p className="geo-muted">AI 根据真实基线答案和已有可信来源提出缺口建议，每条建议关联具体答案。核对后可保存。</p>}
+              {diagnosisSource && <p className="geo-muted">建议生成模型 · {diagnosisSource}</p>}
               <GeoGapEditor gaps={gaps} answers={workflow.answers} disabled={busy || !canEditWorkflow} onChange={setGaps} />
             </section>
           </>}
           {step === 3 && <>
+        {generationGaps.length > 0 && <section className="geo-panel" aria-label="按信源缺口补齐">
+          <div className="geo-field-heading">
+            <h3>按信源缺口补齐</h3>
+            {project.canEdit && <button type="button" className="button primary" disabled={busy || !modelAvailable || !readyGuidedBrief} onClick={() => generate(true)}>
+              <Sparkles size={16} aria-hidden="true" />按缺口生成稿件
+            </button>}
+          </div>
+          <p className="geo-muted">按优先级处理下列已保存缺口。事实与引用以可信来源的原文摘录为准。</p>
+          {!readyBrief && readyGuidedBrief && <p className="geo-muted">还没有核对过的摘录，可以先生成补齐框架。</p>}
+          {draft.brief.brand.trim() !== savedBrand && <p className="geo-muted">品牌名称有未保存的更改，请先保存建模并核对缺口。</p>}
+          <ul className="geo-gap-targets">{generationGaps.map(gap => <li key={gap.id}>
+            <span className="geo-count">{gap.priority}</span><strong>{gap.title}</strong>
+          </li>)}</ul>
+          <GeoGapSources gaps={generationGaps} answers={workflow.answers} sources={draft.brief.sources} disabled={busy || !project.canEdit}
+            onAdd={source => updateDraft({ ...draft, brief: { ...draft.brief, sources: [...draft.brief.sources, source] } })} />
+        </section>}
         <div className="geo-columns">
           <section className="geo-panel" aria-label="创作资料">
             <h3>可信来源</h3>
@@ -558,11 +716,12 @@ export default function GEOWorkspace({ member, notify, onDirtyChange, onBusyChan
           <section className="geo-panel" aria-label="文章稿件">
             <div className="geo-field-heading">
               <h3>文章稿件</h3>
-              {project.canEdit && <button type="button" className="button secondary" disabled={busy || !modelAvailable || !readyBrief} onClick={generate}>
+              {project.canEdit && <button type="button" className="button secondary" disabled={busy || !modelAvailable || !readyBrief} onClick={() => generate()}>
                 <Sparkles size={16} aria-hidden="true" />AI 生成稿件
               </button>}
             </div>
             {structure && <p className="geo-muted">结构化数据按已保存的稿件导出。请只保留发布页面上实际可见的问答。</p>}
+            {articleSource && <p className="geo-muted">稿件生成模型 · {articleSource}</p>}
             {project.canEdit && !modelAvailable && <p className="geo-muted">可手动编辑。启用工作台大模型后可以生成稿件。</p>}
             {project.canEdit && modelAvailable && !readyBrief && <p className="geo-muted">填写品牌、选题、主要问题及至少一条完整来源，即可生成稿件。</p>}
             <ArticleEditor article={draft.article} disabled={busy || !project.canEdit} onChange={article => updateDraft({ ...draft, article })} />
@@ -613,8 +772,11 @@ export default function GEOWorkspace({ member, notify, onDirtyChange, onBusyChan
           </div>
           {project.publication ? <>
             <GeoRetestComparison workflow={workflow} brand={savedBrand} />
-            {canEditWorkflow && <GeoAnswerCapture workflow={workflow} brand={project.document.brief.brand} phase="retest"
-              draft={captures.retest} disabled={busy} onChange={next => setCaptures(current => ({ ...current, retest: next }))} onSave={recordCapture} />}
+            {canEditWorkflow && <>
+              {aiCaptureControls('retest')}
+              <GeoAnswerCapture workflow={workflow} brand={savedBrand} phase="retest"
+                draft={captures.retest} disabled={busy} onChange={next => setCaptures(current => ({ ...current, retest: next }))} onSave={recordCapture} />
+            </>}
             <GeoAnswerLog answers={workflow.answers} phase="retest" />
           </> : <p className="geo-muted">登记实际发布回执后，按基线的同一问题、引擎和轮次录入复测答案。</p>}
         </section>

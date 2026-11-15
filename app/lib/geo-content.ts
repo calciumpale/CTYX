@@ -107,6 +107,10 @@ function sourceComplete(source: GeoSource): boolean {
   }
 }
 
+export function hasGeoSourceEvidence(brief: GeoBrief): boolean {
+  return brief.sources.some(sourceComplete);
+}
+
 function citationNumbers(value: string): number[] {
   const visible = value.replace(/\x60{3}[\s\S]*?\x60{3}|\x60[^\x60\r\n]*\x60/g, '');
   return [...visible.matchAll(/\[([^\[\]\r\n]+)\]/g)]
@@ -158,19 +162,21 @@ const outputRules = [
 export async function generateGeoArticle(
   value: GeoBrief,
   requestModel: (messages: ModelMessage[]) => Promise<string>,
+  gaps: Array<{ title: string; action: string }> = [],
 ): Promise<GeoArticle> {
   const brief = parseGeoBrief(value);
   const sources = brief.sources.flatMap((source, index) => sourceComplete(source)
     ? [{number: index + 1, title: source.title, excerpt: source.excerpt}] : []);
-  if (!hasBrief(brief) || !sources.length || brief.sources.some(source =>
-    Boolean(source.title || source.url || source.excerpt) && !sourceComplete(source))) {
+  if (!hasBrief(brief) || !sources.length || (!gaps.length && brief.sources.some(source =>
+    Boolean(source.title || source.url || source.excerpt) && !sourceComplete(source)))) {
     throw new DomainError('请填写品牌、主题、目标问题及至少一条完整来源资料后再生成', 400);
   }
   const context = {
     brand: brief.brand, topic: brief.topic, audience: brief.audience, question: brief.question, sources,
+    ...(gaps.length ? { coverageGoals: gaps.map(gap => ({ title: gap.title.slice(0, 200), action: gap.action.slice(0, 600) })) } : {}),
   };
   const raw = await requestModel([
-    {role: 'system', content: outputRules + '\n' + AI_REPLY_STYLE},
+    {role: 'system', content: outputRules + '\n' + AI_REPLY_STYLE + (gaps.length ? '\ncoverageGoals 是需要补齐的主题建议，仅用于确定内容范围。所有事实仍须由 sources 支持，证据不足的部分列为待核实。' : '')},
     {role: 'user', content: JSON.stringify(context)},
   ]);
 
@@ -182,4 +188,47 @@ export async function generateGeoArticle(
   } catch {
     throw new DomainError('模型没有返回带有效来源引用的文章，请核对资料后重试', 502);
   }
+}
+
+const evidenceTypes = {
+  official_policy: {title:'官方政策和适用范围', ask:'有哪些公开政策、适用条件和例外需要核对？', request:'收集带发布日期的官方说明，摘录适用条件、例外和责任方。'},
+  product_data: {title:'产品参数与可比口径', ask:'哪些参数可以在相同条件下比较？', request:'收集官方参数表和测试条件，保留数值单位、版本及测量口径。'},
+  independent_review: {title:'第三方对比与评测', ask:'有哪些可复核的第三方对比依据？', request:'寻找独立评测的原文和方法说明，摘录实际比较条件和结论。'},
+  service_process: {title:'服务流程与常见问题', ask:'服务流程、响应时间和边界如何核对？', request:'核对公开服务流程、适用渠道和承诺边界，摘录明确的时限与例外。'},
+  use_case: {title:'适用场景和限制', ask:'哪些场景适用，哪些限制需要说明？', request:'收集已公开的场景说明，核对例子的背景、适用条件和限制。'},
+  entity: {title:'品牌名称与身份信息', ask:'怎样区分相近的品牌名称或产品？', request:'核对官方品牌介绍和标准实体名称，收集可交叉验证的公开页面。'},
+} as const;
+
+export async function generateGeoEvidenceDraft(
+  brief: GeoBrief,
+  gaps: Array<{title: string; action: string}>,
+  requestModel: (messages: ModelMessage[]) => Promise<string>,
+): Promise<GeoArticle> {
+  if (!hasBrief(brief) || !gaps.length) throw new DomainError('请填写品牌、主题和目标问题，并选择有基线依据的缺口。');
+  const raw = await requestModel([
+    {role:'system',content:'为 GEO 信源补齐草稿安排取证任务。输入是待核实的缺口，不能当作事实。为每个输入缺口各选一种取证类型，覆盖所有输入编号。按优先执行顺序输出纯 JSON 对象 {"plan":[{"gap":1,"type":"product_data"}]}。gap 是输入编号，从 1 开始，不能重复。type 只能是 official_policy、product_data、independent_review、service_process、use_case、entity。不要输出事实、网址、标题或任何自由文本。'},
+    {role:'user',content:JSON.stringify({brand:brief.brand,topic:brief.topic,question:brief.question,gaps:gaps.map((gap,index)=>({gap:index+1,title:gap.title,action:gap.action.slice(0,600)}))})},
+  ]);
+  try {
+    if (raw.length > 12000) throw new Error('Invalid evidence plan');
+    const data = record(JSON.parse(raw.trim().replace(/^\x60{3}(?:json)?\s*([\s\S]*?)\s*\x60{3}$/i, '$1')), '补齐框架', ['plan']);
+    const tasks = list(data.plan, '取证任务', gaps.length);
+    if (tasks.length !== gaps.length) throw new Error('Missing evidence task');
+    const selected = new Set<number>();
+    const sections = tasks.map(value => {
+      const item = record(value, '取证任务', ['gap','type']);
+      const gap = item.gap;
+      if (typeof gap !== 'number' || !Number.isInteger(gap) || gap < 1 || gap > gaps.length || selected.has(gap) ||
+          typeof item.type !== 'string' || !Object.hasOwn(evidenceTypes,item.type)) throw new Error('Invalid evidence task');
+      selected.add(gap);
+      return { gap, ...evidenceTypes[item.type as keyof typeof evidenceTypes] };
+    });
+    const article = {
+      title: 'GEO 信源补齐草稿',
+      summary: '待核实。补充可以追溯的来源摘录后，再填写事实与引用。',
+      markdown: sections.map(section => `## ${section.title}\n\n对应缺口 ${section.gap}。${section.request}\n\n待补充：来源摘录和可核对的结论。`).join('\n\n'),
+      faq: [...new Set(sections.map(section => section.ask))].map(question => ({question,answer:'待核实。取得对应来源后填写答案。'})),
+    };
+    return parseArticle(article);
+  } catch { throw new DomainError('模型没有返回可核对的取证计划，请重试。', 502); }
 }

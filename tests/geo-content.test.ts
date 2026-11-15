@@ -1,7 +1,7 @@
 import { buildGeoStructuredData } from '../app/lib/geo-structured-data.ts';
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {checkGeoQuality, generateGeoArticle, geoPublicUrl, parseGeoBrief, parseGeoDocument} from '../app/lib/geo-content.ts';
+import {checkGeoQuality, generateGeoArticle, generateGeoEvidenceDraft, geoPublicUrl, parseGeoBrief, parseGeoDocument} from '../app/lib/geo-content.ts';
 import {emptyGeoDocument} from '../app/lib/geo-types.ts';
 
 const brief = {
@@ -66,6 +66,20 @@ test('generation sends explicitly numbered evidence and rejects model citations 
   assert.deepEqual(output, article);
   await assert.rejects(generateGeoArticle(brief, async () => JSON.stringify({...article, markdown: '正文中的引用不正确。[5]'})), {status: 502});
   await assert.rejects(generateGeoArticle({...brief, sources: []}, async () => assert.fail('未提供证据时不应调用模型')), {status: 400});
+});
+
+test('gap-based generation without sources produces a non-publishable evidence plan and refuses improvised claims', async () => {
+  const unverified={...brief,sources:[]};
+  const gaps=[{title:'核对冷萃参数',action:'收集可对比的制造商参数'}];
+  const draft=await generateGeoEvidenceDraft(unverified,gaps,async messages=>{
+    assert.deepEqual(JSON.parse(messages[1].content).gaps,[{gap:1,...gaps[0]}]);
+    return JSON.stringify({plan:[{gap:1,type:'product_data'}]});
+  });
+  assert.match(draft.markdown,/产品参数与可比口径/);
+  assert.doesNotMatch(draft.markdown,/\[\d+\]|https?:/);
+  assert.equal(checkGeoQuality({brief:unverified,article:draft}).ready,false);
+  await assert.rejects(generateGeoEvidenceDraft(unverified,gaps,async()=>JSON.stringify({plan:[{gap:1,type:'product_data',claim:'未经验证的数据'}]})),{status:502});
+  await assert.rejects(generateGeoEvidenceDraft(unverified,gaps,async()=>JSON.stringify({plan:[{gap:2,type:'product_data'}]})),{status:502});
 });
 
 

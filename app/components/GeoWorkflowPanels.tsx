@@ -1,21 +1,26 @@
 'use client';
 
-import { ChevronDown, Plus, Trash2 } from 'lucide-react';
+import { ChevronDown, Plus, Sparkles, Trash2 } from 'lucide-react';
 import { useId, type FormEvent } from 'react';
 import { compareGeoMetrics, computeGeoMetrics, geoSampleKey } from '../lib/geo-metrics';
 import {
   GEO_QUESTION_DIMENSIONS, GEO_QUESTION_INTENTS, type GeoAnswer, type GeoAnswerInput, type GeoBrief, type GeoGap,
-  type GeoQuestion, type GeoWorkflow, type GeoWorkflowPlan,
+  type GeoQuestion, type GeoSource, type GeoWorkflow, type GeoWorkflowPlan,
 } from '../lib/geo-types';
 
 export type GeoPlan = GeoWorkflowPlan;
 type Phase = GeoAnswer['phase'];
 type Slot = Pick<GeoAnswer, 'questionId' | 'engine' | 'sample'>;
+export type GeoSampleSlot = Slot & { sampleKey: string };
 export type CaptureInput = GeoAnswerInput;
-export type CaptureDraft = Omit<CaptureInput, 'phase'>;
+export type CaptureDraft = Omit<CaptureInput, 'phase'> & { sampleKey?: string };
 
 export function emptyCapture(): CaptureDraft {
   return { id: '', questionId: '', engine: '', sample: 1, rawAnswer: '', citations: [], brandMentions: 0, brandRank: null, competitorMentions: [] };
+}
+
+export function hasCaptureDraft(value: CaptureDraft) {
+  return Boolean(value.rawAnswer.trim() || value.citations.length || value.brandMentions || value.competitorMentions.some(item => item.count));
 }
 
 const dateTime = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'short', timeStyle: 'short', timeZone: 'Asia/Shanghai' });
@@ -56,11 +61,12 @@ function NamedList({ label, values, max, onChange, suggestions = [] }: {
   </fieldset>;
 }
 
-export function GeoPlanEditor({ plan, mainQuestion, disabled, onChange }: {
+export function GeoPlanEditor({ plan, mainQuestion, disabled, onChange, aiEngines }: {
   plan: GeoPlan;
   mainQuestion: string;
   disabled: boolean;
   onChange: (plan: GeoPlan) => void;
+  aiEngines: string[];
 }) {
   return <div className="geo-columns geo-plan-columns">
     <section className="geo-panel" aria-label="追踪问题">
@@ -103,29 +109,95 @@ export function GeoPlanEditor({ plan, mainQuestion, disabled, onChange }: {
       <h3>采样设置</h3>
       <fieldset className="geo-fields" disabled={disabled}>
         <legend className="geo-visually-hidden">采样范围</legend>
-        <NamedList label="AI 引擎" values={plan.engines} max={12} suggestions={['DeepSeek', '豆包', 'Kimi', 'ChatGPT', '元宝', '夸克']}
+        <NamedList label="AI 引擎" values={plan.engines} max={12} suggestions={[...new Set([...aiEngines, 'DeepSeek', '豆包', 'Kimi', 'ChatGPT', '元宝', '夸克'])]}
           onChange={engines => onChange({ ...plan, engines })} />
         <label>每个问题在每个引擎重复的次数<select className="select" value={plan.repeats}
           onChange={event => onChange({ ...plan, repeats: Number(event.target.value) })}>
           {[1, 2, 3, 4, 5].map(count => <option key={count} value={count}>{count} 次</option>)}
         </select></label>
         <NamedList label="竞品" values={plan.competitors} max={20} onChange={competitors => onChange({ ...plan, competitors })} />
-        <p className="geo-muted">引擎用于规划人工采样。回答结果需在实际引擎中查询后录入。</p>
+        <p className="geo-muted">{aiEngines.length
+          ? `APIMart 可以自动采样 ${aiEngines.join('、')}。其他引擎可人工录入。`
+          : '连接支持的 APIMart 模型后可自动采样，也可在引擎中查询后人工录入。'}</p>
       </fieldset>
     </section>
   </div>;
 }
 
-function availableSlots(workflow: GeoWorkflow, phase: Phase, brand: string): Slot[] {
+export function availableSlots(workflow: GeoWorkflow, phase: Phase, brand: string, method: GeoAnswer['method'] = 'manual'): GeoSampleSlot[] {
   const taken = new Set(workflow.answers.filter(answer => answer.phase === phase).map(geoSampleKey));
-  const baseline = new Set(phase === 'retest' ? workflow.answers.filter(answer => answer.phase === 'baseline').map(geoSampleKey) : []);
+  const baseline = new Set(phase === 'retest'
+    ? workflow.answers.filter(answer => answer.phase === 'baseline' && (answer.method ?? 'manual') === method).map(geoSampleKey) : []);
   return workflow.questions.flatMap(question => workflow.engines.flatMap(engine =>
     Array.from({ length: workflow.repeats }, (_, position) => {
       const slot: Slot = { questionId: question.id, engine, sample: position + 1 };
       const key = geoSampleKey({ ...slot, brand: brand.trim(), prompt: question.prompt, dimension: question.dimension, intent: question.intent });
-      return taken.has(key) || (phase === 'retest' && !baseline.has(key)) ? [] : [slot];
+      return taken.has(key) || (phase === 'retest' && !baseline.has(key)) ? [] : [{ ...slot, sampleKey: key }];
     }).flat(),
   ));
+}
+
+export interface GeoCaptureProgress {
+  completed: number;
+  total: number;
+  message: string;
+}
+
+export interface GeoCaptureRecovery {
+  id: string;
+  status: 'running' | 'failed' | 'unknown';
+  sampleKey: string;
+  message?: string;
+}
+
+export function GeoAiCaptureControls({ phase, enabledEngines, available, batchSize, progress, recovery, disabled, canRetry, active, stopping, manualDraft,
+  onStart, onStop, onQuery, onRetry }: {
+  phase: Phase;
+  enabledEngines: string[];
+  available: number;
+  batchSize: number;
+  progress?: GeoCaptureProgress;
+  recovery?: GeoCaptureRecovery;
+  disabled: boolean;
+  canRetry: boolean;
+  active: boolean;
+  stopping: boolean;
+  manualDraft: boolean;
+  onStart: () => void;
+  onStop: () => void;
+  onQuery: () => void;
+  onRetry: () => void;
+}) {
+  const isRetest = phase === 'retest';
+  const action = isRetest ? 'AI 自动复测' : 'AI 自动采样';
+  return <div className="geo-ai-sampling">
+    <div className="geo-field-heading">
+      <h4>{action}</h4>
+      <div className="geo-actions">
+        {active ? <button type="button" className="button secondary" disabled={stopping} onClick={onStop}>
+          {stopping ? '等待本条结束' : '停止本批'}
+        </button> : recovery ? <>
+          {recovery.status !== 'failed' && <button type="button" className="button secondary" disabled={disabled} onClick={onQuery}>查询上次采样</button>}
+          {recovery.status !== 'running' && <button type="button" className="button primary" disabled={disabled || !canRetry} onClick={onRetry}>重新发起采样</button>}
+        </> : <button type="button" className="button primary" disabled={disabled || available === 0} onClick={onStart}>
+          <Sparkles size={16} aria-hidden="true" />{action}
+        </button>}
+      </div>
+    </div>
+    <p className="geo-muted">{enabledEngines.length
+      ? available ? `还有 ${available} 个可自动处理的采样位置，每批最多 ${batchSize} 个。结果来自 APIMart 模型接口，可能与引擎官网显示不同。`
+        : isRetest ? '自动复测需要由 APIMart 采集的同组基线，并使用相同的模型和检索设置。'
+          : '已保存计划中没有可自动采样的位置。请检查引擎选择或查看已采样答案。'
+      : 'APIMart 自动采样当前不可用。可使用下方的人工录入。'}</p>
+    {manualDraft && <p className="geo-muted">保存或清空下方人工录入草稿后，可开始自动采样。</p>}
+    {recovery && !active && <p className="geo-muted">{
+      recovery.message || (recovery.status === 'failed' ? '上次采样未能保存。' : '上次采样结果仍待确认。')
+    }{recovery.status === 'unknown' ? ' 查询保留原请求，重新发起可能产生新的调用费用。' : ''}</p>}
+    <div className="geo-capture-progress">
+      {progress && <progress aria-label={`${action}进度`} max={progress.total} value={progress.completed} />}
+      <p role="status" className="geo-muted">{progress?.message}</p>
+    </div>
+  </div>;
 }
 
 export function GeoAnswerCapture({ workflow, brand, phase, draft, onChange, onSave, disabled }: {
@@ -139,22 +211,27 @@ export function GeoAnswerCapture({ workflow, brand, phase, draft, onChange, onSa
 }) {
   const formId = useId();
   const slots = availableSlots(workflow, phase, brand);
+  const hasDraft = hasCaptureDraft(draft);
+  const clear = hasDraft && <button type="button" className="button ghost" disabled={disabled}
+    onClick={() => onChange(emptyCapture())}>清空录入草稿</button>;
   if (workflow.answers.length >= 600) return <p className="geo-muted">本项目已达到 600 份答案记录，可新建项目继续采样。</p>;
-  if (!slots.length) return <p className="geo-muted">{phase === 'retest'
-    ? '暂无可复测的采样位置。保留原有问题、品牌和引擎，并先记录一份同轮次基线答案。'
-    : '暂无可用的采样位置。请先保存追踪问题和引擎；已填满的采样位置会显示在答案记录中。'}</p>;
+  if (!slots.length) return <div className="geo-actions"><p className="geo-muted">{phase === 'retest'
+    ? '暂无可人工录入的复测位置。人工复测需要同一问题、引擎与轮次的人工基线答案。'
+    : '暂无可用的采样位置。请先保存追踪问题和引擎；已填满的采样位置会显示在答案记录中。'}</p>{clear}</div>;
   const questionIds = new Set(slots.map(slot => slot.questionId));
   const questionId = questionIds.has(draft.questionId) ? draft.questionId : slots[0].questionId;
   const questionSlots = slots.filter(slot => slot.questionId === questionId);
   const engines = new Set(questionSlots.map(slot => slot.engine));
   const engine = engines.has(draft.engine) ? draft.engine : questionSlots[0].engine;
   const engineSlots = questionSlots.filter(slot => slot.engine === engine);
-  const sample = engineSlots.some(slot => slot.sample === draft.sample) ? draft.sample : engineSlots[0].sample;
-  const patch = (changes: Partial<CaptureDraft>) => onChange({ ...draft, ...changes });
+  const selection = engineSlots.find(slot => slot.sample === draft.sample) ?? engineSlots[0];
+  const moved = hasDraft && selection.sampleKey !== draft.sampleKey;
+  const patch = (changes: Partial<CaptureDraft>) => onChange({ ...draft, ...(hasDraft ? {} : selection), ...changes });
   const updateCitation = (index: number, changes: Partial<GeoAnswer['citations'][number]>) =>
     patch({ citations: draft.citations.map((item, position) => position === index ? { ...item, ...changes } : item) });
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (moved) return;
     if (!draft.rawAnswer.trim()) {
       const field = event.currentTarget.elements.namedItem('rawAnswer');
       if (field instanceof HTMLTextAreaElement) {
@@ -165,7 +242,8 @@ export function GeoAnswerCapture({ workflow, brand, phase, draft, onChange, onSa
     }
     const id = draft.id || crypto.randomUUID();
     patch({ id });
-    onSave({ ...draft, id, questionId, engine, sample, phase, brandRank: draft.brandMentions ? draft.brandRank : null,
+    onSave({ id, questionId, engine, sample: selection.sample, phase, rawAnswer: draft.rawAnswer, citations: draft.citations,
+      brandMentions: draft.brandMentions, brandRank: draft.brandMentions ? draft.brandRank : null,
       competitorMentions: draft.competitorMentions.filter(item => workflow.competitors.includes(item.name)) });
   }
   return <form className="geo-fields" aria-labelledby={formId} onSubmit={submit}>
@@ -173,17 +251,31 @@ export function GeoAnswerCapture({ workflow, brand, phase, draft, onChange, onSa
     <p className="geo-muted">记录实际查询得到的回答原文、推荐位次及引用页面。每一轮使用一份独立答案。</p>
     <fieldset className="geo-fields" disabled={disabled}>
       <legend className="geo-visually-hidden">采样答案详情</legend>
+      {moved && <div className="geo-notice">
+        这份草稿原来对应的采样位置已变化。核对当前问题、引擎和轮次后再提交。
+        <button type="button" className="button secondary" onClick={() => patch(selection)}>使用当前采样位置</button>
+      </div>}
       <label>采样问题<select name="questionId" className="select" value={questionId}
-        onChange={event => patch({ questionId: event.target.value, sample: 1 })}>
+        onChange={event => {
+          const next = slots.find(slot => slot.questionId === event.target.value && slot.engine === engine) ??
+            slots.find(slot => slot.questionId === event.target.value);
+          if (next) patch(next);
+        }}>
         {workflow.questions.filter(question => questionIds.has(question.id)).map(question =>
           <option key={question.id} value={question.id}>{question.prompt}</option>)}
       </select></label>
       <div className="geo-field-pair">
         <label>采样引擎<select name="engine" className="select" value={engine}
-          onChange={event => patch({ engine: event.target.value, sample: 1 })}>
+          onChange={event => {
+            const next = questionSlots.find(slot => slot.engine === event.target.value);
+            if (next) patch(next);
+          }}>
           {[...engines].map(value => <option key={value}>{value}</option>)}
         </select></label>
-        <label>采样轮次<select name="sample" className="select" value={sample} onChange={event => patch({ sample: Number(event.target.value) })}>
+        <label>采样轮次<select name="sample" className="select" value={selection.sample} onChange={event => {
+          const next = engineSlots.find(slot => slot.sample === Number(event.target.value));
+          if (next) patch(next);
+        }}>
           {engineSlots.map(slot => <option key={slot.sample} value={slot.sample}>第 {slot.sample} 次</option>)}
         </select></label>
       </div>
@@ -218,7 +310,8 @@ export function GeoAnswerCapture({ workflow, brand, phase, draft, onChange, onSa
       <div className="geo-actions">
         <button type="button" className="button ghost" disabled={draft.citations.length >= 20}
           onClick={() => patch({ citations: [...draft.citations, { title: '', url: '', brandSource: false }] })}><Plus size={15} aria-hidden="true" />添加答案引用</button>
-        <button type="submit" className="button primary">保存答案记录</button>
+        {clear}
+        <button type="submit" className="button primary" disabled={moved}>保存答案记录</button>
       </div>
     </fieldset>
   </form>;
@@ -236,7 +329,9 @@ export function GeoAnswerLog({ answers, phase }: { answers: GeoAnswer[]; phase: 
           <ChevronDown size={15} aria-hidden="true" />
         </summary>
         <div className="geo-answer-detail">
-          <p className="geo-muted">人工采样{answer.brand ? ` · ${answer.brand}` : ''}{answer.brandRank ? ` · 位次 ${answer.brandRank}` : ''}</p>
+          <p className="geo-muted">{answer.method === 'apimart'
+            ? `APIMart 模型接口${answer.provenance?.model ? ` · ${answer.provenance.model}` : ''}${answer.provenance?.webSearch ? ' · 已启用检索' : ' · 未启用检索'}${answer.provenance?.annotations === 'provider' ? ' · 接口返回引用' : ' · 接口未提供引用信息'}`
+            : '人工采样'}{answer.brand ? ` · ${answer.brand}` : ''}{answer.brandRank ? ` · 位次 ${answer.brandRank}` : ''}</p>
           <p>{answer.rawAnswer}</p>
           {answer.citations.length > 0 && <ul className="geo-citations">
             {answer.citations.map((item, index) => <li key={index}>
@@ -253,6 +348,7 @@ export function GeoAnswerLog({ answers, phase }: { answers: GeoAnswer[]; phase: 
 
 export function GeoVisibility({ workflow, brand }: { workflow: GeoWorkflow; brand: string }) {
   const metrics = computeGeoMetrics(workflow, 'baseline', brand);
+  const apiSamples = workflow.answers.filter(answer => answer.phase === 'baseline' && answer.brand === brand && answer.method === 'apimart').length;
   const ranks = workflow.answers.filter(answer => answer.phase === 'baseline' && answer.brand === brand && answer.brandRank !== null)
     .reduce<Record<number, number>>((counts, answer) => {
       const rank = answer.brandRank!;
@@ -263,9 +359,12 @@ export function GeoVisibility({ workflow, brand }: { workflow: GeoWorkflow; bran
     <div className="geo-field-heading"><h3>品牌可见性诊断</h3><span className="geo-count">基线 · {metrics.samples} 份答案</span></div>
     <dl className="geo-stat-grid">
       <div><dt>品牌提及率</dt><dd>{labelNumber(metrics.mentionRate, '%')}</dd></div>
-      <div><dt>首推率</dt><dd>{labelNumber(metrics.firstRecommendationRate, '%')}</dd></div>
-      <div><dt>品牌信源引用率</dt><dd>{labelNumber(metrics.citationRate, '%')}</dd></div>
+      <div><dt>首推率</dt><dd>{labelNumber(metrics.firstRecommendationRate, '%')}</dd>
+        {metrics.firstRecommendationSamples < metrics.samples && <small className="geo-metric-detail">{metrics.firstRecommendationSamples} 份可判定</small>}</div>
+      <div><dt>品牌信源引用率</dt><dd>{labelNumber(metrics.citationRate, '%')}</dd>
+        {metrics.citationSamples < metrics.samples && <small className="geo-metric-detail">{metrics.citationSamples} 份可核对</small>}</div>
     </dl>
+    {apiSamples > 0 && <p className="geo-muted">APIMart {apiSamples} 份 · 人工 {metrics.samples - apiSamples} 份。接口缺失的排名和引用信息不计入对应指标。</p>}
     {!metrics.samples ? <p className="geo-muted">记录基线答案后显示诊断。每项比率按实际录入的样本计算。</p> : <>
       <div className="geo-field-pair">
         <section className="geo-stat-breakdown"><h4>按引擎</h4>
@@ -335,18 +434,63 @@ export function GeoGapEditor({ gaps, answers, disabled, onChange }: {
   </fieldset>;
 }
 
+export function GeoGapSources({ gaps, answers, sources, disabled, onAdd }: {
+  gaps: GeoGap[];
+  answers: GeoAnswer[];
+  sources: GeoSource[];
+  disabled: boolean;
+  onAdd: (source: GeoSource) => void;
+}) {
+  const evidenceIds = new Set(gaps.flatMap(gap => gap.evidenceAnswerIds));
+  const existingUrls = new Set(sources.map(source => source.url));
+  const candidates = new Map<string, { source: GeoSource; provenance: string }>();
+  for (const answer of answers) {
+    if (!evidenceIds.has(answer.id)) continue;
+    for (const citation of answer.citations) {
+      try {
+        const url = new URL(citation.url);
+        if (url.protocol !== 'https:' || url.username || url.password || existingUrls.has(url.href) || candidates.has(url.href)) continue;
+        candidates.set(url.href, {
+          source: { title: (citation.title || url.hostname).slice(0, 160), url: url.href, excerpt: '' },
+          provenance: answer.method === 'apimart' ? `APIMart · ${answer.provenance?.model || answer.engine}` : `人工采样 · ${answer.engine}`,
+        });
+      } catch { /* Ignore invalid legacy citation URLs. */ }
+    }
+  }
+  if (!candidates.size) return null;
+  return <details className="geo-gap-sources">
+    <summary>答案中的候选来源（{candidates.size}）</summary>
+    <p className="geo-muted">这些链接来自缺口关联的答案。添加后，请打开原页面核对，并填写可引用的原文摘录。</p>
+    <ul className="geo-gap-evidence">
+      {[...candidates.values()].slice(0, 12).map(({ source, provenance }) => <li key={source.url}>
+        <div><a href={source.url} target="_blank" rel="noreferrer">{source.title}</a><small>{provenance}</small></div>
+        <button type="button" className="button ghost" disabled={disabled || sources.length >= 8}
+          aria-label={`添加候选来源 ${source.title}`} onClick={() => onAdd(source)}><Plus size={15} aria-hidden="true" />添加</button>
+      </li>)}
+    </ul>
+  </details>;
+}
+
 export function GeoRetestComparison({ workflow, brand }: { workflow: GeoWorkflow; brand: string }) {
   const { baseline, retest } = compareGeoMetrics(workflow, brand);
   if (!retest.samples) return <p className="geo-muted">完成同一问题、引擎和轮次的复测后，会显示与基线的对照。</p>;
   return <>
-    <p className="geo-muted">{retest.samples} 组相同采样位置的实测对照。</p>
+    <p className="geo-muted">{retest.samples} 组同问题、同引擎、同采样方式的实测对照。</p>
     <table className="geo-comparison-table">
       <caption className="geo-visually-hidden">同批样本基线与复测对照</caption>
       <thead><tr><th scope="col">指标</th><th scope="col">基线</th><th scope="col">复测</th></tr></thead>
       <tbody>
         <tr><th scope="row">品牌提及率</th><td>{labelNumber(baseline.mentionRate, '%')}</td><td>{labelNumber(retest.mentionRate, '%')}</td></tr>
-        <tr><th scope="row">首推率</th><td>{labelNumber(baseline.firstRecommendationRate, '%')}</td><td>{labelNumber(retest.firstRecommendationRate, '%')}</td></tr>
-        <tr><th scope="row">品牌信源引用率</th><td>{labelNumber(baseline.citationRate, '%')}</td><td>{labelNumber(retest.citationRate, '%')}</td></tr>
+        <tr><th scope="row">首推率</th>
+          <td>{labelNumber(baseline.firstRecommendationRate, '%')}{baseline.firstRecommendationSamples < baseline.samples &&
+            <small className="geo-metric-detail">{baseline.firstRecommendationSamples} 份可判定</small>}</td>
+          <td>{labelNumber(retest.firstRecommendationRate, '%')}{retest.firstRecommendationSamples < retest.samples &&
+            <small className="geo-metric-detail">{retest.firstRecommendationSamples} 份可判定</small>}</td></tr>
+        <tr><th scope="row">品牌信源引用率</th>
+          <td>{labelNumber(baseline.citationRate, '%')}{baseline.citationSamples < baseline.samples &&
+            <small className="geo-metric-detail">{baseline.citationSamples} 份可核对</small>}</td>
+          <td>{labelNumber(retest.citationRate, '%')}{retest.citationSamples < retest.samples &&
+            <small className="geo-metric-detail">{retest.citationSamples} 份可核对</small>}</td></tr>
       </tbody>
     </table>
   </>;
@@ -364,15 +508,18 @@ export function downloadGeoReport(brief: GeoBrief, workflow: GeoWorkflow) {
   const rows = (scope: Record<string, ReturnType<typeof computeGeoMetrics>['byEngine'][string]>, format: (key: string) => string) =>
     Object.entries(scope).map(([key, data]) => `- ${reportText(format(key))}：${data.samples} 份，品牌提及 ${percent(data.mentionRate)}，首推 ${percent(data.firstRecommendationRate)}，品牌信源引用 ${percent(data.citationRate)}。`);
   const byAnswerId = new Map(workflow.answers.map(answer => [answer.id, answer]));
+  const baselineAnswers = workflow.answers.filter(answer => answer.brand === brief.brand && answer.phase === 'baseline');
+  const apiCount = baselineAnswers.filter(answer => answer.method === 'apimart').length;
   const title = `${brief.brand || brief.topic || 'GEO'} 信源诊断报告`;
   const content = [
     `# ${reportText(title)}`, '',
-    '数据来自项目成员人工录入的实际答案。比率以有效样本数为分母。', '',
+    '样本来自人工记录或 APIMart 实际模型调用。APIMart 接口结果可能与引擎官网显示不同。比率以可核验的样本为分母。', '',
     '## 品牌可见性基线', '',
     `- 实际样本：${metrics.samples} 份`,
+    `- APIMart 接口：${apiCount} 份；人工记录：${baselineAnswers.length - apiCount} 份`,
     `- 品牌提及率：${percent(metrics.mentionRate)}`,
-    `- 首推率：${percent(metrics.firstRecommendationRate)}`,
-    `- 品牌信源引用率：${percent(metrics.citationRate)}`, '',
+    `- 首推率：${percent(metrics.firstRecommendationRate)}（${metrics.firstRecommendationSamples} 份可判定）`,
+    `- 品牌信源引用率：${percent(metrics.citationRate)}（${metrics.citationSamples} 份可核对）`, '',
     '### 按引擎', '', ...rows(metrics.byEngine, key => key), '',
     '### 按意图', '', ...rows(metrics.byIntent, key => GEO_QUESTION_INTENTS[key as keyof typeof GEO_QUESTION_INTENTS] ?? key), '',
     '## 信源缺口清单', '',
@@ -390,8 +537,8 @@ export function downloadGeoReport(brief: GeoBrief, workflow: GeoWorkflow) {
     ...(pairs.samples ? [`${pairs.samples} 组相同问题、引擎与轮次的实际样本。`, '',
       '| 指标 | 基线 | 复测 |', '| --- | --- | --- |',
       `| 品牌提及率 | ${percent(pairs.baseline.mentionRate)} | ${percent(pairs.retest.mentionRate)} |`,
-      `| 首推率 | ${percent(pairs.baseline.firstRecommendationRate)} | ${percent(pairs.retest.firstRecommendationRate)} |`,
-      `| 品牌信源引用率 | ${percent(pairs.baseline.citationRate)} | ${percent(pairs.retest.citationRate)} |`,
+      `| 首推率 | ${percent(pairs.baseline.firstRecommendationRate)}（${pairs.baseline.firstRecommendationSamples} 份） | ${percent(pairs.retest.firstRecommendationRate)}（${pairs.retest.firstRecommendationSamples} 份） |`,
+      `| 品牌信源引用率 | ${percent(pairs.baseline.citationRate)}（${pairs.baseline.citationSamples} 份） | ${percent(pairs.retest.citationRate)}（${pairs.retest.citationSamples} 份） |`,
     ] : ['暂无与基线匹配的复测样本。']), '',
   ].join('\n');
   downloadGeoFile(title, 'md', 'text/markdown', content);

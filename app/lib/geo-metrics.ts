@@ -14,8 +14,8 @@ function totals(answers: GeoAnswer[], rankKnown: (answer: GeoAnswer, index: numb
     mentionRate: rate(mentions, samples), firstRecommendationRate: rate(firstRecommendations, firstRecommendationSamples), citationRate: rate(citations, citationSamples) };
 }
 
-const knownRank = (answer: GeoAnswer) => answer.method !== 'apimart' || answer.brandMentions === 0 || answer.brandRank !== null;
-const knownCitations = (answer: GeoAnswer) => answer.method !== 'apimart' || answer.provenance?.annotations === 'provider';
+const knownRank = (answer: GeoAnswer) => (answer.method ?? 'manual') === 'manual' || answer.brandMentions === 0 || answer.brandRank !== null;
+const knownCitations = (answer: GeoAnswer) => (answer.method ?? 'manual') === 'manual' || answer.provenance?.annotations === 'provider';
 
 function grouped(answers: GeoAnswer[], attribute: 'engine' | 'intent') {
   const groups = new Map<string, GeoAnswer[]>();
@@ -37,7 +37,7 @@ export function geoSampleKey(answer: Pick<GeoAnswer, 'brand' | 'questionId' | 'p
 }
 
 export function geoComparableSampleKey(answer: GeoAnswer): string {
-  const source = answer.method === 'apimart' ? answer.provenance : undefined;
+  const source = answer.method !== 'manual' ? answer.provenance : undefined;
   return JSON.stringify([geoSampleKey(answer), answer.method ?? 'manual', source?.provider, source?.model, source?.webSearch]);
 }
 

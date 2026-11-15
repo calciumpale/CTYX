@@ -10,8 +10,8 @@ import { preferredScrollBehavior } from '../lib/scroll-behavior';
 import GeoKnowledgePicker from './GeoKnowledgePicker';
 import {
   availableSlots, downloadGeoFile, downloadGeoReport, emptyCapture, GeoAiCaptureControls, GeoAnswerCapture, GeoAnswerLog,
-  GeoGapEditor, GeoGapSources, GeoPlanEditor, GeoRetestComparison, GeoVisibility, hasCaptureDraft, type CaptureDraft, type CaptureInput,
-  type GeoCaptureProgress, type GeoCaptureRecovery, type GeoPlan, type GeoSampleSlot,
+  GEO_CAPTURE_PROVIDER_LABELS, GeoGapEditor, GeoGapSources, GeoPlanEditor, GeoRetestComparison, GeoVisibility, hasCaptureDraft,
+  type CaptureDraft, type CaptureInput, type GeoCaptureEngine, type GeoCaptureModel, type GeoCaptureProgress, type GeoCaptureRecovery, type GeoPlan, type GeoSampleSlot,
 } from './GeoWorkflowPanels';
 import './geo-workspace.css';
 
@@ -28,8 +28,16 @@ type GeoStep = 0 | 1 | 2 | 3;
 type AiOperation = 'start' | 'query' | 'retry';
 type PhaseState<T> = Partial<Record<GeoPhase, T>>;
 type GeoTextSource = { provider?: 'apimart' | 'workspace'; model?: string };
-type AiCaptureAvailability = { engines: string[]; models?: Record<string, { model: string; webSearch: boolean }> };
+type CatalogModel = { model: string; webSearch: boolean; provider?: GeoCaptureModel['provider'] };
+type AiCaptureAvailability = {
+  engines: string[];
+  models?: Record<string, CatalogModel>;
+  providers?: Record<GeoCaptureModel['provider'], Record<string, CatalogModel>>;
+  apimart?: { status: 'ready' | 'disabled' | 'no_text_models' | 'error'; message?: string };
+  apimartMessage?: string;
+};
 const NO_AI_CAPTURE: AiCaptureAvailability = { engines: [] };
+const normalizeEngine = (value: string) => value.normalize('NFKC').trim().toLowerCase();
 const observations = { mentioned: '有提及', not_mentioned: '未提及', unclear: '无法判断' } as const;
 const timestamp = new Intl.DateTimeFormat('zh-CN', {
   dateStyle: 'short', timeStyle: 'short', timeZone: 'Asia/Shanghai',
@@ -46,7 +54,7 @@ const EMPTY_PLAN = readPlan(EMPTY_WORKFLOW);
 const initialCaptures = () => ({ baseline: emptyCapture(), retest: emptyCapture() });
 
 function validPlanNames(values: string[]) {
-  const names = values.map(value => value.trim().normalize('NFKC').toLowerCase());
+  const names = values.map(normalizeEngine);
   return names.every(Boolean) && new Set(names).size === names.length;
 }
 
@@ -59,7 +67,62 @@ function captureRecovery(workflow: GeoWorkflow, slots: GeoSampleSlot[], phase: G
 }
 
 function textSourceLabel({ provider, model }: GeoTextSource) {
-  return provider && model ? `${provider === 'apimart' ? 'APIMart' : '工作台大模型'} · ${model}` : '';
+  return provider ? [GEO_CAPTURE_PROVIDER_LABELS[provider], model].filter(Boolean).join(' · ') : '';
+}
+
+function captureModels(availability: AiCaptureAvailability) {
+  const map = (values: Record<string, CatalogModel> | undefined, provider: GeoCaptureModel['provider']): Map<string, GeoCaptureModel> =>
+    new Map(Object.entries(values ?? {}).map(([engine, model]) => [normalizeEngine(engine), { ...model, provider: model.provider ?? provider }]));
+  const providers = { apimart: map(availability.providers?.apimart, 'apimart'), workspace: map(availability.providers?.workspace, 'workspace') };
+  const combined = map(availability.models, 'apimart');
+  const legacyEngines = new Set(availability.engines.map(normalizeEngine));
+  const current = (engine: string): GeoCaptureModel | undefined => {
+    const key = normalizeEngine(engine);
+    return providers.apimart.get(key) ?? providers.workspace.get(key) ?? combined.get(key) ??
+      (legacyEngines.has(key) && !availability.providers ? { provider: 'apimart' } : undefined);
+  };
+  return {
+    displayed: availability.engines.flatMap(engine => {
+      const model = current(engine);
+      return model ? [{ engine, ...model }] : [];
+    }),
+    forSlot(slot: GeoSampleSlot): GeoCaptureModel | undefined {
+      const planned = current(slot.engine);
+      if (!slot.baseline) return planned;
+      const baseline = slot.baseline.provenance;
+      if (!baseline) return undefined;
+      if (!availability.providers) {
+        return planned?.provider === baseline.provider && (!planned.model || planned.model === baseline.model) ? baseline : undefined;
+      }
+      const providerModels = providers[baseline.provider];
+      const engineModel = providerModels.get(normalizeEngine(slot.engine));
+      const originalModel = providerModels.get(normalizeEngine(baseline.model));
+      return engineModel?.webSearch === baseline.webSearch &&
+        (engineModel.model === baseline.model || originalModel?.model === baseline.model) ? baseline : undefined;
+    },
+  };
+}
+
+function summarizeCaptureBatch(slots: GeoSampleSlot[], modelFor: (slot: GeoSampleSlot) => GeoCaptureModel | undefined) {
+  const groups = new Map<string, GeoCaptureEngine>();
+  for (const slot of slots) {
+    const model = modelFor(slot);
+    if (!model) continue;
+    const key = JSON.stringify([slot.engine, model.provider, model.model, model.webSearch]);
+    const existing = groups.get(key);
+    groups.set(key, { engine: slot.engine, ...model, slots: (existing?.slots ?? 0) + 1 });
+  }
+  return [...groups.values()];
+}
+
+function apimartStatusNote(availability: AiCaptureAvailability) {
+  if (!availability.apimart) return availability.apimartMessage;
+  if (availability.apimart.status === 'ready') return undefined;
+  return availability.apimart.message || {
+    disabled: 'APIMart 文本采样连接尚未启用。',
+    no_text_models: '当前 APIMart 连接没有 GEO 可用的文本模型。',
+    error: 'APIMart 的连接暂时不可用。',
+  }[availability.apimart.status];
 }
 
 function httpsUrl(value: string) {
@@ -220,12 +283,9 @@ export default function GEOWorkspace({ member, notify, onDirtyChange, onBusyChan
   const changed = Boolean(draft && project && JSON.stringify(draft) !== JSON.stringify(project.document));
   const workflow = project?.workflow ?? EMPTY_WORKFLOW;
   const savedBrand = project?.document.brief.brand ?? '';
-  const aiEngines = aiCapture.engines;
-  const supportedEngineNames = useMemo(() => new Set([...aiCapture.engines, ...Object.keys(aiCapture.models ?? {})]
-    .map(engine => engine.normalize('NFKC').trim().toLowerCase())), [aiCapture]);
-  const supportsEngine = (engine: string) => supportedEngineNames.has(engine.normalize('NFKC').trim().toLowerCase());
+  const sampling = useMemo(() => captureModels(aiCapture), [aiCapture]);
   const aiSlots = useMemo(() => {
-    const eligible = (phase: GeoPhase) => availableSlots(workflow, phase, savedBrand, 'apimart');
+    const eligible = (phase: GeoPhase) => availableSlots(workflow, phase, savedBrand, 'automatic');
     return {
       baseline: savedBrand && workflow.answers.length < 600 ? eligible('baseline') : [],
       retest: savedBrand && project?.publication && workflow.answers.length < 600 ? eligible('retest') : [],
@@ -440,7 +500,7 @@ export default function GEOWorkspace({ member, notify, onDirtyChange, onBusyChan
 
   function captureState(phase: GeoPhase) {
     const slots = aiSlots[phase];
-    const supported = slots.filter(slot => supportsEngine(slot.engine));
+    const supported = slots.filter(slot => sampling.forSlot(slot));
     const recovery = captureRecovery(workflow, supported.length ? supported : slots, phase, recoveries[phase]);
     return { slots, supported, recovery };
   }
@@ -449,13 +509,14 @@ export default function GEOWorkspace({ member, notify, onDirtyChange, onBusyChan
     if (!project?.version || !canEditWorkflow || inFlight.current || hasCaptureDraft(captures[phase])) return;
     const { slots, supported, recovery } = captureState(phase);
     const batch = operation === 'start' ? supported.slice(0, AI_BATCH_SIZE)
-      : slots.filter(slot => slot.sampleKey === recovery?.sampleKey && (operation === 'query' || supportsEngine(slot.engine)));
+      : slots.filter(slot => slot.sampleKey === recovery?.sampleKey && (operation === 'query' || sampling.forSlot(slot)));
     if (!batch.length || (operation === 'start' && recovery) ||
       (operation === 'retry' && (!recovery || recovery.status === 'running'))) return;
     if (operation === 'retry' && recovery?.status === 'unknown' && !window.confirm('重新发起会提交一次新的模型调用，可能产生新的费用。继续？')) return;
     const total = batch.length;
     const label = phase === 'baseline' ? 'AI 基线采样' : 'AI 复测';
-    const update = (completed: number, message: string) => setAiProgress(current => ({ ...current, [phase]: { completed, total, message } }));
+    const engines = operation === 'query' ? [] : summarizeCaptureBatch(batch, sampling.forSlot);
+    const update = (completed: number, message: string) => setAiProgress(current => ({ ...current, [phase]: { completed, total, message, engines } }));
     const remember = (next?: GeoCaptureRecovery) => setRecoveries(current => ({ ...current, [phase]: next }));
     stopAi.current = false;
     setStoppingAi(false);
@@ -464,18 +525,21 @@ export default function GEOWorkspace({ member, notify, onDirtyChange, onBusyChan
       let current = project;
       let completed = 0;
       try {
-        for (const { sampleKey, ...slot } of batch) {
+        for (const slot of batch) {
           if (stopAi.current || !mounted.current) break;
           const requestId = operation === 'query' && recovery ? recovery.id : crypto.randomUUID();
-          update(completed, `已保存 ${completed} / ${total} 份，正在处理 ${slot.engine} 第 ${slot.sample} 次。`);
-          const request = { action: 'capture_ai', id: current.id, version: current.version, slot: { ...slot, phase }, requestId };
+          const model = operation === 'query' ? undefined : sampling.forSlot(slot);
+          const source = model ? `（${textSourceLabel(model)}）` : '';
+          update(completed, `已保存 ${completed} / ${total} 份，正在${operation === 'query' ? '查询' : '处理'} ${slot.engine} 第 ${slot.sample} 次${source}。`);
+          const request = { action: 'capture_ai', id: current.id, version: current.version,
+            slot: { questionId: slot.questionId, engine: slot.engine, sample: slot.sample, phase }, requestId };
           let result: GeoCaptureResponse;
           try {
             result = await postGeo<typeof result>(request);
           } catch (cause) {
             if (mounted.current) {
               if (!(cause instanceof StudioRequestError) || cause.status >= 500) {
-                remember({ id: requestId, sampleKey, status: 'unknown', message: '未能确认上次请求是否完成。' });
+                remember({ id: requestId, sampleKey: slot.sampleKey, status: 'unknown', message: '未能确认上次请求是否完成。' });
               }
               update(completed, `本批已保存 ${completed} / ${total} 份，后续位置尚未处理。`);
             }
@@ -485,7 +549,7 @@ export default function GEOWorkspace({ member, notify, onDirtyChange, onBusyChan
           current = result.project;
           rememberProject(current);
           if (result.capture.status !== 'saved') {
-            remember({ id: requestId, sampleKey, status: result.capture.status, message: result.capture.message });
+            remember({ id: requestId, sampleKey: slot.sampleKey, status: result.capture.status, message: result.capture.message });
             update(completed, `本批已保存 ${completed} / ${total} 份，当前样本尚未保存。`);
             return;
           }
@@ -506,7 +570,9 @@ export default function GEOWorkspace({ member, notify, onDirtyChange, onBusyChan
 
   function aiCaptureControls(phase: GeoPhase) {
     const { supported, recovery } = captureState(phase);
-    return <GeoAiCaptureControls phase={phase} enabledEngines={aiEngines} available={supported.length} batchSize={AI_BATCH_SIZE}
+    const nextBatch = recovery ? supported.filter(slot => slot.sampleKey === recovery.sampleKey) : supported.slice(0, AI_BATCH_SIZE);
+    return <GeoAiCaptureControls phase={phase} serviceAvailable={sampling.displayed.length > 0} connectionNote={apimartStatusNote(aiCapture)}
+      batch={summarizeCaptureBatch(nextBatch, sampling.forSlot)} available={supported.length} batchSize={AI_BATCH_SIZE}
       active={aiPhase === phase} stopping={stoppingAi} progress={aiProgress[phase]} disabled={busy || hasCaptureDraft(captures[phase])}
       manualDraft={hasCaptureDraft(captures[phase])} recovery={recovery} canRetry={supported.some(slot => slot.sampleKey === recovery?.sampleKey)}
       onStart={() => runAiCapture(phase, 'start')} onQuery={() => runAiCapture(phase, 'query')} onRetry={() => runAiCapture(phase, 'retry')}
@@ -653,7 +719,7 @@ export default function GEOWorkspace({ member, notify, onDirtyChange, onBusyChan
               <BriefEditor brief={draft.brief} disabled={busy || !project.canEdit}
                 onChange={brief => updateDraft({ ...draft, brief })} />
             </section>
-            <GeoPlanEditor plan={plan} mainQuestion={draft.brief.question} disabled={busy || !canEditWorkflow} onChange={setPlan} aiEngines={aiEngines} />
+            <GeoPlanEditor plan={plan} mainQuestion={draft.brief.question} disabled={busy || !canEditWorkflow} onChange={setPlan} aiEngines={sampling.displayed} />
             {planInvalid && <p className="geo-muted">请填写每条追踪问题与引擎、竞品名称，再移除重复的引擎或竞品名称。</p>}
           </>}
           {step === 1 && <>

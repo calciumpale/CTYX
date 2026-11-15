@@ -3,6 +3,7 @@ import { assertSameOrigin } from '../../lib/connection-config.ts';
 import { readEffectiveModel } from '../../lib/connection-store.ts';
 import { DomainError } from '../../lib/domain.ts';
 import { readGeoAIConnection } from '../../lib/geo-apimart.ts';
+import { readGeoCaptureProvider } from '../../lib/geo-capture-provider.ts';
 import { checkGeoQuality, generateGeoArticle, generateGeoEvidenceDraft, hasGeoSourceEvidence, parseGeoBrief, parseGeoDocument } from '../../lib/geo-content.ts';
 import { createGeoStore, type GeoActor } from '../../lib/geo-store.ts';
 import { diagnoseGeoGaps, selectGeoGapGuidance } from '../../lib/geo-workflow.ts';
@@ -22,8 +23,8 @@ async function textGeneration(actor: GeoActor, origin: string) {
   const connection = await apimart(actor.ownerId).catch(() => null);
   if (connection?.generationModel) return { generate: connection.generate, provider: 'apimart', model: connection.generationModel };
   const model = await readEffectiveModel(actor.ownerId, origin);
-  if (!model) throw new DomainError('请先在服务连接中启用 API Mart 或配置工作台大模型。', 503);
-  return { generate: (messages: Parameters<typeof requestModelText>[1]) => requestModelText(model, messages), provider: 'workspace', model: model.name };
+  if (!model) throw new DomainError('请先在服务连接中启用 APIMart 或配置工作台大模型。', 503);
+  return { generate: (messages: Parameters<typeof requestModelText>[1]) => requestModelText(model, messages, {timeoutMs: 58000}), provider: 'workspace', model: model.name };
 }
 
 function failure(error: unknown) {
@@ -102,13 +103,17 @@ export async function GET(request: Request) {
     const url = new URL(request.url);
     const db = store();
     if (url.searchParams.has('id')) return json({ project: await db.get(actor, projectId(url.searchParams.get('id'))) });
+    const workspaceModel = readEffectiveModel(actor.ownerId, url.origin).catch(() => null);
     const [projects, model, connection] = await Promise.all([
       db.list(actor),
-      readEffectiveModel(actor.ownerId, url.origin).catch(() => null),
-      apimart(actor.ownerId).catch(() => null),
+      workspaceModel,
+      readGeoCaptureProvider(actor.ownerId, env as MaterialEnvironment, () => workspaceModel).catch(() => null),
     ]);
-    return json({ projects, modelAvailable: Boolean(connection?.generationModel || model),
-      aiCapture: { engines: connection?.engines ?? [], models: connection?.models ?? {} } });
+    const apimartWriting = connection?.apimart.status === 'ready';
+    return json({ projects, modelAvailable: Boolean(apimartWriting || model), aiCapture: {
+      engines: connection?.engines ?? [], models: connection?.models ?? {}, providers: connection?.providers ?? {apimart: {}, workspace: {}},
+      apimart: connection?.apimart,
+    } });
   } catch (error) { return failure(error); }
 }
 
@@ -147,7 +152,9 @@ export async function POST(request: Request) {
       case 'observe': return json({ project: await db.observe(actor, id, version, body.engine, body.query, body.result, body.evidence) });
       case 'workflow': return json({ project: await db.workflow(actor, id, version, body.workflow) });
       case 'capture': return json({ project: await db.capture(actor, id, version, body.answer) });
-      case 'capture_ai': return json(await db.captureAI(actor, id, version, body.slot, body.requestId, () => apimart(actor.ownerId)));
+      case 'capture_ai': return json(await db.captureAI(actor, id, version, body.slot, body.requestId,
+        () => readGeoCaptureProvider(actor.ownerId, env as MaterialEnvironment,
+          () => readEffectiveModel(actor.ownerId, new URL(request.url).origin).catch(() => null))));
       case 'gaps': return json({ project: await db.gaps(actor, id, version, body.gaps) });
       case 'diagnose': {
         const project = await db.ownedProject(actor, id, version);

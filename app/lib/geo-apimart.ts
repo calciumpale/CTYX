@@ -6,7 +6,7 @@ import type { ModelMessage } from './model-client.ts';
 
 const base = 'https://api.apimart.ai/v1';
 const families = [
-  { engine: 'DeepSeek', aliases: ['deepseek', '深度求索'], models: [/^deepseek-v4\.1-flash$/, /^deepseek-v4(?:\.\d+)?-flash$/, /^deepseek-chat$/, /^deepseek-v3(?:[.\d]*)(?:-\d+)?$/, /^deepseek-v4(?:\.\d+)?-pro$/] },
+  { engine: 'DeepSeek', aliases: ['deepseek', '深度求索'], models: [/^deepseek-v4\.1-flash$/, /^deepseek-v4(?:\.\d+)?-flash$/, /^deepseek-(?:chat|flash)$/, /^deepseek-v3(?:[.\d]*)(?:-exp|-\d+)?$/, /^deepseek-v4(?:\.\d+)?-pro$/] },
   { engine: 'ChatGPT', aliases: ['chatgpt', 'openai', 'gpt'], models: [/^gpt-4\.1-mini$/, /^gpt-4o-mini$/, /^gpt-5(?:\.\d+)?-mini$/, /^gpt-4\.1$/, /^gpt-4o$/, /^gpt-5(?:\.\d+)?$/] },
   { engine: 'Gemini', aliases: ['gemini', 'google gemini'], models: [/^gemini-(?:2\.5|3\.\d+)-flash$/, /^gemini-(?:2\.5|3\.\d+)-flash-preview(?:-\d{2}-\d{2})?$/, /^gemini-2\.5-pro$/] },
   { engine: 'Claude', aliases: ['claude', 'anthropic'], models: [/^claude-haiku-4[-.]5(?:-\d{8})?$/, /^claude-sonnet-4[-.]\d(?:-\d{8})?$/] },
@@ -20,9 +20,10 @@ type ModelSelection = { model: string; webSearch: boolean };
 type CaptureResult = { rawAnswer: string; citations: { title: string; url: string }[]; model: string; requestId?: string; webSearch: boolean };
 export type GeoAIConnection = {
   engines: string[];
+  catalogSize: number;
   models: Record<string, ModelSelection>;
   generationModel?: string;
-  supports(engine: string): boolean;
+  supports(engine: string, options?: Partial<ModelSelection>): boolean;
   capture(engine: string, prompt: string, options?: Partial<ModelSelection>): Promise<CaptureResult>;
   generate(messages: ModelMessage[]): Promise<string>;
 };
@@ -58,6 +59,7 @@ async function requestJson(request: typeof fetch, key: string, path: string, tim
   }
   if (!response.ok) {
     void response.body?.cancel().catch(() => {});
+    if (response.status >= 500) throw new DomainError(`APIMart 服务暂不可用（HTTP ${response.status}）。`, 502);
     throw providerError(response.status);
   }
   try {
@@ -131,8 +133,8 @@ async function readCatalog(ownerId: string, version: number, key: string, reques
   const cacheKey = JSON.stringify([ownerId, version]);
   const saved = request === fetch ? catalog.get(cacheKey) : undefined;
   if (saved && saved.until > Date.now()) return saved.ids;
-  const data = await requestJson(request, key, '/models?expand=category&category=chat', 5000);
-  if (!Array.isArray(data.data)) throw providerError(502);
+  const data = await requestJson(request, key, '/models', 8000);
+  if (!Array.isArray(data.data)) throw new DomainError('APIMart 的模型清单格式暂时无法识别。', 502);
   const ids = objects(data.data).filter(item => item.category === undefined || item.category === 'chat' || item.category === 'unknown')
     .map(item => item.id).filter(modelId).sort();
   if (request === fetch) {
@@ -164,15 +166,20 @@ export async function readGeoAIConnection(ownerId: string, env: MaterialEnvironm
   };
   const textModel = available.find(entry => !entry.webSearch)?.matches[0];
   const generationModel = textModel ?? available[0]?.matches[0];
+  const supports = (engine: string, options: Partial<ModelSelection> = {}) => {
+    const family = findFamily(engine);
+    return Boolean(family && (options.model === undefined || family.matches.includes(options.model)) &&
+      (options.webSearch === undefined || options.webSearch === Boolean(family.webSearch)));
+  };
   return {
-    engines, models, generationModel,
-    supports: engine => Boolean(findFamily(engine)),
+    engines, models, generationModel, catalogSize: ids.length,
+    supports,
     async capture(engine, prompt, options = {}) {
       const name = label(engine);
       const family = findFamily(engine);
       const model = options.model ?? family?.matches.find(id => label(id) === name) ?? family?.matches[0];
       const webSearch = !!family?.webSearch;
-      if (!family || !model || !family.matches.includes(model) || (options.webSearch !== undefined && options.webSearch !== webSearch)) {
+      if (!model || !supports(engine, options)) {
         throw new DomainError('APIMart 当前没有此引擎对应的采样模型，请检查采样计划。', 404);
       }
       const result = webSearch ? await responses(request, key, model, prompt, true) : await chat(request, key, model, [{ role: 'user', content: prompt }], 2800);

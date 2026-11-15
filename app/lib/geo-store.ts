@@ -1,7 +1,7 @@
 import { DomainError } from './domain.ts';
 import { checkGeoQuality, geoPublicUrl } from './geo-content.ts';
 import { geoSampleKey } from './geo-metrics.ts';
-import { emptyGeoWorkflow, type GeoAnswer, type GeoCaptureAttempt, type GeoCaptureResponse, type GeoCaptureSlot, type GeoDocument, type GeoObservation, type GeoProject, type GeoProviderAnswer, type GeoPublication, type GeoStatus, type GeoSummary, type GeoWorkflow } from './geo-types.ts';
+import { emptyGeoWorkflow, type GeoAnswer, type GeoCaptureAttempt, type GeoCaptureProvider, type GeoCaptureResponse, type GeoCaptureSlot, type GeoDocument, type GeoObservation, type GeoProject, type GeoPublication, type GeoStatus, type GeoSummary, type GeoWorkflow } from './geo-types.ts';
 import { buildGeoProviderAnswer, parseGeoAnswer, parseGeoGaps, parseGeoPlan, parseGeoSlot } from './geo-workflow.ts';
 
 export interface GeoActor {
@@ -36,8 +36,7 @@ const stale = () => new DomainError('稿件已更新，请重新打开后再试'
 const time = () => new Date().toISOString();
 const editable = (status: GeoStatus) => status === 'draft' || status === 'changes_requested';
 const running = (attempt: GeoCaptureAttempt) => attempt.status === 'running' && Date.now() - Date.parse(attempt.startedAt) < 120000;
-const unknownCapture = '无法确认 API Mart 的采样结果，本次调用可能已计费。';
-type CaptureProvider = { engines: string[]; supports?: (engine: string) => boolean; capture: (engine: string, prompt: string, options?: {model?: string; webSearch?: boolean}) => Promise<GeoProviderAnswer> };
+const unknownCapture = '无法确认模型采样结果，本次调用可能已计费。';
 
 // Store the monitoring workflow beside the article in its existing CAS-protected JSON row.
 function storedDocument(row: GeoRow) {
@@ -258,14 +257,14 @@ export function createGeoStore(db: D1Database) {
     return { ...input, prompt: question.prompt, dimension: question.dimension, intent: question.intent, brand };
   }
 
-  function sampleReady(row: GeoRow, workflow: GeoWorkflow, slot: GeoCaptureSlot, key: string, method: GeoAnswer['method']) {
+  function sampleReady(row: GeoRow, workflow: GeoWorkflow, slot: GeoCaptureSlot, key: string, method: 'manual' | 'automatic') {
     if (workflow.answers.some(other => other.phase === slot.phase && geoSampleKey(other) === key)) {
       throw new DomainError('该问题、引擎与采样序号已记录，请改用其他序号。', 409);
     }
     if (workflow.captureAttempts?.some(attempt => attempt.sampleKey === key && attempt.slot.phase === slot.phase && running(attempt))) {
-      throw new DomainError('该答案正在通过 API Mart 采样，请稍后查询。', 409);
+      throw new DomainError('该答案正在通过模型接口采样，请稍后查询。', 409);
     }
-    const baseline = slot.phase === 'retest' ? workflow.answers.find(other => other.phase === 'baseline' && geoSampleKey(other) === key && other.method === method) : undefined;
+    const baseline = slot.phase === 'retest' ? workflow.answers.find(other => other.phase === 'baseline' && geoSampleKey(other) === key && ((other.method ?? 'manual') === 'manual') === (method === 'manual')) : undefined;
     if (slot.phase === 'retest' && (row.status !== 'published' || !row.publication_json || !baseline)) {
       throw new DomainError('登记发布链接并具备同一问题、引擎、序号和采集方式的基线后才可复测。', 409);
     }
@@ -302,7 +301,7 @@ export function createGeoStore(db: D1Database) {
       const occupied = workflow.answers.some(other => other.phase === started.slot.phase && geoSampleKey(other) === started.sampleKey);
       const superseded = attempts.slice(0, position).some(next => next.sampleKey === started.sampleKey && next.slot.phase === started.slot.phase);
       if (answer && (workflow.answers.length >= 600 || occupied || superseded)) {
-        outcome = { status: 'unknown', message: 'API Mart 已返回答案，但该采样位置已更改或超过存储容量。' };
+        outcome = { status: 'unknown', message: '模型已返回答案，但该采样位置已更改或超过存储容量。' };
         answer = undefined;
       }
       const updated = { ...current, ...outcome };
@@ -313,7 +312,7 @@ export function createGeoStore(db: D1Database) {
       } catch (error) {
         if (!(error instanceof DomainError)) throw error;
         if (error.status === 413 && answer) {
-          outcome = { status: 'unknown', message: 'API Mart 已返回答案，但当前项目的存储容量不足。' };
+          outcome = { status: 'unknown', message: '模型已返回答案，但当前项目的存储容量不足。' };
           answer = undefined;
           continue;
         }
@@ -323,7 +322,7 @@ export function createGeoStore(db: D1Database) {
     throw stale();
   }
 
-  async function captureAI(actor: GeoActor, id: string, version: number, rawSlot: unknown, requestId: unknown, resolveProvider: () => Promise<CaptureProvider | null>): Promise<GeoCaptureResponse> {
+  async function captureAI(actor: GeoActor, id: string, version: number, rawSlot: unknown, requestId: unknown, resolveProvider: () => Promise<GeoCaptureProvider | null>): Promise<GeoCaptureResponse> {
     const slot = parseGeoSlot(rawSlot);
     if (typeof requestId !== 'string' || !/^[a-zA-Z0-9_.:-]{1,100}$/.test(requestId)) throw new DomainError('采样请求标识无效。');
     const row = await load(actor, id);
@@ -341,11 +340,13 @@ export function createGeoStore(db: D1Database) {
     if (workflow.answers.some(answer => answer.id === requestId)) throw new DomainError('采样请求标识已使用。', 409);
     const snapshot = sampleSnapshot(document, workflow, slot);
     const key = geoSampleKey(snapshot);
-    const baseline = sampleReady(row, workflow, slot, key, 'apimart');
-    if (baseline && !baseline.provenance) throw new DomainError('基线未记录 API Mart 模型与联网方式，请重新建立基线。', 409);
+    const baseline = sampleReady(row, workflow, slot, key, 'automatic');
+    if (baseline && !baseline.provenance) throw new DomainError('基线未记录模型来源与联网方式，请重新建立基线。', 409);
+    const source = baseline?.provenance;
+    const options = source ? { provider: source.provider, model: source.model, webSearch: source.webSearch } : undefined;
     const provider = await resolveProvider();
-    if (!provider || !(provider.supports?.(slot.engine) ?? provider.engines.includes(slot.engine))) {
-      throw new DomainError('当前所选引擎没有可用的 API Mart 采样能力。', 503);
+    if (!provider || !(provider.supports?.(slot.engine, options) ?? provider.engines.includes(slot.engine))) {
+      throw new DomainError(options ? '当前无法使用基线的模型来源或联网方式，请检查服务连接。' : '当前所选引擎没有可用的模型采样接口。', 503);
     }
     const attempt: GeoCaptureAttempt = { id: requestId, slot, sampleKey: key, status: 'running', startedAt: time() };
     try {
@@ -359,9 +360,10 @@ export function createGeoStore(db: D1Database) {
     }
     let answer: GeoAnswer;
     try {
-      const options = baseline?.provenance ? { model: baseline.provenance.model, webSearch: baseline.provenance.webSearch } : undefined;
       const result = await provider.capture(slot.engine, snapshot.prompt, options);
-      if (options && (result.model !== options.model || result.webSearch !== options.webSearch)) throw new DomainError('API Mart 返回的模型或联网方式与基线不一致。', 502);
+      if (options && ((result.provider ?? 'apimart') !== options.provider || result.model !== options.model || result.webSearch !== options.webSearch)) {
+        throw new DomainError('接口返回的来源、模型或联网方式与基线不一致。', 502);
+      }
       answer = buildGeoProviderAnswer({ ...snapshot, id: requestId }, result, { document,
         ...(row.publication_json ? { publicationUrl: (JSON.parse(row.publication_json) as GeoPublication).url } : {}),
         competitors: workflow.competitors, recordedAt: time() });

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { encryptConnectionSecret } from '../app/lib/connection-config.ts';
 import { readGeoAIConnection } from '../app/lib/geo-apimart.ts';
+import { readGeoCaptureProvider } from '../app/lib/geo-capture-provider.ts';
 
 const owner = 'workbench-owner';
 const key = 'synthetic-provider-key';
@@ -33,7 +34,7 @@ test('GEO uses the encrypted owner connection and only advertises eligible model
     assert.equal(new Headers(init?.headers).get('Authorization'), `Bearer ${key}`);
     assert.equal(init?.redirect, 'error');
     if (init?.method === 'GET') {
-      assert.equal(String(input), 'https://api.apimart.ai/v1/models?expand=category&category=chat');
+      assert.equal(String(input), 'https://api.apimart.ai/v1/models');
       return Response.json({ data: [
         { id: 'deepseek-v4-flash', category: 'chat' }, { id: 'deepseek-v4.1-flash', category: 'chat' },
         { id: 'gpt-4o-mini', category: 'chat' }, { id: 'doubao-seed-1.8-lite', category: 'image' },
@@ -101,4 +102,30 @@ test('GEO never echoes provider errors or attempts a request with disabled crede
     readGeoAIConnection(owner, env, async () => new Response('provider token value', { status: 403 })),
     (error: Error & { status?: number }) => error.status === 403 && !error.message.includes('token'),
   );
+});
+
+test('GEO uses the enabled workspace text connection when APIMart has no text models', async () => {
+  const env = await environment();
+  const model = { name: 'deepseek-flash', url: 'https://api.deepseek.com/chat/completions', key: 'workspace-key' };
+  const seen: string[] = [];
+  const provider = await readGeoCaptureProvider(owner, env, async () => model, async (input, init) => {
+    seen.push(String(input));
+    if (String(input) === 'https://api.apimart.ai/v1/models') return Response.json({
+      data: [{ id: 'gpt-image-1-official', category: 'image' }],
+    });
+    assert.equal(String(input), model.url);
+    assert.equal(new Headers(init?.headers).get('Authorization'), `Bearer ${model.key}`);
+    assert.equal(JSON.parse(String(init?.body)).messages[0].content, '用原始问题采样。');
+    return Response.json({ choices: [{ finish_reason: 'stop', message: { content: '选型时应结合使用条件。' } }] });
+  });
+  assert.equal(provider.apimart.status, 'no_text_models');
+  assert.deepEqual(provider.engines, ['DeepSeek']);
+  assert.equal(provider.models.DeepSeek.provider, 'workspace');
+  const answer = await provider.capture('DeepSeek', '用原始问题采样。');
+  assert.equal(answer.provider, 'workspace');
+  assert.equal(answer.model, 'deepseek-flash');
+  assert.equal(answer.webSearch, false);
+  assert.equal(provider.supports?.('DeepSeek', { provider: 'apimart' }), false);
+  await assert.rejects(provider.capture('DeepSeek', '用原始问题采样。', { provider: 'workspace', model: 'deepseek-chat' }), { status: 404 });
+  assert.deepEqual(seen, ['https://api.apimart.ai/v1/models', model.url]);
 });

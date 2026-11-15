@@ -42,8 +42,10 @@ export interface GeoAnswerInput extends GeoCaptureSlot {
   brandRank: number | null;
   competitorMentions: GeoCompetitorMention[];
 }
+export type GeoCaptureProviderName = 'apimart' | 'workspace';
+export type GeoCaptureMethod = 'manual' | GeoCaptureProviderName;
 export interface GeoAnswerProvenance {
-  provider: 'apimart';
+  provider: GeoCaptureProviderName;
   model: string;
   captureId: string;
   requestId?: string;
@@ -55,14 +57,20 @@ export interface GeoAnswer extends GeoAnswerInput {
   intent: GeoQuestionIntent;
   dimension: GeoQuestionDimension;
   brand: string;
-  method: 'manual' | 'apimart';
+  method: GeoCaptureMethod;
   provenance?: GeoAnswerProvenance;
   recordedAt: string;
 }
 export type GeoCaptureStatus = 'running' | 'saved' | 'failed' | 'unknown';
 export interface GeoCaptureAttempt { id: string; slot: GeoCaptureSlot; sampleKey: string; status: GeoCaptureStatus; startedAt: string; message?: string }
 export interface GeoCaptureResponse { project: GeoProject; capture: { status: GeoCaptureStatus; message?: string } }
-export interface GeoProviderAnswer { rawAnswer: string; citations: Array<{title: string; url: string}>; model: string; requestId?: string; webSearch: boolean; mentionAnswer?: string }
+export interface GeoProviderAnswer { provider?: GeoCaptureProviderName; rawAnswer: string; citations: Array<{title: string; url: string}>; model: string; requestId?: string; webSearch: boolean; mentionAnswer?: string }
+export interface GeoCaptureProviderOptions { provider?: GeoCaptureProviderName; model?: string; webSearch?: boolean }
+export interface GeoCaptureProvider {
+  engines: string[];
+  supports?(engine: string, options?: GeoCaptureProviderOptions): boolean;
+  capture(engine: string, prompt: string, options?: GeoCaptureProviderOptions): Promise<GeoProviderAnswer>;
+}
 export interface GeoGap {
   id: string;
   priority: 'P0' | 'P1' | 'P2';

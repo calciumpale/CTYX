@@ -126,8 +126,8 @@ export function buildGeoProviderAnswer(
   result: GeoProviderAnswer,
   context: { document: GeoDocument; publicationUrl?: string; competitors: string[]; recordedAt: string },
 ): GeoAnswer {
-  const { rawAnswer, model } = result;
-  if (!rawAnswer.trim() || rawAnswer.length > 12000 || !model.trim() || model.length > 160) throw new DomainError('API Mart 未返回完整的答案或模型标识。', 502);
+  const { rawAnswer, model, provider = 'apimart' } = result;
+  if (!rawAnswer.trim() || rawAnswer.length > 12000 || !model.trim() || model.length > 160) throw new DomainError('采样接口未返回完整的答案或模型标识。', 502);
   const visible = (result.mentionAnswer ?? rawAnswer).replace(/https?:\/\/[^\s)\]>]+/gi, '');
   const ownedUrls = new Set([...context.document.brief.sources.map(source => source.url), context.publicationUrl]
     .filter((url): url is string => Boolean(url)).map(citationKey));
@@ -144,7 +144,7 @@ export function buildGeoProviderAnswer(
   const brandMentions = literalMentions(visible, sample.brand);
   return { ...sample, rawAnswer, citations, brandMentions, brandRank: brandMentions ? explicitRank(visible, sample.brand) : null,
     competitorMentions: context.competitors.map(name => ({ name, count: literalMentions(visible, name) })), recordedAt: context.recordedAt,
-    method: 'apimart', provenance: { provider: 'apimart', model, captureId: sample.id, webSearch: result.webSearch,
+    method: provider, provenance: { provider, model, captureId: sample.id, webSearch: result.webSearch,
       ...(result.requestId && /^[a-zA-Z0-9_.:-]{1,160}$/.test(result.requestId) ? { requestId: result.requestId } : {}),
       annotations: citations.length ? 'provider' : 'none' } };
 }

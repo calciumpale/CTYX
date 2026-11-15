@@ -4,7 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { createGeoStore } from '../app/lib/geo-store.ts';
 import { emptyGeoDocument } from '../app/lib/geo-types.ts';
-import type { GeoDocument } from '../app/lib/geo-types.ts';
+import type { GeoCaptureProviderOptions, GeoDocument } from '../app/lib/geo-types.ts';
 import { compareGeoMetrics, computeGeoMetrics } from '../app/lib/geo-metrics.ts';
 import { diagnoseGeoGaps, selectGeoGapGuidance } from '../app/lib/geo-workflow.ts';
 import { assertMemberApi } from '../app/lib/member-policy.ts';
@@ -128,8 +128,42 @@ test('API Mart captures use the exact prompt, retry idempotently, and retest aga
   const retest={...slot,phase:'retest'};
   await assert.rejects(store.capture(author,project.id,project.version,{...retest,id:'manual-retest',rawAnswer:'人工',citations:[],brandMentions:0,brandRank:null,competitorMentions:[]}),{status:409});
   const checked=await store.captureAI(author,project.id,project.version,retest,'retest-one',async()=>provider);
-  assert.deepEqual(calls[1].options,{model:'gpt-test',webSearch:true});
+  assert.deepEqual(calls[1].options,{provider:'apimart',model:'gpt-test',webSearch:true});
   assert.equal(compareGeoMetrics(checked.project.workflow!).samples,1);
+});
+
+test('workspace model captures record their own provider and reject a different provider on retest',async t=>{
+  const {sqlite,store}=fixture();t.after(()=>sqlite.close());
+  const plan={questions:[{id:'q1',dimension:'category',intent:'awareness',prompt:'周末去哪家商圈？'}],engines:['DeepSeek'],repeats:1,competitors:[]};
+  const slot={questionId:'q1',engine:'DeepSeek',phase:'baseline',sample:1};
+  const providerCalls: GeoCaptureProviderOptions[]=[];
+  const result={provider:'workspace' as const,rawAnswer:'晨光商圈可以看看。',citations:[],model:'deepseek-chat',webSearch:false};
+  const connection={engines:['DeepSeek'],supports:()=>true,capture:async(_engine:string,_prompt:string,options?:GeoCaptureProviderOptions)=>{
+    if(options)providerCalls.push(options);return result;
+  }};
+  let project=await store.save(author,'workspace-model',0,document,plan);
+  const captured=await store.captureAI(author,project.id,project.version,slot,'workspace-baseline',async()=>connection);
+  const baseline=captured.project.workflow!.answers[0];
+  assert.equal(baseline.method,'workspace');
+  assert.deepEqual(baseline.provenance,{provider:'workspace',model:'deepseek-chat',webSearch:false,annotations:'none',captureId:'workspace-baseline'});
+  assert.equal(computeGeoMetrics(captured.project.workflow!,'baseline').citationRate,null);
+  project=await store.submit(author,project.id,captured.project.version);
+  project=await store.review(manager,project.id,project.version,'approve','');
+  project=await store.publish(author,project.id,project.version,'https://events.example.org/weekend','官网');
+  const retest={...slot,phase:'retest'};
+  await assert.rejects(store.captureAI(author,project.id,project.version,retest,'unsupported-fallback',async()=>({
+    ...connection,supports:(_engine:string,options?:GeoCaptureProviderOptions)=>options?.provider==='apimart',
+    capture:async()=>assert.fail('Must not substitute APIMart before charging'),
+  })),{status:503});
+  const mismatched=await store.captureAI(author,project.id,project.version,retest,'wrong-provider',async()=>({
+    ...connection,capture:async()=>({...result,provider:'apimart' as const}),
+  }));
+  assert.equal(mismatched.capture.status,'unknown');
+  assert.equal(mismatched.project.workflow?.answers.length,1);
+  const completed=await store.captureAI(author,project.id,mismatched.project.version,retest,'same-provider',async()=>connection);
+  assert.deepEqual(providerCalls,[{provider:'workspace',model:'deepseek-chat',webSearch:false}]);
+  assert.equal(compareGeoMetrics(completed.project.workflow!).samples,1);
+  assert.equal(compareGeoMetrics(completed.project.workflow!).citationDelta,null);
 });
 
 test('simultaneous and ambiguous paid captures hold the persisted claim and never fabricate measurements',async t=>{

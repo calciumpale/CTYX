@@ -86,7 +86,7 @@ html, .sidebar, .cw-chat-stream { scrollbar-color: var(--app-scroll-thumb) trans
 .textarea { resize: vertical; min-height: 85px; line-height: 1.7; }
 .field { display: flex; flex-direction: column; gap: 7px; margin-bottom: 17px; }
 .field label, label.field { color: var(--cds-text-secondary); font-size: 12px; }
-.error-message { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; background: var(--cds-clay-light); color: var(--cds-fill-danger); padding: 13px 15px; border-radius: var(--radius-lg); line-height: 1.7; margin-top: 14px; }
+.error-message { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; background: var(--cds-danger-soft); color: var(--danger); padding: 13px 15px; border-radius: var(--radius-lg); line-height: 1.7; margin-top: 14px; }
 .empty-state { padding: 65px 20px; text-align: center; color: var(--cds-text-muted); }
 .empty-state > svg { display: block; margin: 0 auto 16px; stroke-width: 1.4; }
 .empty-state h3 { color: var(--cds-text-primary); font-size: 16px; }
@@ -312,8 +312,8 @@ kbd { font: inherit; font-size: 10px; color: var(--cds-text-muted); border: 1px 
 .clean-list { padding: 0; margin: 0; list-style: none; }
 .clean-list li { display: flex; gap: 9px; align-items: flex-start; font-size: 12px; line-height: 1.7; color: var(--cds-text-secondary); margin: 9px 0; }
 .clean-list li > svg { color: var(--cds-text-muted); margin-top: 3px; }
-.risk-box { padding: 17px; background: var(--cds-clay-light); border-radius: 8px; }
-.risk-box h3 { color: var(--brand); }
+.risk-box { padding: 17px; background: var(--cds-warning-soft); border-radius: 8px; }
+.risk-box h3 { color: var(--warning); }
 .risk-box p { margin: 8px 0 0; font-size: 11px; line-height: 1.8; color: var(--cds-text-secondary); }
 .stage-editor { display: flex; gap: 10px; }
 .stage-editor .select { flex: 1; min-width: 0; }

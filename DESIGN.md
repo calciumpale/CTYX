@@ -1,34 +1,34 @@
 ---
 name: AI营销工作台
-description: 浅紫外框、冷白分栏与靛紫操作状态的销售工作台
+description: 苹果风格的冷白、银灰与蓝色操作状态
 colors:
-  primary: "#2d283d"
-  primary-hover: "#4938ad"
-  accent: "#5946c5"
-  backdrop: "#cfcbfa"
+  primary: "#0062cc"
+  primary-hover: "#0053ad"
+  accent: "#0062cc"
+  backdrop: "#e9eaed"
   surface: "#fff"
-  sidebar: "#f8f7fc"
-  text: "#272438"
-  text-secondary: "#615c75"
-  text-muted: "#615c75"
-  border: "#e6e1f0"
-  border-strong: "#c8bfdc"
-  hover: "#f0edfa"
-  selected: "#e9e4fb"
+  sidebar: "#f5f5f7"
+  text: "#1d1d1f"
+  text-secondary: "#555961"
+  text-muted: "#656971"
+  border: "#e1e3e7"
+  border-strong: "#bec4ce"
+  hover: "#eff0f3"
+  selected: "#e5effb"
   danger: "#bf3545"
   success: "#287c52"
   warning: "#9a650c"
-  dark-primary: "#e8dfff"
-  dark-primary-hover: "#d6c8ff"
-  dark-surface: "#241e32"
-  dark-sidebar: "#201b2b"
-  dark-text: "#f4effb"
-  dark-text-secondary: "#cfc3dd"
-  dark-text-muted: "#b9abc9"
-  dark-border: "#473b59"
-  dark-border-strong: "#655477"
-  dark-hover: "#392f4d"
-  dark-selected: "#473b59"
+  dark-primary: "#70b1ff"
+  dark-primary-hover: "#91c5ff"
+  dark-surface: "#242428"
+  dark-sidebar: "#202024"
+  dark-text: "#f5f5f7"
+  dark-text-secondary: "#c0c4cc"
+  dark-text-muted: "#aeb3bd"
+  dark-border: "#3c3e45"
+  dark-border-strong: "#626671"
+  dark-hover: "#32343b"
+  dark-selected: "#253b56"
   dark-danger: "#f07888"
   dark-success: "#72bd94"
   dark-warning: "#d8b264"
@@ -142,26 +142,26 @@ components:
 
 ## Overview
 
-**视觉方向：浅紫冷白工作台**
+**视觉方向：冷白与银灰工作台**
 
-按用户提供的 ChatCore 截图采用浅紫外框、冷白导航和白色主工作面。账号图标、当前导航和焦点用靛紫标记，按钮保留深墨色。点阵与淡紫渐变局限在对话阅读面，正文放在实色圆角面板。导航使用原有中文名称和紧凑列表。
+参考苹果界面的色彩层次。冷白是正文工作面，浅灰导航和银灰外框区分工作区边界。蓝色用于主要操作、当前选中和键盘焦点。对话阅读面使用平整灰白背景，正文放在实色圆角面板。
 
 界面按销售、管理者、管理员的任务组织；默认展开当前工作，历史、配置和辅助解释按需披露。浅深主题共享语义角色，状态颜色只表达业务含义。
 
 **Key Characteristics:**
-- 冷白表面与淡紫分隔线
+- 冷白表面与浅灰分隔线
 - 紧凑工具栏、列表和按需展开的细节
 - 保留中文可读性、键盘焦点与移动触摸空间
 
 ## Colors
 
-主操作使用深墨色，靛紫表达当前选择和键盘焦点。白色内容区与浅紫灰侧栏构成底色；明暗两套值见 frontmatter。实现来源是 `app/cds-theme.css`，保留的 `--cds-*` 名称是现有组件的兼容接口。
+主操作使用蓝色，浅蓝标出当前选择，蓝色轮廓显示键盘焦点。白色内容区与银灰侧栏构成底色；明暗两套值见 frontmatter。实现来源是 `app/cds-theme.css`，保留的 `--cds-*` 名称是现有组件的兼容接口。
 
 - **Primary：** `primary` 用于主操作；`primary-hover` 用于悬停。
 - **Neutral：** `surface` / `sidebar` 分开内容与导航；`text`、`text-secondary`、`text-muted` 表达信息层级；`border` / `border-strong`、`hover` / `selected` 表达边界与交互。
 - **Status：** `success`、`warning`、`danger` 表达结果与风险。项目截止日期、结果及用户自定义提醒保留对应业务色与文字标签。
 
-**The Semantic Color Rule.** 语义色用于成功、警告、危险和用户设置的项目提醒。普通导航保持中性，当前入口和主题焦点使用靛紫。
+**The Semantic Color Rule.** 语义色用于成功、警告、危险和用户设置的项目提醒。普通导航保持中性，当前入口和主题焦点使用蓝色。
 
 ## Typography
 
@@ -169,7 +169,7 @@ components:
 
 凭据、代码与诊断内容使用 frontmatter 的 code 等宽字体栈，便于核对标识符和多行数据。
 
-主助手与项目对话借鉴 Anara 的阅读排布。正文约 16px，回答排在白色圆角面板，用户提问用薰衣草浅底气泡。桌面阅读列约 672–690px，与底部输入区对齐；窄屏保持正文优先。已结束的处理过程与来源可展开，生成时继续显示实时步骤。输入区随文字增高，发送按钮使用圆形。
+主助手与项目对话借鉴 Anara 的阅读排布。正文约 16px，回答排在白色圆角面板，用户提问用淡蓝底气泡。桌面阅读列约 672–690px，与底部输入区对齐；窄屏保持正文优先。已结束的处理过程与来源可展开，生成时继续显示实时步骤。输入区随文字增高，发送按钮使用圆形。
 
 ## Layout
 

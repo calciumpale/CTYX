@@ -118,9 +118,7 @@
   padding: clamp(26px, 5vh, 52px) var(--cw-chat-gutter) 22px;
   overscroll-behavior-y: contain;
   scrollbar-color: var(--app-scroll-thumb) transparent;
-  background-color: var(--cds-surface-2);
-  background-image: var(--app-chat-texture);
-  background-size: 20px 20px, 100% 100%;
+  background: var(--cds-surface-3);
 }
 .cw-chat-welcome { min-height: 100%; display: flex; align-items: center; justify-content: center; flex-direction: column; text-align: center; gap: 12px; max-width: 540px; margin: 0 auto; padding: 28px 0 44px; }
 .cw-welcome-mark { width: 44px; height: 44px; display: grid; place-items: center; border-radius: 15px; color: var(--app-accent-contrast); background: var(--app-accent); }

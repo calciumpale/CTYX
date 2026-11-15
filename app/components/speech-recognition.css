@@ -55,7 +55,7 @@
 .speech-feedback { display: flex; align-items: flex-start; gap: 9px; padding: 13px 15px; margin-top: 20px; border-radius: var(--cds-radius-btn-md); background: var(--cds-alpha-1); color: var(--cds-text-primary); }
 .speech-feedback > svg { margin-top: 3px; }
 .speech-feedback p { margin: 0; font-size: 13px; line-height: 1.85; overflow-wrap: anywhere; }
-.speech-feedback-error { background: var(--cds-clay-light); color: var(--cds-text-accent); }
+.speech-feedback-error { background: var(--cds-danger-soft); color: var(--danger); }
 .speech-feedback .speech-text-button { margin-top: 6px; }
 .speech-conflict-reload { margin-top: 10px; }
 .speech-loading { margin: 0; padding: 12px 0; color: var(--cds-text-secondary); font-size: 13px; }
@@ -77,7 +77,7 @@
 .recording-transcript .recording-transcript-progress p { margin: 11px 0 3px; color: var(--cds-text-primary); font-size: 13px; line-height: 1.8; }
 .recording-transcript-progress > span { color: var(--cds-text-secondary); font-size: 12px; line-height: 1.8; }
 .recording-transcript .recording-transcript-failed { margin: 12px 0 0; color: var(--cds-text-accent); font-size: 13px; line-height: 1.85; overflow-wrap: anywhere; }
-.recording-transcript-error { display: flex; align-items: flex-start; gap: 8px; margin-top: 13px; padding: 12px; border-radius: 8px; background: var(--cds-clay-light); color: var(--cds-text-accent); }
+.recording-transcript-error { display: flex; align-items: flex-start; gap: 8px; margin-top: 13px; padding: 12px; border-radius: 8px; background: var(--cds-danger-soft); color: var(--danger); }
 .recording-transcript-error > svg { margin-top: 4px; }
 .recording-transcript-error > div { min-width: 0; }
 .recording-transcript .recording-transcript-error p { margin: 0; font-size: 13px; line-height: 1.8; overflow-wrap: anywhere; color: inherit; }

@@ -56,11 +56,16 @@ export function requireUserId(request:Request):string {
   if(id.length>512)throw new DomainError('登录身份无效，请重新登录',401);
   return id;
 }
-async function applyModelStatus(state:WorkbenchState,userId:string,siteOrigin:string):Promise<void> {
-  let model:Awaited<ReturnType<typeof readEffectiveModel>>=null;try{model=await readEffectiveModel(userId,siteOrigin);}catch{state.model={connected:false,name:'模型配置暂时不可用，请在设置中检查'};return;}
-  state.model={connected:!!model,name:model?`${model.name} · 已配置，生成时验证`:'规则演示 · 未连接外部模型'};
+type ModelStatus = { model: Awaited<ReturnType<typeof readEffectiveModel>>; failed: boolean };
+async function loadModelStatus(userId:string,siteOrigin:string):Promise<ModelStatus> {
+  try{return {model:await readEffectiveModel(userId,siteOrigin),failed:false};}
+  catch{return {model:null,failed:true};}
 }
-export async function loadWorkspace(userId:string,siteOrigin='https://production.invalid'):Promise<WorkbenchState> {
+function applyModelStatus(state:WorkbenchState,{model,failed}:ModelStatus):void {
+  state.model={connected:!!model,name:failed?'模型配置暂时不可用，请在设置中检查':
+    model?`${model.name} · 已配置，生成时验证`:'规则演示 · 未连接外部模型'};
+}
+async function readWorkspaceState(userId:string):Promise<WorkbenchState> {
   const db=database();
   let row=await db.prepare('SELECT state_json, revision FROM workbench_workspaces WHERE user_id = ?').bind(userId).first<{state_json:string;revision:number}>();
   if(!row) {
@@ -73,14 +78,16 @@ export async function loadWorkspace(userId:string,siteOrigin='https://production
     const state = JSON.parse(row.state_json) as WorkbenchState;
     state.revision = row.revision;
     const current = await appendDepartmentStageExamples(db, userId, state, row.state_json);
-    if (current) {
-      await applyModelStatus(current, userId, siteOrigin);
-      return current;
-    }
+    if (current) return current;
     row = await db.prepare('SELECT state_json, revision FROM workbench_workspaces WHERE user_id = ?').bind(userId).first<{state_json:string;revision:number}>();
     if (!row) break;
   }
   throw new DomainError('工作空间已更新，请刷新后重试',409);
+}
+export async function loadWorkspace(userId:string,siteOrigin='https://production.invalid'):Promise<WorkbenchState> {
+  const [state,modelStatus]=await Promise.all([readWorkspaceState(userId),loadModelStatus(userId,siteOrigin)]);
+  applyModelStatus(state,modelStatus);
+  return state;
 }
 export async function saveWorkspace(userId:string,expectedRevision:number,state:WorkbenchState,events:SalesEvent[]=[],extra?:GuardedWorkspaceWrite,precondition?:GuardedWorkspacePrecondition):Promise<void> {
   await persistSalesWorkspace(database(),userId,expectedRevision,state,events,extra,precondition);
@@ -121,7 +128,12 @@ export async function readWorkbench(userId:string,role:Role,siteOrigin='https://
 }
 /** Internal canonical result. The workbench route applies projectAccountResult exactly once. */
 export async function mutateWorkbench(userId:string,role:Role,action:string,payload:Record<string,unknown>,revision:unknown,siteOrigin='https://production.invalid',memberRole:MemberRole=role,actorName?:string,salesScope?:SalesScope,memberId?:string,onChatProgress?:ActionContext['onChatProgress']):Promise<ApiResult> {
-  if(role==='sales'&&!salesScope)throw new DomainError('销售账号归属无效',401);const state=await loadWorkspace(userId,siteOrigin);assertRevision(state,revision);
+  if(role==='sales'&&!salesScope)throw new DomainError('销售账号归属无效',401);
+  const modelStatus=loadModelStatus(userId,siteOrigin);
+  const state=await readWorkspaceState(userId);
+  assertRevision(state,revision);
+  const configuredModel=await modelStatus;
+  applyModelStatus(state,configuredModel);
   if(action==='recording_apply'){
     assertMemberAction(memberRole,action,payload,state);
     if(!memberId)throw new DomainError('请先登录工作台',401);
@@ -133,8 +145,10 @@ export async function mutateWorkbench(userId:string,role:Role,action:string,payl
     waitUntil(refreshSalesProject(userId,target,siteOrigin).catch(()=>console.warn('Recording project analysis deferred')));
     return result;
   }
-  const salesOwners=await readSalesOwners(userId);
-  let model:Awaited<ReturnType<typeof readEffectiveModel>>=null;try{model=await readEffectiveModel(userId,siteOrigin);}catch{/* Keep customer writes usable when model settings need repair. */}
+  // Only manager-created projects assigned to a salesperson need the roster to validate the assignee.
+  const salesOwners=memberRole==='manager'&&action==='deal_create'&&payload.ownerId!==undefined&&payload.ownerId!=='manager'
+    ? await readSalesOwners(userId) : undefined;
+  const model=configuredModel.model;
   let memory: ReturnType<typeof agentMemoryRuntime> | undefined;
   if (action === 'chat' && memberId && memberRole !== 'admin') {
     try {
@@ -174,7 +188,11 @@ export async function mutateWorkbench(userId:string,role:Role,action:string,payl
     profile.warnings.unshift(...issues);
     return profile;
   }});
-  if(result.state.revision===state.revision)return {...result,state:await loadWorkspace(userId,siteOrigin)};
+  if(result.state.revision===state.revision){
+    const latest=await readWorkspaceState(userId);
+    applyModelStatus(latest,configuredModel);
+    return {...result,state:latest};
+  }
   const run = result.run;
   const transcript: MemoryTranscript | undefined = memory && run && !run.workflowId && run.status !== 'failed'
     ? { runId: run.id, query: run.query, answer: run.answer, createdAt: run.createdAt,

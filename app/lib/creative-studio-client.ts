@@ -9,10 +9,10 @@ export class StudioRequestError extends Error {
   }
 }
 
-export async function studioRequest<T>(query = '', body?: object, path = '/api/creative-studio'): Promise<T> {
+export async function studioRequest<T>(query = '', body?: object, path = '/api/creative-studio', options?: Pick<RequestInit, 'signal' | 'priority'>): Promise<T> {
   const response = await fetch(path + query, body ? {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-  } : { cache: 'no-store' });
+    ...options, method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  } : { ...options, cache: 'no-store' });
   const data = await response.json().catch(() => ({})) as Record<string, unknown>;
   if (!response.ok) {
     const message = typeof data.message === 'string' ? data.message : data.error;

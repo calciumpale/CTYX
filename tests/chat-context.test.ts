@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { DomainError, executeAction } from '../app/lib/domain.ts';
 import type { ActionContext, GenerationInput } from '../app/lib/domain.ts';
 import { createSeed } from '../app/lib/seed.ts';
-import type { Run, Workflow } from '../app/lib/types.ts';
+import { STAGES, type Run, type Workflow } from '../app/lib/types.ts';
 import { buildModelMessages } from '../app/lib/model-messages.ts';
 import { customerInsightEvidence, formatCustomerInsight } from '../app/lib/customer-insight.ts';
 import type { SalesIntelligence } from '../app/lib/sales-intelligence-types.ts';
@@ -344,12 +344,88 @@ test('chat with a named customer sends only that authorized customer',async()=>{
   assert.equal(result.run!.dealId,inputs[0].deal!.id);
 });
 
-test('portfolio questions still receive every customer visible to the requesting role',async()=>{
-  const state=createSeed(now);const {inputs,context}=capture();
-  await executeAction(state,'sales','chat',{query:'本周哪些商机值得优先跟进？'},context);
-  assert.equal(inputs[0].agentId,'opportunity');
-  assert.equal(inputs[0].deals.length,state.deals.filter(deal=>deal.ownerId==='sales-1').length);
-  assert.ok(inputs[0].deals.every(deal=>deal.ownerId==='sales-1'));
+test('portfolio chat counts all authorized non-archived projects and sends bounded, source-labelled representatives',async()=>{
+  const state=createSeed(now);const base=state.deals[0];
+  state.deals=Array.from({length:270},(_,index)=>({...structuredClone(base),
+    id:`portfolio-${index}`,name:`合成企业 ${index}`,projectName:`合成项目 ${index}`,
+    ownerId:`sales-${1+index%5}`,stage:STAGES[Math.floor(index/5)%5],
+    dataOrigin:index%3===0?'manual':index%3===1?'research':'sample',
+    archive:index===0?{at:now,reason:'manual',migrationKey:'fixture'}:undefined,
+    intake:{requestId:'private',rawText:'原始录入不能进入组合模型',inputMode:'text',capturedAt:now},
+    notes:[{id:'private',date:now,author:'test',text:'完整跟进记录不能进入组合模型'.repeat(200)}],
+  }));
+  for(const role of ['sales','manager'] as const){
+    const {inputs,context}=capture();
+    await executeAction(state,role,'chat',{query:'本周哪些商机值得优先跟进？'},context);
+    const input=inputs[0];
+    assert.equal(input.agentId,'opportunity');
+    assert.deepEqual(input.deals,[]);
+    const portfolio=input.portfolio!;
+    const authorized=state.deals.filter(deal=>!deal.archive&&(role==='manager'||deal.ownerId==='sales-1'));
+    assert.equal(portfolio.total,authorized.length);
+    assert.equal(portfolio.scope,role==='sales'?'owned':'workspace');
+    assert.deepEqual(portfolio.stages,STAGES.map(stage=>({stage,count:authorized.filter(deal=>deal.stage===stage).length})));
+    assert.equal(portfolio.origins.sample,authorized.filter(deal=>deal.dataOrigin==='sample').length);
+    assert.ok(portfolio.projects.length<=12);
+    assert.ok(portfolio.projects.every(project=>authorized.some(deal=>deal.name===project.name)));
+    const prompt=JSON.stringify(buildModelMessages(input));
+    assert.match(prompt,/授权项目组合/);
+    assert.doesNotMatch(prompt,/完整跟进记录|原始录入不能|当前授权客户范围/);
+    assert.ok(Buffer.byteLength(prompt)<22000);
+  }
+});
+
+test('portfolio chat narrows a named comparison and grounds exact scope totals when the knowledge base misses',async()=>{
+  const state=createSeed(now);const base=state.deals[0];
+  state.deals=['望潮餐饮','山见烘焙','北湾旅馆'].map((name,index)=>({...structuredClone(base),
+    id:`portfolio-named-${index}`,name,projectName:`${name}招商`,ownerId:'sales-1',
+    stage:STAGES[index],priority:index===2?'high':'low',dataOrigin:'manual',
+  }));
+  let input:GenerationInput|undefined;
+  const result=await executeAction(state,'sales','chat',{query:'比较望潮餐饮和山见烘焙这两个商机的跟进优先级。'},{
+    now,requireNarrative:true,prepareKnowledge:async()=>({route:'no_evidence',knowledge:[],evidenceIds:[]}),
+    generate:async current=>{input=current;return {answer:'本轮提及的未归档项目共2个。\n线索阶段有一个项目。\n线索阶段999个项目。\n通常有九十九个项目。',mode:'live'};},
+  });
+  assert.equal(input?.portfolio?.scope,'named');
+  assert.equal(input?.portfolio?.total,2);
+  assert.deepEqual(input?.portfolio?.projects.map(project=>project.name),['望潮餐饮','山见烘焙']);
+  assert.match(result.run!.answer,/未归档项目共2个/);
+  assert.match(result.run!.answer,/线索阶段有一个项目/);
+  assert.doesNotMatch(result.run!.answer,/999/);
+  assert.doesNotMatch(result.run!.answer,/九十九/);
+  assert.deepEqual(result.run!.citations,[]);
+});
+
+test('an explicit portfolio-wide count retains full scope alongside a named project and falls back only to verified stats',async()=>{
+  const state=createSeed(now);const base=state.deals[0];
+  state.deals=['望潮餐饮','山见烘焙','北湾旅馆'].map((name,index)=>({...structuredClone(base),
+    id:`portfolio-overview-${index}`,name,ownerId:index===2?'sales-2':'sales-1',
+    stage:index===2?'旧阶段':STAGES[index],dataOrigin:index===2?'research':'manual',projectName:undefined,
+  }));
+  const instructions:string[]=[];
+  const result=await executeAction(state,'manager','chat',{query:'请统计整个团队项目各阶段的数量，并重点提及望潮餐饮。'},{
+    now,requireNarrative:true,prepareKnowledge:async()=>({route:'no_evidence',knowledge:[],evidenceIds:[]}),
+    generate:async input=>{
+      const portfolio=input.portfolio!;
+      assert.equal(input.deal,undefined);
+      assert.equal(portfolio.scope,'workspace');
+      assert.equal(portfolio.total,3);
+      assert.equal(portfolio.projects[0].name,'望潮餐饮');
+      assert.equal(portfolio.stages.reduce((sum,stage)=>sum+stage.count,0),portfolio.total);
+      if(input.instruction)instructions.push(input.instruction);
+      return {answer:'通常有九十九个项目。',mode:'live'};
+    },
+  });
+  assert.equal(instructions.length,2);
+  assert.match(instructions[1],/独立一行/);
+  assert.equal(result.run!.mode,'demo');
+  assert.equal(result.run!.answerSource,'evidence-boundary');
+  assert.match(result.run!.answer,/当前工作空间未归档项目共3个/);
+  assert.match(result.run!.answer,/未归类阶段1个项目/);
+  assert.match(result.run!.answer,/公开来源项目1个/);
+  assert.match(result.run!.answer,/不代表实际成交或采购意向/);
+  assert.doesNotMatch(result.run!.answer,/已成单项目/);
+  assert.doesNotMatch(result.run!.answer,/九十九/);
 });
 
 test('pronoun followups rebuild trusted history and retain the customer and prior specialist',async()=>{

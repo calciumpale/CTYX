@@ -7,18 +7,18 @@ import { preferredScrollBehavior } from '../lib/scroll-behavior';
 import { useChatScroll } from '../lib/use-chat-scroll';
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type FormEvent } from 'react';
-import { ArrowDown, ArrowLeft, ArrowUp, BookOpen, Brain, Building2, ChevronDown, ChevronRight, FileText, Loader2, MoreHorizontal, PanelLeftClose, PanelRight, Plus, Search, Sparkles, X } from 'lucide-react';
+import { ArrowDown, ArrowLeft, ArrowUp, Brain, Building2, ChevronDown, ChevronRight, FileText, Loader2, MoreHorizontal, PanelLeftClose, PanelRight, Plus, Sparkles, X } from 'lucide-react';
 import { AGENTS, STAGES, type AgentId, type CustomerProfile, type Deal, type Run, type View, type ViewProps } from '../lib/types';
 import type { MemberSession } from '../lib/member-types';
-import { buildCustomerChatRequest, companyDirectory, customerChatHistory, selectCompanyProject, selectInitialCustomerProject, type CustomerChatRequest, type CustomerDirectoryScope } from '../lib/customer-workspace';
+import { buildCustomerChatRequest, companyDirectory, customerChatHistory, selectCompanyProject, selectInitialCustomerProject, type CustomerChatRequest, type CustomerCompany, type CustomerDirectoryScope } from '../lib/customer-workspace';
 import { deadlineFromInput, deadlineInputValue } from '../lib/project-deadline';
-import { runAnswerForDisplay, runGenerationLabel } from '../lib/run-history';
 import { salesIntelligenceIsCurrent } from '../lib/sales-intelligence';
 import { SALES_GRADE_LABELS } from '../lib/sales-intelligence-types';
-import { AnswerContent } from './AnswerContent';
 import { ChatProcessing } from './ChatProcessing';
 import { AgentMemoryPanel } from './AgentMemoryPanel';
 import { Overlay } from './CoreViews';
+import { CustomerConversationHistory } from './CustomerConversationHistory';
+import { CustomerDirectoryResults } from './CustomerDirectoryResults';
 import { FollowupRecordingPlayer } from './FollowupRecordingField';
 import { ProjectIntake } from './ProjectIntake';
 import { ProjectSalesIntelligence } from './ProjectSalesIntelligence';
@@ -51,9 +51,8 @@ export function CustomerWorkspace({ state, member, mutate, notify, initialDealId
   const id = useId();
   const [directoryScope, setDirectoryScope] = useState<CustomerDirectoryScope>(() => state.deals.some(item => item.id === initialDealId && item.archive) ? 'archived' : 'active');
   const companies = useMemo(() => companyDirectory(state.deals, directoryScope), [state.deals, directoryScope]);
-  const archiveCount = state.deals.filter(item => item.archive).length;
+  const archiveCount = useMemo(() => state.deals.filter(item => item.archive).length, [state.deals]);
   const [selectedId, setSelectedId] = useState<string | null>(() => selectInitialCustomerProject(companies, initialDealId));
-  const [search, setSearch] = useState('');
   const [directoryCollapsed, setDirectoryCollapsed] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const [overviewDealId, setOverviewDealId] = useState<string | null>(null);
@@ -91,7 +90,7 @@ export function CustomerWorkspace({ state, member, mutate, notify, initialDealId
   const intentButton = useRef<HTMLButtonElement>(null);
   const insightsOpenedFromIntent = useRef(false);
   const dialog = useRef<HTMLDialogElement>(null), composer = useRef<HTMLTextAreaElement>(null);
-  const deal = state.deals.find(item => item.id === selectedId);
+  const deal = useMemo(() => state.deals.find(item => item.id === selectedId), [state.deals, selectedId]);
   const currentInsight = deal && !assessmentBusy && salesIntelligenceIsCurrent(deal) ? deal.intelligence?.latest?.insight : undefined;
   const intentGrade = currentInsight?.grade;
   const overviewOpen = !!deal && overviewDealId === deal.id;
@@ -101,20 +100,24 @@ export function CustomerWorkspace({ state, member, mutate, notify, initialDealId
   else if (intentGrade && currentInsight.score !== null) intentLabel = SALES_GRADE_LABELS[intentGrade];
   else if (deal?.outcome === 'won' || deal?.outcome === 'lost') intentLabel = '已结项';
   else if (!currentInsight && deal?.intelligence?.latest) intentLabel = '待重新评估';
-  const company = companies.find(item => item.projects.some(project => project.id === selectedId));
+  const company = useMemo(() => companies.find(item => item.projects.some(project => project.id === selectedId)), [companies, selectedId]);
   const draft = selectedId ? drafts[selectedId] || emptyDraft() : emptyDraft();
   const locked = busy || intakeBusy || assessmentBusy;
-  const isBusy = () => localBusy.current || childBusy.current.intake || childBusy.current.assessment;
+  const isBusy = useCallback(() => localBusy.current || childBusy.current.intake || childBusy.current.assessment, []);
   const unavailable = !!initialDealId && !state.deals.some(item => item.id === initialDealId) && !selectedId;
   const allRuns = useMemo(() => [...new Map([...state.runs, ...returnedRuns].map(run => [run.id, run])).values()], [state.runs, returnedRuns]);
   const history = useMemo(() => customerChatHistory(allRuns, selectedId), [allRuns, selectedId]);
+  const historyKey = useMemo(() => history.map(run => run.id).join('|'), [history]);
   const failure = selectedId ? failures[selectedId] : undefined;
-  const scrollKey = `${mobilePanel}:${history.map(run => run.id).join('|')}:${pending?.query ?? ''}:${chatProgress.map(step => `${step.id}:${step.status}`).join('|')}:${failure?.error ?? ''}`;
+  const scrollKey = `${mobilePanel}:${historyKey}:${pending?.query ?? ''}:${chatProgress.map(step => `${step.id}:${step.status}`).join('|')}:${failure?.error ?? ''}`;
   const { containerRef: stream, markUserInput, onScroll, showJump, jumpToLatest, resumeFollowing } = useChatScroll(scrollKey, selectedId ?? undefined);
   const formValue = JSON.stringify(mode === 'profile' ? customerFields : mode === 'lifecycle' ? { stage, outcome, confirmed } : { ...fields, ...(mode === 'create' && member.role === 'manager' ? { ownerId: createOwnerId } : {}) });
   const formDirty = !!mode && (formBaseline ? formValue !== formBaseline : mode === 'create' && formValue !== JSON.stringify({ ...fieldsFor(), ...(member.role === 'manager' ? { ownerId: 'manager' } : {}) }));
-  const dirty = Object.values(drafts).some(value => value.query.length > 0 || value.note.length > 0) || Object.keys(failures).length > 0 || intakeDirty || formDirty;
-  const filtered = companies.filter(item => `${item.name} ${item.projects.map(project => `${project.projectName || ''} ${project.contact} ${project.owner}`).join(' ')}`.toLocaleLowerCase('zh-CN').includes(search.trim().toLocaleLowerCase('zh-CN')));
+  const draftProjectIds = useMemo(() => new Set([
+    ...Object.keys(failures),
+    ...Object.keys(drafts).filter(projectId => drafts[projectId].query || drafts[projectId].note),
+  ]), [drafts, failures]);
+  const dirty = draftProjectIds.size > 0 || intakeDirty || formDirty;
   const onIntakeBusy = useCallback((value: boolean) => { childBusy.current.intake = value; setIntakeBusy(value); }, []);
   const onAssessmentBusy = useCallback((value: boolean) => { childBusy.current.assessment = value; setAssessmentBusy(value); }, []);
   const onIntakeDirty = useCallback((value: boolean) => setIntakeDirty(value), []);
@@ -175,20 +178,23 @@ export function CustomerWorkspace({ state, member, mutate, notify, initialDealId
       const scope = state.deals.some(item => item.id === initialDealId && item.archive) ? 'archived' : 'active';
       setDirectoryScope(scope); setSelectedId(selectInitialCustomerProject(companyDirectory(state.deals, scope), initialDealId)); setMobilePanel(initialDealId ? 'chat' : 'directory');
     }
-  }, [initialDealId, state.deals, mode, selectedId]);
+  }, [initialDealId, state.deals, mode, selectedId, isBusy]);
   useEffect(() => {
     if (initialIntent === 'followup' && selectedId) { setMobilePanel('chat'); composer.current?.focus(); }
   }, [initialIntent, selectedId]);
 
   const updateDraft = (values: Partial<Draft>, target = selectedId) => { if (target) setDrafts(current => ({ ...current, [target]: { ...(current[target] || emptyDraft()), ...values } })); };
-  const selectProject = (target: string | null) => {
+  const selectProject = useCallback((target: string | null) => {
     if (isBusy()) { notify('正在处理当前项目，请稍候再切换。'); return; }
     if (mode) { notify('请先保存或取消当前资料修改。'); return; }
     if (!target || !state.deals.some(item => item.id === target)) return;
     const ownerCompany = companies.find(item => item.projects.some(project => project.id === target));
     if (ownerCompany) remembered.current[ownerCompany.key] = target;
     setSelectedId(target); setOverviewDealId(null); setMobilePanel('chat'); setError('');
-  };
+  }, [companies, isBusy, mode, notify, state.deals]);
+  const selectCompany = useCallback((item: CustomerCompany, preferredProjectId: string | null) => {
+    selectProject(selectCompanyProject(item, remembered.current[item.key] || preferredProjectId));
+  }, [selectProject]);
   const switchDirectory = (scope: CustomerDirectoryScope) => {
     if (scope === directoryScope || isBusy()) return;
     if (mode) { notify('请先保存或取消当前资料修改。'); return; }
@@ -197,7 +203,7 @@ export function CustomerWorkspace({ state, member, mutate, notify, initialDealId
     const preferred = scopeSelection.current[scope];
     setDirectoryScope(scope); setSelectedId(selectInitialCustomerProject(next, preferred) || selectInitialCustomerProject(next)); setError('');
   };
-  const openForm = (target: NonNullable<FormMode>, newCompany = false) => {
+  const openForm = useCallback((target: NonNullable<FormMode>, newCompany = false) => {
     if (isBusy()) return;
     if (menu.current) menu.current.open = false;
     const nextFields = target === 'create' ? fieldsFor(undefined, newCompany ? '' : company?.name) : fieldsFor(deal);
@@ -206,7 +212,8 @@ export function CustomerWorkspace({ state, member, mutate, notify, initialDealId
     setFields(nextFields); setCreateOwnerId('manager'); setCustomerFields(nextProfile); setStage(nextStage); setOutcome(nextOutcome); setConfirmed(false); setError(''); setIntakeDirty(false);
     setFormBaseline(JSON.stringify(target === 'profile' ? nextProfile : target === 'lifecycle' ? { stage: nextStage, outcome: nextOutcome, confirmed: false } : { ...nextFields, ...(target === 'create' && member.role === 'manager' ? { ownerId: 'manager' } : {}) }));
     setMode(target);
-  };
+  }, [company?.name, deal, isBusy, member.role]);
+  const openNewCompany = useCallback(() => openForm('create', true), [openForm]);
   const closeForm = () => {
     if (isBusy()) return;
     if ((formDirty || intakeDirty) && !window.confirm('放弃尚未保存的资料修改？')) return;
@@ -304,11 +311,10 @@ export function CustomerWorkspace({ state, member, mutate, notify, initialDealId
         {directoryCollapsed ? <ChevronRight size={16} aria-hidden="true" /> : <PanelLeftClose size={18} aria-hidden="true" />}
       </button>
       <div className="cw-directory-content" id={`${id}-directory-content`}>
-        <header className="cw-directory-heading"><div><h1>项目跟进</h1><span>{companies.length} 家企业</span></div><button className="button ghost" aria-label="新建企业或项目" title="新建企业或项目" disabled={locked} onClick={() => openForm('create', true)}><Plus size={17} /></button></header>
+        <header className="cw-directory-heading"><div><h1>项目跟进</h1><span>{companies.length} 家企业</span></div><button className="button ghost" aria-label="新建企业或项目" title="新建企业或项目" disabled={locked} onClick={openNewCompany}><Plus size={17} /></button></header>
         <div className="cw-directory-scope" role="group" aria-label="企业目录范围"><button type="button" aria-pressed={directoryScope === 'active'} disabled={locked} onClick={() => switchDirectory('active')}>当前企业</button><button type="button" aria-pressed={directoryScope === 'archived'} disabled={locked} onClick={() => switchDirectory('archived')}>归档历史<span>{archiveCount}</span></button></div>
-        <div className="cw-directory-search"><label htmlFor={`${id}-search`}><Search size={15} /><span className="sr-only">搜索企业、项目或联系人</span></label><input id={`${id}-search`} placeholder="搜索企业、项目或联系人" value={search} onChange={event => setSearch(event.target.value)} /></div>
-        <nav className="cw-company-list" aria-label="可访问企业">{filtered.map(item => <button key={item.key} className={`cw-company${company?.key === item.key ? ' selected' : ''}`} aria-current={company?.key === item.key ? 'true' : undefined} disabled={locked} onClick={() => selectProject(selectCompanyProject(item, remembered.current[item.key] || (company?.key === item.key ? selectedId : null)))}><span className="cw-company-avatar" aria-hidden="true">{item.name.slice(0, 1)}</span><span className="cw-company-copy"><strong>{item.name}</strong><span>{item.projects.length > 1 ? `${item.projects.length} 个项目` : item.projects[0].dataOrigin === 'research' ? publicSourceLabel(item.projects[0]) : item.projects[0].contact || item.projects[0].industry || '待补充联系人'}</span></span>{item.projects.some(project => drafts[project.id]?.query || drafts[project.id]?.note || failures[project.id]) && <span className="cw-draft-dot" title="有未保存草稿" aria-label="有未保存草稿" />}</button>)}</nav>
-        {!filtered.length && <div className="cw-directory-empty"><Building2 size={24} /><p>{search ? '没有匹配的企业或项目' : directoryScope === 'archived' ? '暂无归档企业' : '暂无当前企业'}</p>{!search && <button className="button secondary" disabled={locked} onClick={() => openForm('create', true)}>新建企业</button>}</div>}
+        <CustomerDirectoryResults searchId={`${id}-search`} companies={companies} scope={directoryScope} selectedKey={company?.key} selectedProjectId={selectedId}
+          draftProjectIds={draftProjectIds} locked={locked} onSelect={selectCompany} onCreate={openNewCompany} />
         <footer className="cw-directory-footer">{directoryScope === 'archived' ? '历史资料与原项目链接继续保留' : member.role === 'sales' ? '显示你有权限访问的企业' : '显示当前团队可访问企业'}</footer>
       </div>
     </aside>
@@ -403,24 +409,7 @@ export function CustomerWorkspace({ state, member, mutate, notify, initialDealId
           if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key) && event.target === event.currentTarget) markUserInput();
         }}>
           {!history.length && !pending && <div className="cw-chat-welcome"><div className="cw-welcome-mark"><Sparkles size={24} /></div><h3>{deal.dataOrigin === 'research' && !salesReportEligible(deal) ? '了解' : '一起推进'}{company?.name || deal.name}</h3><p>{deal.dataOrigin === 'research' && !salesReportEligible(deal) ? '先核对公开资料、适用场景与负责部门，记录实际沟通后再补充客户事实。' : '结合当前项目的资料，梳理需求、准备沟通和确认下一步。'}</p><div>{[{ label: '梳理客户需求', query: '请结合当前项目资料梳理客户需求、决策人及待确认信息', agent: 'insight' }, { label: '准备下一次沟通', query: '请为当前项目准备下一次沟通的议程、开场和需确认的问题', agent: 'strategy' }, { label: '分析推进重点', query: '请分析当前项目的推进重点、风险和下一步行动', agent: 'opportunity' }].map(item => <button className="button secondary" key={item.agent} disabled={locked} onClick={() => { updateDraft({ query: item.query, agent: item.agent as AgentId }); composer.current?.focus(); }}>{item.label}</button>)}</div></div>}
-          {history.map(run => <article className="cw-chat-turn" key={run.id}>
-            <div className="cw-user-message">{run.query}</div>
-            <div className="cw-assistant-label"><Sparkles size={14} aria-hidden="true" /><strong>AI 营销助手</strong><span>{runGenerationLabel(run)}</span></div>
-            {run.steps.length > 0 && <details className="cw-turn-trace">
-              <summary>处理过程<ChevronDown size={13} aria-hidden="true" /></summary>
-              <ol>{run.steps.map(step => <li key={step.id}><strong>{step.title}</strong><p>{step.detail}</p></li>)}</ol>
-            </details>}
-            {run.answer ? <AnswerContent text={runAnswerForDisplay(run.answer)} /> : <p className="cw-muted">此次运行尚未返回回答。</p>}
-            {run.status && run.status !== 'completed' && <p className="cw-error">{run.status === 'failed' ? '本次任务未完成。' : `任务状态：${run.status}`}</p>}
-            {run.citations.length > 0 && <details className="cw-citations">
-              <summary><BookOpen size={14} aria-hidden="true" />参考来源 · {run.citations.length}<ChevronDown size={13} aria-hidden="true" /></summary>
-              {run.citations.map((citation, index) => <details key={`${citation.id}:${index}`}><summary>{citation.title}</summary><p>{citation.excerpt}</p></details>)}
-            </details>}
-            <div className="cw-turn-footer">
-              <time>{date(run.createdAt)}</time>
-              <button type="button" onClick={() => void navigator.clipboard.writeText(run.answer).then(() => notify('已复制回答')).catch(() => notify('浏览器未允许复制，请选择文本复制。'))}>复制</button>
-            </div>
-          </article>)}
+          <CustomerConversationHistory history={history} formatTime={date} notify={notify} />
           {pending?.dealId === deal.id && <div className="cw-chat-turn"><div className="cw-user-message">{pending.query}</div><ChatProcessing steps={chatProgress} /></div>}
           {failure && <div className="cw-failed" role="alert"><p className="cw-failed-query">{failure.request.query}</p><p>{failure.error}</p><button className="button secondary" disabled={locked} onClick={() => void send(failure.request)}>重试本次问题</button><button className="button ghost" disabled={locked} onClick={() => setFailures(current => { const next = { ...current }; delete next[deal.id]; return next; })}>关闭错误提示</button></div>}
         </div>

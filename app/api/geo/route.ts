@@ -97,23 +97,29 @@ async function readCommand(request: Request): Promise<{ action: keyof typeof com
   return { action, body };
 }
 
+async function readCapabilities(actor: GeoActor, origin: string) {
+  const workspaceModel = readEffectiveModel(actor.ownerId, origin).catch(() => null);
+  const [model, connection] = await Promise.all([
+    workspaceModel,
+    readGeoCaptureProvider(actor.ownerId, env as MaterialEnvironment, () => workspaceModel),
+  ]);
+  return {
+    modelAvailable: Boolean(connection.apimart.status === 'ready' || model),
+    aiCapture: { engines: connection.engines, models: connection.models, providers: connection.providers, apimart: connection.apimart },
+  };
+}
+
 export async function GET(request: Request) {
   try {
     const actor = identity(request);
     const url = new URL(request.url);
-    const db = store();
-    if (url.searchParams.has('id')) return json({ project: await db.get(actor, projectId(url.searchParams.get('id'))) });
-    const workspaceModel = readEffectiveModel(actor.ownerId, url.origin).catch(() => null);
-    const [projects, model, connection] = await Promise.all([
-      db.list(actor),
-      workspaceModel,
-      readGeoCaptureProvider(actor.ownerId, env as MaterialEnvironment, () => workspaceModel).catch(() => null),
-    ]);
-    const apimartWriting = connection?.apimart.status === 'ready';
-    return json({ projects, modelAvailable: Boolean(apimartWriting || model), aiCapture: {
-      engines: connection?.engines ?? [], models: connection?.models ?? {}, providers: connection?.providers ?? {apimart: {}, workspace: {}},
-      apimart: connection?.apimart,
-    } });
+    const scope = url.searchParams.get('scope');
+    if (url.searchParams.has('id')) return json({ project: await store().get(actor, projectId(url.searchParams.get('id'))) });
+    if (scope === 'projects') return json({ projects: await store().list(actor) });
+    if (scope === 'capabilities') return json(await readCapabilities(actor, url.origin));
+    if (scope !== null) throw new DomainError('未知的 GEO 查询范围', 400);
+    const [projects, capabilities] = await Promise.all([store().list(actor), readCapabilities(actor, url.origin)]);
+    return json({ projects, ...capabilities });
   } catch (error) { return failure(error); }
 }
 

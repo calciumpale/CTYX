@@ -256,8 +256,10 @@ export default function GEOWorkspace({ member, notify, onDirtyChange, onBusyChan
   const [captures, setCaptures] = useState(initialCaptures);
   const [checked, setChecked] = useState<{ document: GeoDocument; quality: GeoQuality }>();
   const [forms, setForms] = useState(initialForms);
-  const [modelAvailable, setModelAvailable] = useState(false);
-  const [aiCapture, setAiCapture] = useState<AiCaptureAvailability>(NO_AI_CAPTURE);
+  const [capabilities, setCapabilities] = useState<
+    | { status: 'loading' | 'error' }
+    | { status: 'ready'; modelAvailable: boolean; aiCapture: AiCaptureAvailability }
+  >({ status: 'loading' });
   const [aiPhase, setAiPhase] = useState<GeoPhase>();
   const [aiProgress, setAiProgress] = useState<PhaseState<GeoCaptureProgress>>({});
   const [recoveries, setRecoveries] = useState<PhaseState<GeoCaptureRecovery>>({});
@@ -274,7 +276,8 @@ export default function GEOWorkspace({ member, notify, onDirtyChange, onBusyChan
   const mounted = useRef(false);
   const inFlight = useRef(false);
   const stopAi = useRef(false);
-  const listEpoch = useRef(0);
+  const listRequest = useRef<AbortController | null>(null);
+  const capabilitiesRequest = useRef<AbortController | null>(null);
   const qualityRef = useRef<HTMLElement>(null);
   const errorRef = useRef<HTMLDivElement>(null);
   const stepHeading = useRef<HTMLHeadingElement>(null);
@@ -283,6 +286,8 @@ export default function GEOWorkspace({ member, notify, onDirtyChange, onBusyChan
   const changed = Boolean(draft && project && JSON.stringify(draft) !== JSON.stringify(project.document));
   const workflow = project?.workflow ?? EMPTY_WORKFLOW;
   const savedBrand = project?.document.brief.brand ?? '';
+  const modelAvailable = capabilities.status === 'ready' && capabilities.modelAvailable;
+  const aiCapture = capabilities.status === 'ready' ? capabilities.aiCapture : NO_AI_CAPTURE;
   const sampling = useMemo(() => captureModels(aiCapture), [aiCapture]);
   const aiSlots = useMemo(() => {
     const eligible = (phase: GeoPhase) => availableSlots(workflow, phase, savedBrand, 'automatic');
@@ -312,32 +317,56 @@ export default function GEOWorkspace({ member, notify, onDirtyChange, onBusyChan
   const readyGuidedBrief = readyIdentity && Boolean(project?.version && generationGaps.length && draft?.brief.brand.trim() === savedBrand);
 
   const loadList = useCallback(async () => {
-    const epoch = ++listEpoch.current;
+    listRequest.current?.abort();
+    const controller = new AbortController();
+    listRequest.current = controller;
     setLoading(true);
     setListError('');
     try {
-      const result = await studioRequest<{ projects: GeoSummary[]; modelAvailable: boolean; aiCapture?: AiCaptureAvailability }>('', undefined, PATH);
-      if (mounted.current && epoch === listEpoch.current) {
+      const result = await studioRequest<{ projects: GeoSummary[] }>('?scope=projects', undefined, PATH, { signal: controller.signal });
+      if (!Array.isArray(result.projects)) throw new Error('无法读取项目列表，请重试。');
+      if (!controller.signal.aborted) {
         setProjects(result.projects);
-        setModelAvailable(result.modelAvailable);
-        setAiCapture(result.aiCapture ?? NO_AI_CAPTURE);
       }
     } catch (cause) {
-      if (mounted.current && epoch === listEpoch.current) setListError(cause instanceof Error ? cause.message : '读取项目失败，请重试。');
+      if (!controller.signal.aborted) setListError(cause instanceof Error ? cause.message : '读取项目失败，请重试。');
     } finally {
-      if (mounted.current && epoch === listEpoch.current) setLoading(false);
+      if (!controller.signal.aborted) setLoading(false);
+    }
+  }, []);
+
+  const loadCapabilities = useCallback(async (priority: RequestPriority = 'low') => {
+    capabilitiesRequest.current?.abort();
+    const controller = new AbortController();
+    capabilitiesRequest.current = controller;
+    setCapabilities({ status: 'loading' });
+    try {
+      const result = await studioRequest<{ modelAvailable: boolean; aiCapture?: AiCaptureAvailability }>(
+        '?scope=capabilities', undefined, PATH, { signal: controller.signal, priority },
+      );
+      if (typeof result.modelAvailable !== 'boolean') throw new Error('无效的模型状态');
+      if (!controller.signal.aborted) {
+        setCapabilities({ status: 'ready', modelAvailable: result.modelAvailable, aiCapture: result.aiCapture ?? NO_AI_CAPTURE });
+      }
+    } catch {
+      if (!controller.signal.aborted) setCapabilities({ status: 'error' });
     }
   }, []);
 
   useEffect(() => {
     mounted.current = true;
-    const timer = window.setTimeout(() => void loadList(), 0);
+    const timer = window.setTimeout(() => {
+      void loadList();
+      void loadCapabilities();
+    }, 0);
     return () => {
       mounted.current = false;
       window.clearTimeout(timer);
+      listRequest.current?.abort();
+      capabilitiesRequest.current?.abort();
       if (focusStepFrame.current !== null) window.cancelAnimationFrame(focusStepFrame.current);
     };
-  }, [loadList]);
+  }, [loadList, loadCapabilities]);
   useEffect(() => { onDirtyChange?.(dirty); }, [dirty, onDirtyChange]);
   useEffect(() => { onBusyChange?.(busy); }, [busy, onBusyChange]);
   useEffect(() => () => { onDirtyChange?.(false); onBusyChange?.(false); }, [onDirtyChange, onBusyChange]);
@@ -572,6 +601,7 @@ export default function GEOWorkspace({ member, notify, onDirtyChange, onBusyChan
     const { supported, recovery } = captureState(phase);
     const nextBatch = recovery ? supported.filter(slot => slot.sampleKey === recovery.sampleKey) : supported.slice(0, AI_BATCH_SIZE);
     return <GeoAiCaptureControls phase={phase} serviceAvailable={sampling.displayed.length > 0} connectionNote={apimartStatusNote(aiCapture)}
+      capabilitiesReady={capabilities.status === 'ready'}
       batch={summarizeCaptureBatch(nextBatch, sampling.forSlot)} available={supported.length} batchSize={AI_BATCH_SIZE}
       active={aiPhase === phase} stopping={stoppingAi} progress={aiProgress[phase]} disabled={busy || hasCaptureDraft(captures[phase])}
       manualDraft={hasCaptureDraft(captures[phase])} recovery={recovery} canRetry={supported.some(slot => slot.sampleKey === recovery?.sampleKey)}
@@ -664,6 +694,12 @@ export default function GEOWorkspace({ member, notify, onDirtyChange, onBusyChan
       </div>
     </aside>
     <div className="geo-main" role="region" aria-label="GEO 项目内容" tabIndex={0}>
+      {project && step > 0 && <div className="geo-capabilities" data-ready={capabilities.status === 'ready'}>
+        <p className="geo-muted" role="status">{capabilities.status === 'loading' ? '正在读取 AI 服务状态…' : capabilities.status === 'error'
+          ? '暂时无法读取 AI 服务状态。' : modelAvailable ? 'AI 服务状态已更新。' : '当前未发现可用的生成模型。'}</p>
+        {(capabilities.status === 'error' || (capabilities.status === 'ready' && aiCapture.apimart?.status === 'error')) &&
+          <button type="button" className="button ghost" onClick={() => void loadCapabilities('auto')}>重试读取 AI 服务</button>}
+      </div>}
       {pending && <p role="status" className="geo-notice">{pending}</p>}
       {error && <div role="alert" className="geo-alert" ref={errorRef}>{error}
         {conflict && project && <button type="button" className="button secondary" disabled={busy} onClick={() => open(project.id, true)}><RotateCcw size={15} aria-hidden="true" />读取最新版本</button>}
@@ -752,6 +788,8 @@ export default function GEOWorkspace({ member, notify, onDirtyChange, onBusyChan
                 </div>}
               </div>
               {hasCurrentBaseline && modelAvailable && canEditWorkflow && <p className="geo-muted">AI 根据真实基线答案和已有可信来源提出缺口建议，每条建议关联具体答案。核对后可保存。</p>}
+              {hasCurrentBaseline && canEditWorkflow && capabilities.status === 'ready' && !modelAvailable &&
+                <p className="geo-muted">当前没有可用的诊断模型，可手动登记缺口。</p>}
               {diagnosisSource && <p className="geo-muted">建议生成模型 · {diagnosisSource}</p>}
               <GeoGapEditor gaps={gaps} answers={workflow.answers} disabled={busy || !canEditWorkflow} onChange={setGaps} />
             </section>
@@ -788,7 +826,7 @@ export default function GEOWorkspace({ member, notify, onDirtyChange, onBusyChan
             </div>
             {structure && <p className="geo-muted">结构化数据按已保存的稿件导出。请只保留发布页面上实际可见的问答。</p>}
             {articleSource && <p className="geo-muted">稿件生成模型 · {articleSource}</p>}
-            {project.canEdit && !modelAvailable && <p className="geo-muted">可手动编辑。启用工作台大模型后可以生成稿件。</p>}
+            {project.canEdit && capabilities.status === 'ready' && !modelAvailable && <p className="geo-muted">可手动编辑。启用工作台大模型后可以生成稿件。</p>}
             {project.canEdit && modelAvailable && !readyBrief && <p className="geo-muted">填写品牌、选题、主要问题及至少一条完整来源，即可生成稿件。</p>}
             <ArticleEditor article={draft.article} disabled={busy || !project.canEdit} onChange={article => updateDraft({ ...draft, article })} />
           </section>

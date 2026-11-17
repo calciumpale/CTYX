@@ -134,21 +134,56 @@ async function responses(request: typeof fetch, key: string, model: string, inpu
   return { answer, annotations, id: data.id };
 }
 
-const catalog = new Map<string, { until: number; ids: string[] }>();
+const catalogTimeoutMs = 8000;
+const catalogSuccessMs = 120000;
+const catalogBackoffMs = 5000;
+type CatalogValue = { ids: string[] } | { message: string; status: number };
+type CatalogEntry = { until: number; value?: CatalogValue };
+const catalog = new Map<string, CatalogEntry>();
+
+async function fetchCatalog(key: string, request: typeof fetch) {
+  const data = await requestJson(request, key, '/models', catalogTimeoutMs);
+  if (!Array.isArray(data.data)) throw new DomainError('APIMart 的模型清单格式暂时无法识别。', 502);
+  return objects(data.data).filter(item => item.category === undefined || item.category === 'chat' || item.category === 'unknown')
+    .map(item => item.id).filter(modelId).sort();
+}
 
 async function readCatalog(ownerId: string, version: number, key: string, request: typeof fetch): Promise<string[]> {
+  if (request !== fetch) return fetchCatalog(key, request);
   const cacheKey = JSON.stringify([ownerId, version]);
-  const saved = request === fetch ? catalog.get(cacheKey) : undefined;
-  if (saved && saved.until > Date.now()) return saved.ids;
-  const data = await requestJson(request, key, '/models', 8000);
-  if (!Array.isArray(data.data)) throw new DomainError('APIMart 的模型清单格式暂时无法识别。', 502);
-  const ids = objects(data.data).filter(item => item.category === undefined || item.category === 'chat' || item.category === 'unknown')
-    .map(item => item.id).filter(modelId).sort();
-  if (request === fetch) {
-    if (catalog.size >= 64) catalog.delete(catalog.keys().next().value!);
-    catalog.set(cacheKey, { until: Date.now() + 120000, ids });
+  const now = Date.now();
+  const saved = catalog.get(cacheKey);
+  if (saved && saved.until > now) {
+    // Each Cloudflare invocation owns its own I/O. Share plain data only, never
+    // the first invocation's fetch promise, response, or stream.
+    let delay = 25;
+    while (!saved.value && saved.until > Date.now()) {
+      await new Promise(resolve => setTimeout(resolve, delay));
+      delay = Math.min(delay * 2, 250);
+    }
+    if (saved.value && 'ids' in saved.value) return saved.value.ids;
+    if (saved.value) throw new DomainError(saved.value.message, saved.value.status);
+    throw new DomainError('APIMart 请求超时，请稍后重试。', 504);
   }
-  return ids;
+  catalog.delete(cacheKey);
+  if (catalog.size >= 64) {
+    const settled = [...catalog.entries()].find(([, entry]) => entry.value || entry.until <= now);
+    if (!settled) return fetchCatalog(key, request);
+    catalog.delete(settled[0]);
+  }
+  const pending: CatalogEntry = { until: now + catalogTimeoutMs + 250 };
+  catalog.set(cacheKey, pending);
+  try {
+    const ids = await fetchCatalog(key, request);
+    pending.value = { ids };
+    pending.until = Date.now() + catalogSuccessMs;
+    return ids;
+  } catch (error) {
+    const failure = error instanceof DomainError ? error : providerError(502);
+    pending.value = { message: failure.message, status: failure.status };
+    pending.until = Date.now() + catalogBackoffMs;
+    throw failure;
+  }
 }
 
 export async function readGeoAIConnection(ownerId: string, env: MaterialEnvironment, request: typeof fetch = fetch): Promise<GeoAIConnection | null> {

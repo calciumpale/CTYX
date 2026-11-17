@@ -108,6 +108,7 @@ test('POST negotiates chat streaming and shares the one authorized mutation with
   const work: Promise<void>[] = [];
   const calls: { user: string; action: string; revision: unknown; member: string; streamed: boolean }[] = [];
   let saveGate: Promise<void> | undefined;
+  let loadGate: Promise<void> | undefined;
   let saves = 0;
   const salesOwners = [{ salesId: 'sales-route', displayName: '测试销售' }];
   const appStubs = {
@@ -127,6 +128,7 @@ test('POST negotiates chat streaming and shares the one authorized mutation with
     ) => {
       calls.push({ user, action, revision, member, streamed: !!progress });
       if (revision !== result.state.revision) throw new DomainError('工作空间已更新，请刷新后重试', 409);
+      await loadGate;
       progress?.(running);
       await saveGate;
       saves++;
@@ -178,6 +180,8 @@ test('POST negotiates chat streaming and shares the one authorized mutation with
 
     let finish!: () => void;
     saveGate = new Promise<void>(resolve => { finish = resolve; });
+    let finishLoading!: () => void;
+    loadGate = new Promise<void>(resolve => { finishLoading = resolve; });
     const streaming = await POST(request('chat', result.state.revision, optIn));
     assert.match(streaming.headers.get('Content-Type') ?? '', /^application\/x-ndjson/);
     assert.match(streaming.headers.get('Cache-Control') ?? '', /no-transform/);
@@ -188,12 +192,23 @@ test('POST negotiates chat streaming and shares the one authorized mutation with
       progress.push(step);
       sawRunning();
     });
-    await Promise.race([firstProgress, response.then(() => assert.fail('Received result before a progress step'))]);
-    assert.deepEqual(progress, [running]);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([firstProgress, response.then(() => assert.fail('Received result before a progress step')),
+        new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new Error('No progress while workspace is loading')), 100); })]);
+      assert.equal(progress.length, 1);
+      assert.equal(progress[0].id, 'load-workspace');
+      assert.equal(progress[0].status, 'running');
+    } finally {
+      clearTimeout(timer);
+      finishLoading();
+    }
     assert.equal(saves, 0);
     finish();
     assert.deepEqual((await response).state.salesOwners, salesOwners);
-    assert.deepEqual(progress, [running, success]);
+    assert.equal(progress[1].id, 'load-workspace');
+    assert.equal(progress[1].status, 'success');
+    assert.deepEqual(progress.slice(2), [running, success]);
     assert.equal(saves, 1);
 
     for (const [action, extra] of [['chat', {}], ['deal_note', optIn]] as const) {

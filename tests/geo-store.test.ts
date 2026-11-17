@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
+import { registerHooks } from 'node:module';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { createGeoStore } from '../app/lib/geo-store.ts';
@@ -43,7 +44,7 @@ function fixture() {
       };
     },
   } as unknown as D1Database;
-  return { sqlite, store: createGeoStore(db) };
+  return { sqlite, db, store: createGeoStore(db) };
 }
 
 test('GEO API is available only to authenticated business roles', () => {
@@ -51,6 +52,67 @@ test('GEO API is available only to authenticated business roles', () => {
   assert.doesNotThrow(() => assertMemberApi('manager', '/api/geo', 'GET'));
   assert.throws(() => assertMemberApi('admin', '/api/geo', 'GET'), { status: 403 });
   assert.throws(() => assertMemberApi('manager', '/api/geo', 'DELETE'), { status: 403 });
+});
+
+test('authorized GEO project reads complete while capability metadata is still pending', async t => {
+  const { sqlite, db, store } = fixture();
+  t.after(() => sqlite.close());
+  await store.save(author, 'split-loading', 0, document);
+  await store.save(otherTenant, 'unrelated-project', 0, document);
+  let modelReads = 0;
+  let releaseModel!: () => void;
+  let enterModel!: () => void;
+  const pendingModel = new Promise<void>(resolve => { releaseModel = resolve; });
+  const started = new Promise<void>(resolve => { enterModel = resolve; });
+  const stubs = {
+    env: { DB: db },
+    readEffectiveModel: async () => { modelReads++; enterModel(); await pendingModel; return null; },
+    requireUserId: (request: Request) => request.headers.get('oai-authenticated-user-id')!,
+    materialHeaders: { 'Cache-Control': 'private, no-store' },
+  };
+  const key = Symbol.for('workbench.test.geoReadSplit');
+  Reflect.set(globalThis, key, stubs);
+  t.after(() => { releaseModel(); Reflect.deleteProperty(globalThis, key); });
+  const stub = (name: keyof typeof stubs) => ({
+    shortCircuit: true,
+    url: 'data:text/javascript,' + encodeURIComponent(`export const ${name}=globalThis[Symbol.for('workbench.test.geoReadSplit')].${name};`),
+  });
+  const hook = registerHooks({
+    resolve(specifier, context, next) {
+      if (context.parentURL?.endsWith('/app/api/geo/route.ts')) {
+        if (specifier === 'cloudflare:workers') return stub('env');
+        if (specifier === '../../lib/connection-store.ts') return stub('readEffectiveModel');
+        if (specifier === '../../lib/server.ts') return stub('requireUserId');
+        if (specifier === '../marketing-materials/route.ts') return stub('materialHeaders');
+      }
+      return next(specifier, context);
+    },
+  });
+  let route: typeof import('../app/api/geo/route.ts');
+  try { route = await import('../app/api/geo/route.ts'); }
+  finally { hook.deregister(); }
+  const request = (query: string, role = 'sales') => new Request('https://workspace.example.org/api/geo' + query, {
+    headers: { 'oai-authenticated-user-id': author.ownerId, 'x-ctai-member-authenticated': '1',
+      'x-ctai-member-role': role, 'x-ctai-member-username': 'sales', 'x-ctai-member-account-id': author.memberId },
+  });
+  assert.equal((await route.GET(request('?scope=capabilities', 'admin'))).status, 403);
+  assert.equal(modelReads, 0);
+  const capabilities = route.GET(request('?scope=capabilities'));
+  await started;
+  assert.equal((await route.GET(request('?id=split-loading'))).status, 200);
+  const response = await route.GET(request('?scope=projects'));
+  assert.equal(response.status, 200);
+  const list = await response.json() as { projects: Array<{ id: string }> };
+  assert.deepEqual(Object.keys(list), ['projects']);
+  assert.deepEqual(list.projects.map(project => project.id), ['split-loading']);
+  assert.equal(modelReads, 1);
+  releaseModel();
+  const metadata = await (await capabilities).json() as Record<string, unknown>;
+  assert.equal(metadata.modelAvailable, false);
+  assert.ok(metadata.aiCapture);
+  assert.ok(!('projects' in metadata));
+  const legacy = await (await route.GET(request(''))).json() as Record<string, unknown>;
+  assert.deepEqual(Object.keys(legacy).sort(), ['aiCapture', 'modelAvailable', 'projects']);
 });
 
 test('GEO workflow stores actual answers and measures matched before/after samples without changing article review', async t => {

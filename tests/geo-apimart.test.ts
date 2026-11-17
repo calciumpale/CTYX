@@ -8,7 +8,7 @@ const owner = 'workbench-owner';
 const key = 'synthetic-provider-key';
 const encryption = 'ab'.repeat(32);
 
-async function environment(enabled = true) {
+async function environment(enabled = true, version = 1) {
   const secret = await encryptConnectionSecret(key, encryption, owner, 'apimart');
   const DB = {
     prepare(sql: string) {
@@ -17,7 +17,7 @@ async function environment(enabled = true) {
         bind(ownerId: string) {
           return {
             first: async () => ownerId === owner ? {
-              enabled: enabled ? 1 : 0, secret_ciphertext: secret, version: 1, model_name: 'gpt-image-1-official',
+              enabled: enabled ? 1 : 0, secret_ciphertext: secret, version, model_name: 'gpt-image-1-official',
             } : null,
           };
         },
@@ -102,6 +102,32 @@ test('GEO never echoes provider errors or attempts a request with disabled crede
     readGeoAIConnection(owner, env, async () => new Response('provider token value', { status: 403 })),
     (error: Error & { status?: number }) => error.status === 403 && !error.message.includes('token'),
   );
+});
+
+test('catalog lookups share the settled result and briefly back off after provider errors', async t => {
+  const env = await environment();
+  let calls = 0;
+  let status = 200;
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  globalThis.fetch = async url => {
+    assert.equal(String(url), 'https://api.apimart.ai/v1/models');
+    calls++;
+    await new Promise(resolve => setTimeout(resolve, 30));
+    return status === 200 ? Response.json({ data: [{ id: 'deepseek-v4.1-flash' }] }) : new Response('private failure', { status });
+  };
+  const opened = await Promise.all(Array.from({ length: 3 }, () => readGeoAIConnection(owner, env)));
+  assert.deepEqual(opened.map(connection => connection?.engines), [['DeepSeek'], ['DeepSeek'], ['DeepSeek']]);
+  assert.equal(calls, 1);
+  await readGeoAIConnection(owner, env);
+  assert.equal(calls, 1);
+
+  status = 429;
+  const rotated = await environment(true, 2);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await assert.rejects(readGeoAIConnection(owner, rotated), { status: 429 });
+  }
+  assert.equal(calls, 2);
 });
 
 test('GEO uses the enabled workspace text connection when APIMart has no text models', async () => {

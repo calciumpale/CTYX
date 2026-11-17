@@ -179,9 +179,10 @@ export interface GeoCaptureRecovery {
   message?: string;
 }
 
-export function GeoAiCaptureControls({ phase, serviceAvailable, connectionNote, available, batchSize, batch, progress, recovery, disabled, canRetry, active, stopping, manualDraft,
+export function GeoAiCaptureControls({ phase, capabilitiesReady, serviceAvailable, connectionNote, available, batchSize, batch, progress, recovery, disabled, canRetry, active, stopping, manualDraft,
   onStart, onStop, onQuery, onRetry }: {
   phase: Phase;
+  capabilitiesReady: boolean;
   serviceAvailable: boolean;
   connectionNote?: string;
   available: number;
@@ -215,11 +216,11 @@ export function GeoAiCaptureControls({ phase, serviceAvailable, connectionNote, 
         </button>}
       </div>
     </div>
-    <p className="geo-muted">{serviceAvailable
+    {capabilitiesReady && <p className="geo-muted">{serviceAvailable
       ? available ? `还有 ${available} 个可自动处理的采样位置，每批最多 ${batchSize} 个。模型接口的答案可能与引擎官网显示不同。`
         : isRetest ? '自动复测需要匹配基线的服务、模型与联网设置。暂没有可自动复测的位置。'
           : '已保存计划中没有可自动采样的位置。请检查引擎选择或查看已采样答案。'
-      : '当前没有可用的自动采样连接。可使用下方的人工录入。'}</p>
+      : '当前没有可用的自动采样连接。可使用下方的人工录入。'}</p>}
     {connectionNote && <p className="geo-muted">{connectionNote}</p>}
     <GeoCaptureModels label={active ? '本批使用的模型' : '下一批预计使用的模型'}
       engines={active ? progress?.engines ?? [] : batch} />

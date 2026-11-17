@@ -56,7 +56,26 @@ export async function POST(request:Request):Promise<Response> {
     };
     if(action==='chat'&&acceptsChatProgress(request.headers.get('accept'))){
       assertMemberAction(memberRole,action,parameters);
-      const stream=createChatProgressStream(execute,describeError,waitUntil);
+      const stream=createChatProgressStream(async emit=>{
+        const started=Date.now();
+        let loading=true;
+        const report=(status:ChatProgressStep['status'],detail:string)=>emit({
+          id:'load-workspace',title:'读取本轮上下文',detail,status,duration:Date.now()-started,
+        });
+        report('running','正在读取工作区并核对请求。');
+        try {
+          const finish=(step?:ChatProgressStep)=>{
+            if(loading){loading=false;report('success','工作区上下文已就绪。');}
+            if(step)emit(step);
+          };
+          const result=await execute(finish);
+          finish();
+          return result;
+        } catch(error) {
+          if(loading)report('error','未能准备本轮请求。');
+          throw error;
+        }
+      },describeError,waitUntil);
       return new Response(stream,{headers:{...responseHeaders,'Cache-Control':'private, no-store, no-transform',
         'Content-Type':CHAT_PROGRESS_CONTENT_TYPE+'; charset=utf-8','X-Accel-Buffering':'no'}});
     }

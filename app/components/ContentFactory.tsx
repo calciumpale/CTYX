@@ -322,19 +322,20 @@ export default function ContentFactory({ notify, onBusyChange, onDirtyChange }: 
   const hasDrafts = queue.some(item => item.status === 'draft');
 
   return <div className="cf">
-    <header className="cf-head">
-      <div><h2>AI 内容工厂</h2><p>一次填写活动需求，批量生成各渠道文案和海报。</p></div>
-      <div className="cf-actions">
+    <div className="cf-toolbar" role="group" aria-label="活动管理">
+      <div className="cf-actions cf-toolbar-history">
         {campaigns.length > 0 && <select className="cf-history" aria-label="历史活动" disabled={busy} value={current?.id ?? ''} onChange={event => openCampaign(event.target.value)}>
           <option value="">历史活动</option>{campaigns.map(item => <option key={item.id} value={item.id}>{item.document.brief.topic || '未命名活动'}</option>)}
         </select>}
         {current && <button className="button ghost" disabled={busy} onClick={() => openCampaign('')}><Plus size={15} />新建活动</button>}
         <button className="button ghost" disabled={busy} onClick={() => void openHistory()}><Archive size={15} />历史素材</button>
+      </div>
+      <div className="cf-actions cf-toolbar-publish">
         <button className="button secondary" disabled={busy || !changed} onClick={() => void save()}>保存活动</button>
         <button className="button secondary" disabled={busy} onClick={() => setQueueOpen(true)}><ListPlus size={16} />发布队列{queue.length ? ` · ${queue.length}` : ''}</button>
         <button className="button primary" disabled={busy || !hasDrafts} onClick={() => openReview()}><CalendarDays size={16} />送审并排期</button>
       </div>
-    </header>
+    </div>
     {loadError && <div className="cf-feedback" role="alert">{loadError} <button className="button ghost" disabled={reading || busy} onClick={() => void refresh()}>重新读取</button></div>}
     {error && !reviewOpen && !queueOpen && !preview && <div className="cf-feedback" role="alert">{error}{error.includes('新版本') && <button className="button secondary" disabled={busy} onClick={() => void save(document, true)}>另存当前草稿</button>}</div>}
     <div className="cf-grid">

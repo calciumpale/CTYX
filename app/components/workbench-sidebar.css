@@ -25,7 +25,7 @@
   width: 32px;
   aspect-ratio: 1;
   flex: none;
-  border-radius: var(--radius-lg);
+  border-radius: var(--cds-radius-pill);
   background: var(--app-accent);
   color: var(--app-accent-contrast);
   font-size: 12px;

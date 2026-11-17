@@ -112,6 +112,10 @@ test('content factory edits channel copy, saves the publication queue, and expor
     await factory.waitFor();
     assert.deepEqual(await tabs.allTextContents(), ['AI 内容工厂', '数字人']);
     assert.equal(await factory.getAttribute('aria-selected'), 'true');
+    assert.equal(await page.getByRole('heading', { name: 'AI 内容工厂', exact: true }).count(), 0);
+    const factoryActions = page.getByRole('group', { name: '活动管理', exact: true });
+    await factoryActions.getByRole('button', { name: '历史素材', exact: true }).waitFor();
+    await factoryActions.getByRole('button', { name: '发布队列', exact: true }).waitFor();
     await page.getByLabel('活动 / 主题', { exact: true }).fill(topic);
     await page.getByLabel('目标人群', { exact: true }).fill(audience);
 
@@ -220,6 +224,16 @@ test('content factory edits channel copy, saves the publication queue, and expor
     assert.equal(await viewResults.isVisible(), false, 'the result shortcut is hidden on desktop');
     const artifacts = process.env.CONTENT_FACTORY_QA_ARTIFACT_DIR;
     if (artifacts) await page.screenshot({ path: path.join(artifacts, 'content-factory-desktop.png'), animations: 'disabled' });
+    await page.setViewportSize({ width: 320, height: 720 });
+    const toolbarFit = await factoryActions.evaluate(group => {
+      const bounds = group.getBoundingClientRect();
+      return [...group.querySelectorAll('button, select')].every(control => {
+        const box = control.getBoundingClientRect();
+        return box.width > 0 && box.height >= 44 && box.left >= bounds.left - 1 && box.right <= bounds.right + 1;
+      });
+    });
+    assert.equal(toolbarFit, true, 'campaign actions wrap into visible touch targets at 320px');
+    if (artifacts) await page.screenshot({ path: path.join(artifacts, 'content-factory-narrow.png'), animations: 'disabled' });
     await page.setViewportSize({ width: 390, height: 844 });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
     if (artifacts) await page.screenshot({ path: path.join(artifacts, 'content-factory-mobile.png'), animations: 'disabled' });

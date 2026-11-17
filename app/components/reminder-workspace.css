@@ -1,6 +1,6 @@
 .reminder-workspace {
   min-width: 0;
-  min-height: calc(100dvh - 2 * var(--app-frame-inset));
+  min-height: 100%;
   padding: 30px clamp(18px, 3vw, 42px) 42px;
   color: var(--cds-text-primary);
   background: var(--cds-surface-3);
@@ -117,10 +117,6 @@
 .reminder-empty { display: grid; justify-items: center; gap: 10px; padding: 32px 16px; text-align: center; color: var(--cds-text-secondary); }
 .reminder-empty h3 { margin: 0; color: var(--cds-text-primary); font-size: 14px; font-weight: 600; }
 
-@media (max-width: 850px) {
-  .reminder-workspace { min-height: calc(100dvh - 54px); }
-  .reminder-card { scroll-margin-block-start: 68px; }
-}
 @media (max-width: 520px) {
   .reminder-workspace { padding: 19px 14px 25px; }
   .reminder-header { margin-bottom: 15px; }

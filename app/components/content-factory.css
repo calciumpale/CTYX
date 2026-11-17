@@ -417,5 +417,4 @@
 
 @media (max-width: 760px) {
   .cf { overflow: visible; }
-  .cf-results { scroll-margin-block-start: 68px; }
 }

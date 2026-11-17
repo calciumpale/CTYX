@@ -65,6 +65,7 @@ export default function Workbench({member,onLogout}:{member:MemberSession;onLogo
   const [searchOpen, setSearchOpen] = useState(false);
   const [search, setSearch] = useState('');
   const accountMenu = useRef<HTMLDetailsElement>(null);
+  const workspaceContent = useRef<HTMLElement>(null);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
   const [chatBusy, setChatBusy] = useState(false);
@@ -172,7 +173,7 @@ export default function Workbench({member,onLogout}:{member:MemberSession;onLogo
     if(approvalBusy.current){notify('审批操作正在保存，请等待完成后离开。');return;}
     if(contractBusy.current){notify('合同正在导入、保存或初审，请等待完成后离开。');return;}
     if(trainingPending.current){notify('语音回应正在保存，请等待完成；失败时可在带练页直接重试。');return;}
-    const proceed=()=>{stopTrainingMedia.current?.();setView(next);setMeetingEmbed(false);setProspectingSection('screen');if(next==='deals')setNavigationKey(value=>value+1);setProjectIntent(intent||null);setFocusedDeal(id||null);setFocusedApprovalContract(contractId||null);setFocusedApprovalId(approvalId||null);const url=new URL(window.location.href);url.search=workspaceSearch(url.search,{view:next,...(next==='knowledge'||next==='talktracks'?{focus:id}:{dealId:id}),contractId,approvalId,intent});window.history.replaceState(null,'',url.href);setMobileMenu(false);setSearchOpen(false);window.scrollTo({top:0,left:0,behavior:'auto'});};
+    const proceed=()=>{stopTrainingMedia.current?.();setView(next);setMeetingEmbed(false);setProspectingSection('screen');if(next==='deals')setNavigationKey(value=>value+1);setProjectIntent(intent||null);setFocusedDeal(id||null);setFocusedApprovalContract(contractId||null);setFocusedApprovalId(approvalId||null);const url=new URL(window.location.href);url.search=workspaceSearch(url.search,{view:next,...(next==='knowledge'||next==='talktracks'?{focus:id}:{dealId:id}),contractId,approvalId,intent});window.history.replaceState(null,'',url.href);setMobileMenu(false);setSearchOpen(false);workspaceContent.current?.scrollTo({top:0,left:0,behavior:'auto'});};
     const guardedProceed=()=>{if(prospectingGuard.current&&!prospectingGuard.current(proceed)){setMobileMenu(false);setSearchOpen(false);return;}if(studioGuard.current&&!studioGuard.current(proceed)){setMobileMenu(false);setSearchOpen(false);return;}proceed();};
     if(projectDirty.current){pendingProjectLeave.current=guardedProceed;setLeaveProject(true);return;}
     if(approvalDirty.current){pendingApprovalLeave.current=guardedProceed;setLeaveApproval(true);return;}
@@ -321,7 +322,7 @@ export default function Workbench({member,onLogout}:{member:MemberSession;onLogo
       </nav>}
     </aside>
     <div className="workspace"><header className="topbar"><div className="topbar-left"><button className="icon-button menu-toggle" onClick={()=>setMobileMenu(true)} aria-label="展开导航"><Menu size={21}/></button><span className="breadcrumb"><strong>{title}</strong></span></div><div className="topbar-actions"><button className="global-search" aria-label="搜索工作空间" onClick={openSearch}><Search size={17}/></button></div></header>
-      <main className="main-content" key={view+':'+navigationKey}>
+      <main className="main-content" ref={workspaceContent} key={view+':'+navigationKey}>
         {view==='home'&&member.role==='admin'&&<AdminHome state={state} onNavigate={navigate}/>}
         {view==='reports'&&member.role==='manager'&&<SalesDailyReport state={state} notify={notify} onNavigate={navigate}/>}
         {view==='prospecting'&&member.role!=='admin'&&<ProspectingWorkspace onGuardReady={onProspectingGuardReady} initialSection={prospectingSection} onSectionChange={onProspectingSectionChange} onNavigateProject={id=>{void reload().then(()=>navigate('deals',id)).catch(()=>notify('项目已保存，工作台暂未刷新。请稍后重新打开。'));}}/>}
@@ -341,8 +342,8 @@ export default function Workbench({member,onLogout}:{member:MemberSession;onLogo
         {view==='members'&&member.role==='admin'&&<MembersView member={member} notify={notify} onBusyChange={onProjectBusy} onDirtyChange={onProjectDirty}/>}
         {view==='rules'&&member.role==='admin'&&<BusinessRulesView state={state} notify={notify} onBusyChange={onApprovalBusy} onDirtyChange={onApprovalDirty}/>}
       </main>
+      {member.role!=='admin'&&<nav className="mobile-role-navigation" aria-label="快捷导航" inert={mobileMenu}>{navigation.map(item=>{const Icon=item.icon;return <button key={item.id} aria-label={item.label} aria-current={section===item.id?'page':undefined} onClick={()=>navigate(item.id)}><Icon size={20}/><span>{item.mobileLabel??item.label}</span></button>;})}</nav>}
     </div>
-    {member.role!=='admin'&&!mobileMenu&&<nav className="mobile-role-navigation" aria-label="快捷导航">{navigation.map(item=>{const Icon=item.icon;return <button key={item.id} aria-label={item.label} aria-current={section===item.id?'page':undefined} onClick={()=>navigate(item.id)}><Icon size={20}/><span>{item.mobileLabel??item.label}</span></button>;})}</nav>}
     {leaveProject&&<DiscardChangesDialog title="有尚未保存的内容" onCancel={()=>{setLeaveProject(false);pendingProjectLeave.current=null;}} onDiscard={()=>{projectDirty.current=false;setLeaveProject(false);const proceed=pendingProjectLeave.current;pendingProjectLeave.current=null;proceed?.();}}/>}
     {leaveApproval&&<DiscardChangesDialog title="审批内容尚未提交" onCancel={()=>{setLeaveApproval(false);pendingApprovalLeave.current=null;}} onDiscard={()=>{approvalDirty.current=false;setLeaveApproval(false);const proceed=pendingApprovalLeave.current;pendingApprovalLeave.current=null;proceed?.();}}/>}
     {leaveContract&&<DiscardChangesDialog title="合同草稿尚未保存" onCancel={()=>{setLeaveContract(false);pendingContractLeave.current=null;}} onDiscard={()=>{contractDirty.current=false;setLeaveContract(false);const proceed=pendingContractLeave.current;pendingContractLeave.current=null;proceed?.();}}/>}

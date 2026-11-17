@@ -51,13 +51,22 @@ export function useChatScroll(contentKey: string, threadKey?: string) {
       previousThread.current = threadKey;
       resumeFollowing();
     }
-    const frame = requestAnimationFrame(() => {
-      const el = containerRef.current;
-      if (!el || !pinned.current || jumpTarget.current !== null) return;
-      el.scrollTo({ top: el.scrollHeight, behavior: 'instant' });
+    const el = containerRef.current;
+    if (!el) return;
+    const followLatest = () => {
+      if (!pinned.current || jumpTarget.current !== null) return;
+      const bottom = el.scrollHeight - el.clientHeight;
+      if (bottom - el.scrollTop > 1) el.scrollTo({ top: bottom, behavior: 'instant' });
       setShowJump(false);
-    });
-    return () => cancelAnimationFrame(frame);
+    };
+    const frame = requestAnimationFrame(followLatest);
+    // Composer and pane layout can resize the transcript after the content has rendered.
+    const observer = new ResizeObserver(followLatest);
+    observer.observe(el);
+    return () => {
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
   }, [contentKey, threadKey, resumeFollowing]);
   return { containerRef, markUserInput, onScroll, showJump, jumpToLatest, resumeFollowing };
 }

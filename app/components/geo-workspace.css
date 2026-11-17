@@ -1,6 +1,7 @@
 .geo-workspace {
   display: grid;
   grid-template-columns: 224px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   height: 100%;
   min-height: 0;
   min-width: 0;
@@ -59,6 +60,7 @@
 .geo-project-button strong { font-size: 13px; font-weight: 600; }
 
 .geo-main {
+  position: relative;
   display: grid;
   grid-auto-rows: max-content;
   align-content: start;
@@ -242,7 +244,7 @@
 }
 
 @media (max-width: 880px) {
-  .geo-workspace { display: block; overflow: auto; }
+  .geo-workspace { display: block; height: auto; min-height: 100%; overflow: visible; }
   .geo-projects {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
@@ -256,6 +258,7 @@
   .geo-project-list { grid-column: 1 / -1; max-height: 220px; overflow: auto; }
   .geo-projects[data-open="false"] .geo-project-list { display: none; }
   .geo-main { padding: 14px 12px 20px; overflow: visible; }
+  .geo-step-heading h3, .geo-alert, .geo-workflow { scroll-margin-block-start: 12px; }
 }
 
 @media (max-width: 620px) {
@@ -587,17 +590,6 @@
   .geo-step-label small { display: none; }
   .geo-stat-grid { gap: 5px; }
   .geo-stat-grid > div { padding-inline: 6px; }
-}
-
-@media (min-width: 881px) {
-  .geo-workspace {
-    block-size: calc(100dvh - 2 * var(--app-frame-inset, 0px));
-    grid-template-rows: minmax(0, 1fr);
-  }
-}
-
-@media (max-width: 880px) {
-  .geo-step-heading h3, .geo-alert, .geo-workflow { scroll-margin-block-start: 66px; }
 }
 
 @media (pointer: coarse) {

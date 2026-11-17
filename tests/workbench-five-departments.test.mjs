@@ -332,6 +332,21 @@ test('full workbench opens projects, submits a GEO draft and guards material dra
   const geoFlow=page.getByRole('navigation',{name:'GEO 工作流程',exact:true});
   await geoFlow.getByRole('button',{name:geoSteps[0],exact:true}).waitFor();
   assert.deepEqual(await geoFlow.getByRole('button').evaluateAll(items=>items.map(item=>item.getAttribute('aria-label'))),geoSteps);
+  await page.setViewportSize({width:390,height:760});
+  const frame=page.locator('.workspace');
+  const main=frame.locator('.main-content');
+  const topbarBeforeScroll=await page.locator('.topbar').boundingBox();
+  const frameBeforeScroll=await frame.boundingBox();
+  const engine=page.getByRole('checkbox',{name:'DeepSeek',exact:true});
+  await engine.evaluate(element=>element.scrollIntoView({block:'end'}));
+  assert.deepEqual(await frame.boundingBox(),frameBeforeScroll);
+  assert.deepEqual(await page.locator('.topbar').boundingBox(),topbarBeforeScroll);
+  assert.equal(await page.evaluate(()=>document.scrollingElement.scrollTop),0);
+  assert.ok(await main.evaluate(element=>element.scrollTop)>0);
+  const dock=await page.getByRole('navigation',{name:'快捷导航',exact:true}).boundingBox();
+  const engineBounds=await engine.boundingBox();
+  assert.ok(engineBounds.y+engineBounds.height<=dock.y);
+  await page.setViewportSize({width:1440,height:900});
   const openGeoStep=async index=>{
    const step=geoFlow.getByRole('button',{name:geoSteps[index],exact:true});
    await step.click();
@@ -387,7 +402,15 @@ test('full workbench opens projects, submits a GEO draft and guards material dra
   await openGeoStep(0);
   assert.equal(await page.getByLabel('品牌',{exact:true}).isDisabled(),true);
   await businessNav.getByRole('link',{name:'AI营销素材',exact:true}).click();
-  await page.getByLabel('活动 / 主题',{exact:true}).fill('保留的活动主题');
+  const materialTitle=page.getByLabel('活动 / 主题',{exact:true});
+  await materialTitle.waitFor();
+  await page.setViewportSize({width:1440,height:420});
+  const desktopFrameBeforeScroll=await frame.boundingBox();
+  await page.getByRole('button',{name:'生成全套内容',exact:true}).evaluate(element=>element.scrollIntoView({block:'end'}));
+  assert.deepEqual(await frame.boundingBox(),desktopFrameBeforeScroll);
+  assert.equal(await page.evaluate(()=>document.scrollingElement.scrollTop),0);
+  assert.ok(await main.locator('.cf').evaluate(element=>element.scrollTop)>0);
+  await materialTitle.fill('保留的活动主题');
   await businessNav.getByRole('link',{name:'项目跟进',exact:true}).click();
   await page.getByRole('dialog').waitFor();
   await page.getByRole('button',{name:'继续编辑',exact:true}).click();

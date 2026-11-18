@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { Archive, BadgeCheck, CalendarDays, Check, Clipboard, Download, FileText, Image, ListPlus, Loader2, Plus, RefreshCw, Sparkles, Trash2, Users, Video } from 'lucide-react';
 import { Overlay } from './CoreViews';
+import { CreativeCanvasIllustration } from './VisualIllustrations';
 import { preferredScrollBehavior } from '../lib/scroll-behavior';
 import type FactoryHistory from './FactoryHistory';
 import { studioColor, studioLayerStyle } from '../lib/creative-studio-geometry';
@@ -407,11 +408,14 @@ export default function ContentFactory({ notify, onBusyChange, onDirtyChange }: 
                 <button className="button secondary" disabled={busy} onClick={() => addToQueue({ channel: 'poster', assetId: board.id, title: board.name, body: '', poster: board })}>加入队列</button></div>
             </article>)}</div>
           </div> : <div className="cf-empty">
-            {active === 'poster' ? <Image size={23} /> : active === 'video' ? <Video size={23} /> : <FileText size={23} />}
+            <CreativeCanvasIllustration className="cf-empty-art" />
             <h4>{active && (generated || error) ? `还没有${FACTORY_CHANNELS[active]}` : '从一次活动开始'}</h4>
             {canGenerateActive && active
               ? <button type="button" className="button secondary" disabled={busy} onClick={() => void generate(active)}><RefreshCw size={15} />生成当前渠道</button>
-              : <p>填写活动主题，再生成所选渠道的草稿。</p>}
+              : <>
+                <p>填写左侧活动主题与受众定位，一键生成多渠道文案草稿、视觉物料与排期建议。</p>
+                <div className="cf-empty-Badges" aria-hidden="true"><span>公众号深度长文</span><span>小红书种草笔记</span><span>海报画板预览</span><span>受众触达建议</span></div>
+              </>}
           </div>}
           </div>
         </section>

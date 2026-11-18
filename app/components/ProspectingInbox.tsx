@@ -10,12 +10,12 @@ export function ProspectingFilters({ children, className }: { children: ReactNod
   return <div className={`prospect-inbox-filters${className ? ` ${className}` : ''}`} role="group" aria-label="获客筛选">{children}</div>;
 }
 
-export function ProspectingList({ rows, selectedId, onSelect, label = '线索列表' }: {
-  rows: InboxRow[]; selectedId?: string | null; onSelect: (id: string) => void; label?: string;
+export function ProspectingList({ rows, selectedId, onSelect, label = '线索列表', columns = ['用户名', '原文', '意向', '状态'] }: {
+  rows: InboxRow[]; selectedId?: string | null; onSelect: (id: string) => void; label?: string; columns?: readonly [string, string, string, string];
 }) {
   return <div className="prospect-inbox-table-wrap"><table className="prospect-inbox-table" aria-label={label}>
     <colgroup><col className="prospect-inbox-name-col" /><col /><col className="prospect-inbox-intent-col" /><col className="prospect-inbox-status-col" /></colgroup>
-    <thead><tr><th scope="col">用户名</th><th scope="col">原文</th><th scope="col">意向</th><th scope="col">状态</th></tr></thead>
+    <thead><tr><th scope="col">{columns[0]}</th><th scope="col">{columns[1]}</th><th scope="col">{columns[2]}</th><th scope="col">{columns[3]}</th></tr></thead>
     <tbody>{rows.map(row => <tr key={row.id} data-selected={row.id === selectedId} onClick={event => {
       event.currentTarget.querySelector('button')?.focus({ preventScroll: true });
       onSelect(row.id);

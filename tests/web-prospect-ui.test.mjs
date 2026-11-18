@@ -98,8 +98,7 @@ test('uses a four-column lead list, opens safe source review on demand and fits 
       await route.fulfill({ json: snapshot });
     });
     await page.goto(origin);
-    await page.getByText('尚未搜索。输入关键词后开始收集公开来源。').waitFor();
-    assert.deepEqual(await page.getByRole('columnheader').allTextContents(), ['用户名', '原文', '意向', '状态']);
+    await page.getByText('全网公开意向线索检索').waitFor();
     assert.equal(await page.locator(detail).count(), 0);
     for (const mode of ['light', 'dark']) {
       await page.evaluate(value => { document.documentElement.dataset.mode = value; }, mode);
@@ -132,6 +131,7 @@ test('uses a four-column lead list, opens safe source review on demand and fits 
     await submitSearch(page).click();
     await page.getByLabel('搜索关键词').waitFor({ state: 'hidden' });
     assert.equal(await page.locator(detail).count(), 0);
+    assert.deepEqual(await page.getByRole('columnheader').allTextContents(), ['来源站点', '标题与摘要', '意向核实', '状态与操作']);
     const result = row(page, '公开摘要');
     assert.match(await result.innerText(), /example\.com.+<img.+待核实.+待审核/s);
     await page.getByLabel('查找公开线索').fill('没有匹配的文本');

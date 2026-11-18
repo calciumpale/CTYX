@@ -1,19 +1,20 @@
-.recording-quote-square { min-width: 0; }
+.recording-quote-square { min-width: 0; padding: 20px 24px; border: 1px solid var(--cds-border); border-radius: var(--cds-panel-radius); background: var(--cds-surface-2); box-shadow: var(--cds-shadow-xs); }
 .recording-quote-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px 20px; margin-bottom: 16px; }
-.recording-quote-heading > h2 { margin: 0; font-size: 1.0625rem; font-weight: 600; }
+.recording-quote-heading > h2 { margin: 0; font-size: 16.5px; font-weight: 650; }
 .recording-quote-search { position: relative; width: min(100%, 300px); }
 .recording-quote-search > svg { position: absolute; inset-inline-start: 11px; inset-block-start: 50%; transform: translateY(-50%); color: var(--cds-text-secondary); pointer-events: none; }
-.recording-quote-search > input { --field-padding-inline: 34px; --field-padding-end: 10px; width: 100%; border: 1px solid var(--cds-border); background: var(--cds-surface-2); color: var(--cds-text-primary); }
+.recording-quote-search > input { --field-padding-inline: 34px; --field-padding-end: 10px; width: 100%; border: 1px solid var(--cds-border); background: var(--cds-surface-0); color: var(--cds-text-primary); }
 .recording-quote-list { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--cds-border); }
 .recording-quote-item { padding-block: 17px; border-bottom: 1px solid var(--cds-border); }
-.recording-quote-item > blockquote { margin: 0; min-width: 0; color: var(--cds-text-primary); font-size: 14px; line-height: 1.8; white-space: pre-wrap; overflow-wrap: anywhere; }
-.recording-quote-source { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; margin-top: 8px; color: var(--cds-text-secondary); font-size: 12px; }
+.recording-quote-item > blockquote { margin: 0; padding: 10px 14px; border-inline-start: 3px solid var(--app-accent); border-radius: 0 8px 8px 0; background: var(--cds-surface-0); min-width: 0; color: var(--cds-text-primary); font-size: 14px; line-height: 1.8; white-space: pre-wrap; overflow-wrap: anywhere; }
+.recording-quote-source { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; margin-top: 10px; color: var(--cds-text-secondary); font-size: 12px; }
 .recording-quote-source > * { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
 .recording-quote-source :is(time, .recording-quote-timestamp) { font-variant-numeric: tabular-nums; }
-.recording-quote-actions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 12px; }
-.recording-quote-actions .button { gap: 5px; padding-inline: 9px; }
-.recording-quote-empty { min-height: 180px; display: grid; place-content: center; justify-items: center; gap: 8px; margin: 0; padding: 18px; color: var(--cds-text-secondary); text-align: center; font-size: 13px; }
-.recording-quote-empty > strong { color: var(--cds-text-primary); font-size: 14px; }
+.recording-quote-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.recording-quote-actions .button { gap: 5px; padding-inline: 10px; }
+.recording-quote-empty { min-height: 220px; display: grid; place-content: center; justify-items: center; gap: 8px; margin: 0; padding: 28px 18px; border: 1px dashed var(--cds-border-strong); border-radius: 12px; background: var(--cds-surface-0); color: var(--cds-text-secondary); text-align: center; font-size: 13px; }
+.recording-quote-empty > svg { color: var(--app-accent); }
+.recording-quote-empty > strong { color: var(--cds-text-primary); font-size: 15px; font-weight: 650; }
 .recording-quote-empty > p, .recording-quote-error > p { margin: 0; }
 .recording-quote-error { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; padding: 12px 0; font-size: 13px; color: var(--cds-text-secondary); }
 .recording-quote-confirm .recording-quote-confirm-error { color: var(--cds-text-primary); background: var(--cds-surface-0); border-radius: var(--control-radius); padding: 8px 10px; margin-top: 10px; }

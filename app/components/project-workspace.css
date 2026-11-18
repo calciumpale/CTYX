@@ -68,7 +68,7 @@
 .project-card-color-field button:disabled { opacity: .5; }
 .project-card-color-field p { margin: 0; font-size: 11px; line-height: 1.7; color: var(--cds-text-secondary); }
 .project-form input::placeholder, .project-form textarea::placeholder { color: var(--cds-text-muted); }
-.project-form input:focus, .project-form textarea:focus, .project-form select:focus { outline: 2px solid var(--cds-clay); outline-offset: 2px; }
+.project-form input:focus, .project-form textarea:focus, .project-form select:focus { outline: none; }
 .project-form-wide { grid-column: 1 / -1; }
 .project-more-fields { border-top: 1px solid var(--cds-border); margin-top: 22px; padding-top: 16px; }
 .project-more-fields > summary { display: flex; align-items: center; gap: 7px; cursor: pointer; width: fit-content; padding: 3px 0; font-size: 13px; color: var(--cds-text-secondary); }

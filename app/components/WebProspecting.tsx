@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { ChevronDown, ExternalLink, History, RefreshCw, Search } from 'lucide-react';
 import type { WebPlatform, WebProspectLead, WebProspectSnapshot, WebProspectTask } from '../lib/web-prospect-types.ts';
 import { ProspectingFilters, ProspectingList, ProspectingPanel } from './ProspectingInbox';
+import { ProspectingIllustration } from './VisualIllustrations';
 import './WebProspecting.css';
 
 const platforms: { id: WebPlatform; label: string }[] = [
@@ -220,20 +221,30 @@ export default function WebProspecting({ onDirtyChange, onBusyChange, onNavigate
 
     {!showPanel && errorMessage}
     {latest && latest.status !== 'completed' && panel?.kind !== 'search' && <TaskStatus task={latest} />}
-    <div className="prospect-inbox-split web-prospect-panes" data-panel-open={showPanel}>
+    <div className="prospect-inbox-split web-prospect-panes" data-panel-open={showPanel} data-full-panel={Boolean(!items.length && panel?.kind === 'search')}>
       <div className="web-prospect-results">
-        <ProspectingList label="公开网页线索" selectedId={lead?.id} onSelect={id => openPanel({ kind: 'lead', id })}
+        {items.length > 0 && <ProspectingList label="公开网页线索" columns={['来源站点', '标题与摘要', '意向核实', '状态与操作']} selectedId={lead?.id} onSelect={id => openPanel({ kind: 'lead', id })}
           rows={items.map(item => ({
             id: item.id,
             username: sourceLabel(item),
             text: item.excerpt || item.title,
             intent: <span className="web-prospect-intent">待核实</span>,
-            status: <LeadStatus lead={item} />,
-          }))} />
-        {!items.length && <p className="web-prospect-empty" role="status">{loading ? '正在读取搜索记录…' :
-          term || filter !== 'all' ? '当前筛选下没有来源' :
-            latest?.status === 'completed' && latest.resultCount === 0 ? '本次搜索成功，但未找到匹配的公开来源。可调整关键词或地区。' :
-              latest ? '当前筛选下没有来源' : '尚未搜索。输入关键词后开始收集公开来源。'}</p>}
+            status: <span className="web-prospect-row-status"><LeadStatus lead={item} /><span className="web-prospect-row-action" aria-hidden="true">{item.projectId ? '查看项目' : item.status === 'qualified' ? '转项目' : '核实'}</span></span>,
+          }))} />}
+        {!items.length && <div className="prospect-onboarding-stage">
+          <div className="web-prospect-empty" role="status">
+            <ProspectingIllustration className="prospect-onboarding-art" />
+            <strong>{loading ? '正在读取搜索记录…' : term || filter !== 'all' ? '当前筛选下没有来源' : latest?.status === 'completed' && latest.resultCount === 0 ? '未找到匹配的公开来源' : '全网公开意向线索检索'}</strong>
+            <p>{loading ? '正在同步历史公开网页任务与线索记录。' :
+              term || filter !== 'all' ? '可以尝试放宽审核筛选或修改查找关键词。' :
+                latest?.status === 'completed' && latest.resultCount === 0 ? '本次搜索成功，但未找到匹配的公开来源。可调整关键词或地区。' :
+                  latest ? '当前筛选下没有来源。' : '输入行业痛点或询价关键词，跨公开平台聚合潜在客户需求并一键建立待核实项目。'}</p>
+            {!loading && !latest && <>
+              <div className="web-prospect-source-pills" aria-hidden="true"><span>小红书</span><span>知乎</span><span>百度贴吧</span><span>微博</span><span>公开网页索引</span></div>
+              <button type="button" className="web-prospect-primary" disabled={busy} onClick={() => openPanel({ kind: 'search' })}><Search size={15} aria-hidden="true" />开始搜索公开网页</button>
+            </>}
+          </div>
+        </div>}
       </div>
 
       {panel?.kind === 'search' && <ProspectingPanel title="搜索公开网页" onClose={closePanel} className="web-prospect-detail">

@@ -11,6 +11,7 @@ import { FollowupRecordingField, FollowupRecordingPlayer } from './FollowupRecor
 import { RecordingProcessingReview } from './RecordingProcessingReview';
 import { RecordingQuoteSquare } from './RecordingQuoteSquare';
 import type { RecordingQuoteSelection } from './RecordingTranscript';
+import { AudioWaveIllustration } from './VisualIllustrations';
 import './recording-upload-view.css';
 
 type Props = {
@@ -311,6 +312,10 @@ export function RecordingUploadView({ state, initialDealId, mutate, uploadFollow
           </FollowupRecordingField>
           {error && <p className="recording-upload-feedback is-error" role="alert">{error}</p>}
           {savedMessage && <p className="recording-upload-feedback" role="status">{savedMessage}</p>}
+          <div className="recording-upload-guide" aria-hidden="true">
+            <strong>录音处理流向</strong>
+            <span>01 上传 MP3 / WAV / M4A 等音频 → 02 自动区分讲话人与时间轴 → 03 核对后写入客户画像或收藏金句。</span>
+          </div>
         </form>
         <section className="recording-upload-panel recording-upload-result" aria-labelledby={`${id}-result`}>
           <header><h2 id={`${id}-result`} tabIndex={-1} ref={resultHeading}><FileAudio size={18} aria-hidden="true" />{selected && newRecordingId === selected.recording.id ? '录音已保存' : '录音与转写'}</h2>
@@ -327,7 +332,12 @@ export function RecordingUploadView({ state, initialDealId, mutate, uploadFollow
             reviewLocked={reviewDirty || reviewBusy}
             renderCompleted={job => job.result?.text.trim() ? <RecordingProcessingReview key={`processing:${job.id}`} dealId={job.dealId} recordingId={job.recordingId} jobId={job.id}
               projects={projects} mutate={mutate} notify={notify} onBusyChange={onReviewBusy} onDirtyChange={onReviewDirty} /> : null}
-          /> : <div className="recording-upload-empty">{inInbox ? inboxStatus === 'loading' || inboxStatus === 'idle' ? '正在读取待归属录音…' : inboxError ? '可重试读取或继续上传录音。' : '暂无待归属录音，上传后在这里查看转写。' : '此项目暂无录音。保存后可在这里查看转写。'}</div>}
+          /> : <div className="recording-upload-empty">
+            <AudioWaveIllustration />
+            <strong>{inInbox ? inboxStatus === 'loading' || inboxStatus === 'idle' ? '正在读取待归属录音…' : inboxError ? '暂时未能读取录音列表' : '待归属录音工作台' : '项目录音与转写'}</strong>
+            <p>{inInbox ? inboxStatus === 'loading' || inboxStatus === 'idle' ? '正在读取待归属录音…' : inboxError ? '可重试读取或继续上传录音。' : '暂无待归属录音，上传后在这里查看转写。' : '此项目暂无录音。保存后可在这里查看转写。'}</p>
+            <div className="recording-upload-pills" aria-hidden="true"><span>多讲话人分离</span><span>时间轴点按回听</span><span>客户画像结构化提取</span><span>一键收藏金句</span></div>
+          </div>}
         </section>
       </div>}
     </section>

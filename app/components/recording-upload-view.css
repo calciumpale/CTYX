@@ -1,30 +1,37 @@
 .recording-upload-view {
-  width: min(100%, 1130px);
+  width: min(100%, 1240px);
   margin-inline: auto;
-  padding: clamp(20px, 4vw, 48px) clamp(14px, 4vw, 48px) max(80px, calc(50px + env(safe-area-inset-bottom)));
+  padding: 24px clamp(16px, 3vw, 32px) max(64px, calc(48px + env(safe-area-inset-bottom)));
   color: var(--cds-text-primary);
 }
 
-.recording-upload-header h1 { margin: 0; font-size: clamp(1.35rem, 2.5vw, 1.75rem); font-weight: 650; line-height: 1.3; }
-.recording-upload-header p { margin: 7px 0 0; color: var(--cds-text-secondary); font-size: .86rem; line-height: 1.6; }
-.recording-upload-tabs { display: flex; gap: 4px; margin-block: 20px; padding: 3px; width: fit-content; border-radius: var(--radius-lg); background: var(--cds-surface-0); }
-.recording-upload-tabs button { min-height: var(--control-height); border: 1px solid transparent; border-radius: var(--radius-md); padding-inline: 12px; color: var(--cds-text-secondary); background: transparent; font-size: .85rem; white-space: nowrap; }
+.recording-upload-header h1 { margin: 0; font-size: 24px; font-weight: 700; letter-spacing: -.03em; line-height: 1.3; }
+.recording-upload-header p { margin: 5px 0 0; color: var(--cds-text-secondary); font-size: 13.5px; line-height: 1.6; }
+.recording-upload-tabs { display: inline-flex; gap: 3px; margin-block: 16px 18px; padding: 3px; width: fit-content; border: 1px solid var(--cds-border); border-radius: 11px; background: var(--cds-fill-ghost-hover); }
+.recording-upload-tabs button { min-height: 32px; border: 0; border-radius: 8px; padding-inline: 14px; color: var(--cds-text-secondary); background: transparent; font-size: 13px; font-weight: 500; white-space: nowrap; }
 .recording-upload-tabs button:hover { color: var(--cds-text-primary); }
-.recording-upload-tabs button[aria-selected=true] { border-color: var(--cds-border); color: var(--cds-text-primary); background: var(--cds-surface-2); }
+.recording-upload-tabs button[aria-selected=true] { color: var(--cds-text-primary); background: var(--cds-surface-2); font-weight: 600; box-shadow: var(--cds-shadow-xs); }
 .recording-upload-tabs button:focus-visible, .recording-upload-result h2:focus-visible { outline: 2px solid var(--cds-focus-color); outline-offset: 2px; }
 .recording-upload-view [role=tabpanel][hidden] { display: none; }
 
-.recording-upload-grid { display: grid; grid-template-columns: minmax(255px, .8fr) minmax(0, 1.2fr); align-items: start; gap: 14px; }
+.recording-upload-grid { display: grid; grid-template-columns: minmax(280px, .82fr) minmax(0, 1.25fr); align-items: stretch; gap: 18px; }
 .recording-upload-panel {
   min-width: 0;
-  padding: clamp(14px, 2vw, 21px);
+  padding: 20px 22px;
   border: 1px solid var(--cds-border);
-  border-radius: var(--radius-xl);
+  border-radius: var(--cds-panel-radius);
   background: var(--cds-surface-2);
+  box-shadow: var(--cds-shadow-xs);
+  display: flex;
+  flex-direction: column;
 }
-.recording-upload-panel h2 { display: flex; align-items: center; gap: 7px; margin: 0; color: var(--cds-text-primary); font-size: .95rem; font-weight: 600; line-height: 1.5; }
-.recording-upload-panel h2 svg { flex: none; color: var(--cds-text-secondary); }
-.recording-upload-form { display: grid; align-content: start; gap: 16px; }
+.recording-upload-panel h2 { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--cds-text-primary); font-size: 15.5px; font-weight: 650; line-height: 1.45; }
+.recording-upload-panel h2 svg { flex: none; color: var(--app-accent); }
+.recording-upload-form { display: flex; flex-direction: column; gap: 16px; }
+.recording-upload-guide { margin-top: auto; padding: 12px 14px; border-radius: 10px; background: var(--cds-surface-0); border: 1px solid var(--cds-border); display: grid; gap: 4px; }
+.recording-upload-guide strong { font-size: 12px; font-weight: 600; color: var(--cds-text-primary); }
+.recording-upload-guide span { font-size: 11.5px; color: var(--cds-text-secondary); line-height: 1.55; }
+.recording-upload-result > .recording-upload-empty { flex: 1; justify-content: center; }
 .recording-upload-field { display: grid; min-width: 0; gap: 6px; color: var(--cds-text-primary); font-size: .84rem; font-weight: 550; }
 .recording-upload-field small { margin-inline-start: 4px; color: var(--cds-text-secondary); font-weight: 400; }
 .recording-upload-field :is(textarea,select) { min-width: 0; width: 100%; border-radius: var(--control-radius); font-weight: 400; }
@@ -35,7 +42,11 @@
 .recording-upload-result > header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
 .recording-upload-result > .recording-upload-field { margin-block-start: 12px; }
 .recording-upload-result .followup-recording-card { margin-top: 13px; }
-.recording-upload-empty { margin-block-start: 12px; padding: 20px 14px; border-radius: var(--radius-lg); background: var(--cds-surface-0); color: var(--cds-text-secondary); font-size: .84rem; line-height: 1.7; }
+.recording-upload-empty { margin-block-start: 14px; padding: 30px 22px; border: 1px dashed var(--cds-border-strong); border-radius: 12px; background: var(--cds-surface-0); color: var(--cds-text-secondary); font-size: 13px; line-height: 1.65; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 8px; }
+.recording-upload-empty > strong { font-size: 15px; font-weight: 650; color: var(--cds-text-primary); margin-top: 2px; }
+.recording-upload-empty > p { margin: 0; max-width: 46ch; }
+.recording-upload-pills { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; margin-top: 4px; }
+.recording-upload-pills > span { padding: 3px 10px; border-radius: 999px; border: 1px solid var(--cds-border); background: var(--cds-surface-2); color: var(--cds-text-secondary); font-size: 11.5px; font-weight: 500; }
 .recording-upload-muted { margin: 0; color: var(--cds-text-secondary); font-size: .78rem; line-height: 1.5; }
 .recording-upload-feedback { margin: 0; color: var(--cds-text-primary); font-size: .84rem; line-height: 1.65; overflow-wrap: anywhere; }
 .recording-upload-view > .recording-upload-feedback { margin-block: 0 12px; }

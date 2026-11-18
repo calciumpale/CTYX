@@ -1,4 +1,6 @@
+.training-page-heading{display:flex;align-items:baseline;justify-content:flex-start!important;flex-wrap:wrap;gap:6px 12px}
 .training-page-heading h1{margin-top:0;letter-spacing:-.03em}
+.training-page-subtitle{font-size:13px;color:var(--cds-text-secondary);font-weight:400}
 .training-page-heading .studio-example{color:var(--cds-text-secondary)}
 .training-profile-setup{margin-top:22px;min-width:0;border-top:1px solid var(--cds-border);padding-top:18px}
 .studio-view .training-profile-heading h2{font-size:16px;line-height:1.5;font-weight:550;letter-spacing:-.02em;text-wrap:balance}

@@ -1,16 +1,18 @@
-.contract-center { box-sizing: border-box; width: 100%; max-width: 1440px; min-width: 0; margin: 0 auto; padding: 28px 32px; color: var(--cds-text-primary); }
+.contract-center { box-sizing: border-box; width: 100%; max-width: 1440px; min-width: 0; margin: 0 auto; padding: 16px 28px 22px; color: var(--cds-text-primary); }
 .contract-center *, .contract-center *::before, .contract-center *::after { box-sizing: border-box; }
-.contract-center-heading { margin-bottom: 16px; }
-.contract-center-heading h1 { margin: 0; font-size: 24px; line-height: 1.4; font-weight: 550; letter-spacing: -.03em; }
-.contract-center-tabs { display: flex; align-items: center; gap: 20px; min-width: 0; margin-bottom: 16px; border-bottom: 1px solid var(--cds-border); }
-.contract-center-tabs a { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 40px; padding: 8px 0; border-bottom: 2px solid transparent; color: var(--cds-text-secondary); text-decoration: none; font-size: 13px; line-height: 1.5; }
+.contract-center-heading { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 12px; margin-bottom: 8px; }
+.contract-center-heading > span { font-size: 13px; color: var(--cds-text-secondary); font-weight: 400; }
+.contract-center-heading h1 { margin: 0; font-size: 23px; line-height: 1.3; font-weight: 650; letter-spacing: -.025em; }
+.contract-center-tabs { display: flex; align-items: center; gap: 22px; min-width: 0; margin-bottom: 12px; border-bottom: 1px solid var(--cds-border); }
+.contract-center-tabs a { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 36px; padding: 5px 2px 7px; margin-bottom: -1px; border-bottom: 2px solid transparent; color: var(--cds-text-secondary); text-decoration: none; font-size: 13.5px; line-height: 1.5; }
 .contract-center-tabs a:hover { color: var(--cds-text-primary); }
-.contract-center-tabs a[aria-current="page"] { border-bottom-color: var(--cds-text-primary); color: var(--cds-text-primary); font-weight: 550; }
+.contract-center-tabs a[aria-current="page"] { border-bottom-color: var(--app-accent); color: var(--cds-text-primary); font-weight: 600; }
 .contract-center-tabs a:focus-visible { outline: 2px solid var(--cds-text-secondary); outline-offset: 3px; }
 .contract-center-tabs a > span { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; padding: 1px 5px; border-radius: var(--radius-sm); background: var(--cds-fill-secondary); color: var(--cds-text-secondary); font-size: 11px; font-variant-numeric: tabular-nums; }
 .contract-center > .studio-view { max-width: none; margin: 0; padding: 0; }
 .contract-center .contract-center-heading-hidden { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
-.contract-center .contract-page-heading { justify-content: flex-end; }
+.contract-center .contract-page-heading { justify-content: flex-end; margin-bottom: 10px; }
+.contract-center .approval-page-heading { margin-bottom: 12px; }
 .contract-center .contract-header-actions, .contract-center .approval-header-actions { min-width: 0; max-width: 100%; }
 .contract-center .studio-btn, .contract-center .studio-icon-button { min-height: 36px; }
 .contract-center .approval-page-heading h2 { font-size: 16px; line-height: 1.5; }

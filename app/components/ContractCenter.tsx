@@ -35,7 +35,7 @@ export function ContractCenter({ initialTab = 'contracts', initialDealId, initia
   };
 
   return <section className="contract-center" aria-labelledby={`${prefix}-title`}>
-    <header className="contract-center-heading"><h1 id={`${prefix}-title`}>合同</h1></header>
+    <header className="contract-center-heading"><h1 id={`${prefix}-title`}>合同</h1><span>智能定位条款风险，衔接多级审批闭环</span></header>
     <nav className="contract-center-tabs" aria-label="合同分类">
       {([{ id: 'contracts', label: '合同初审' }, { id: 'approvals', label: '审批' }] as const).map(tab => <a key={tab.id} href={`/${workspaceSearch('', route(tab.id))}`} aria-current={tab.id === initialTab ? 'page' : undefined} onClick={event => navigateTab(event, tab.id)}>{tab.label}{tab.id === 'approvals' && pendingCount > 0 && <span aria-label={`${pendingCount} 项待审批`}>{pendingCount}</span>}</a>)}
     </nav>

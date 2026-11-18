@@ -3,6 +3,7 @@
 import { useId, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
 import { AlertCircle, ArrowLeft, BookOpen, Check, CheckCircle2, ChevronRight, Copy, FileText, GitBranch, History, Info, Loader2, MessageSquare, PauseCircle, Search, Sparkles, X, XCircle } from 'lucide-react';
 import { AnswerContent } from './AnswerContent';
+import { KnowledgeDocsIllustration } from './VisualIllustrations';
 import { AGENTS, type Run, type TraceStep, type ViewProps } from '../lib/types';
 import { filterRuns, groupRunsByDate, runAnswerForDisplay, runGenerationLabel, runStatus, type RunFilters, type RunStatus } from '../lib/run-history';
 import './answer-content.css';
@@ -24,9 +25,10 @@ function StatusLabel({ status }: { status: RunStatus }) {
 
 function Empty({ filtered, onClear }: { filtered: boolean; onClear: () => void }) {
   return <div className="run-history-empty">
-    {filtered ? <Search size={28} aria-hidden="true" /> : <History size={28} aria-hidden="true" />}
+    {filtered ? <Search size={28} aria-hidden="true" /> : <KnowledgeDocsIllustration />}
     <h2>{filtered ? '没有找到匹配的运行记录' : '还没有运行记录'}</h2>
-    <p>{filtered ? '清除筛选查看全部记录。' : '运行任务后，结果会保存在这里。'}</p>
+    <p>{filtered ? '清除筛选查看全部记录。' : '在「项目跟进」或「AI 营销助手」发起提问与工作流后，执行轨迹与引用依据会自动保存在这里。'}</p>
+    {!filtered && <div className="run-history-empty-pills" aria-hidden="true"><span>完整回答存档</span><span>节点级执行耗时</span><span>知识切片引用溯源</span><span>一键提炼候选 Skill</span></div>}
     {filtered && <button type="button" className="studio-btn studio-btn-secondary" onClick={onClear}>清除筛选</button>}
   </div>;
 }
@@ -165,7 +167,7 @@ export function RunsView({ state, mutate, notify, canExtract = true }: ViewProps
   };
 
   return <section className="studio-view run-history-view" data-detail-open={mobileDetail && !!selected ? 'true' : 'false'}>
-    <header className="run-history-heading"><h1>AI 任务记录</h1></header>
+    <header className="run-history-heading"><h1>AI 任务记录</h1><p>完整追溯专家协作与工作流运行的回答结果、节点轨迹及知识引用依据。</p></header>
     <div className="run-history-toolbar" role="search" aria-label="筛选运行记录">
       <label className="run-history-search"><Search size={17} aria-hidden="true" /><span className="studio-sr-only">搜索任务、结果、专家或运行编号</span><input value={filters.search} onChange={event => { setFilters({ ...filters, search: event.target.value }); setMobileDetail(false); }} placeholder="搜索任务、结果、专家或编号" />{filters.search && <button type="button" onClick={() => setFilters({ ...filters, search: '' })} aria-label="清空搜索"><X size={16} /></button>}</label>
       <label className="run-history-filter"><span className="studio-sr-only">运行状态</span><select value={filters.status} onChange={event => { setFilters({ ...filters, status: event.target.value as RunFilters['status'] }); setMobileDetail(false); }}><option value="all">全部状态</option><option value="completed">已完成</option><option value="paused">待确认</option><option value="failed">执行失败</option><option value="rejected">已拒绝</option></select></label>

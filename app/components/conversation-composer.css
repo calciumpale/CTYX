@@ -2,16 +2,18 @@
   display: grid;
   gap: 6px;
   min-width: 0;
-  padding: 10px 11px 8px;
-  border: 1px solid var(--cds-border-strong);
-  border-radius: var(--radius-2xl);
+  padding: 11px 13px 10px;
+  border: 0;
+  border-radius: var(--cds-radius-composer);
   background: var(--cds-surface-2);
-  box-shadow: var(--cds-shadow-sm);
+  box-shadow: var(--cds-shadow-composer);
   text-align: start;
+  transition: box-shadow 200ms var(--cds-ease-swift), transform 200ms var(--cds-ease-swift);
 }
 
-.conversation-composer:focus-within { border-color: var(--cds-focus-color); }
-.conversation-composer:has(> textarea:focus-visible) { box-shadow: 0 0 0 1px var(--cds-focus-color); }
+.conversation-composer:hover { box-shadow: var(--cds-shadow-composer-hover); }
+.conversation-composer:focus-within { box-shadow: var(--cds-shadow-composer-focus); }
+.conversation-composer:has(> textarea:focus-visible) { box-shadow: var(--cds-shadow-composer-focus); }
 
 :is(.prospect-workspace, .customer-workspace) .conversation-composer > .conversation-composer-input {
   display: block;

@@ -23,7 +23,7 @@
 .api-settings-field > input { padding: 8px 10px; font-size: 13px; outline: none; }
 .api-settings input::placeholder { color: var(--cds-text-muted); opacity: 1; }
 .api-settings input:disabled { opacity: .6; cursor: wait; }
-.api-settings-help { font-size: 12px; line-height: 1.65; color: var(--cds-text-muted); margin: 6px 0 0; }
+.api-settings-help { font-size: 12px; line-height: 1.65; color: var(--cds-text-muted); margin: 8px 0 0; }
 .api-settings-field-error { color: var(--cds-fill-danger); font-size: 12px; margin: 5px 0 0; line-height: 1.6; }
 .api-settings-field > input[aria-invalid="true"], .api-settings-key-input:has(input[aria-invalid="true"]) { border-color: var(--cds-fill-danger); }
 .api-settings-key-field { margin-top: 16px; }

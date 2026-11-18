@@ -57,7 +57,7 @@ export default function MarketingMaterials({ notify, onBusyChange, onDirtyChange
 
   return <section className="material-workspace" aria-label="AI营销素材">
     <header className="material-heading material-workspace-header">
-      <h2>AI营销素材</h2>
+      <div className="material-title-group"><h2>AI营销素材</h2><span>多渠道文案、视觉海报与数字人播报统一创作</span></div>
       <div className="material-tabs" role="tablist" aria-label="素材功能">
         {sections.map(({ id: value, label, Icon }) => <button key={value} id={`${id}-${value}-tab`} type="button" role="tab"
           aria-selected={section === value} aria-controls={`${id}-${value}-panel`} tabIndex={section === value ? 0 : -1}

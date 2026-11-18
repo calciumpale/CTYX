@@ -3,6 +3,7 @@
 import { useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react';
 import { ArrowLeft, ArrowRight, BookOpen, Check, CheckCheck, ChevronDown, ChevronRight, Clock3, Copy, FileText, GitBranch, Info, Loader2, Pencil, RefreshCw, RotateCcw, Search, ShieldCheck, SlidersHorizontal, Tag, X } from 'lucide-react';
 import { AnswerContent } from './AnswerContent';
+import { KnowledgeDocsIllustration } from './VisualIllustrations';
 import { DEFAULT_TALKTRACK_POLICY, type FeedbackJob, type TalkTrack, type TalkTrackPolicy } from '../lib/talktrack-types';
 import type { ApiResult, ViewProps, WorkbenchState } from '../lib/types';
 import './studio.css';
@@ -26,7 +27,7 @@ export function TalkTrackPicker({ tracks, selectedIds, onChange, disabled = fals
 }
 
 function Empty({ title, detail, children }: { title: string; detail: string; children?: ReactNode }) {
-  return <div className="talk-library-empty"><BookOpen size={28} /><h2>{title}</h2>{detail && <p>{detail}</p>}{children}</div>;
+  return <div className="talk-library-empty"><KnowledgeDocsIllustration /><h2>{title}</h2>{detail && <p>{detail}</p>}<div className="talk-library-empty-pills" aria-hidden="true"><span>成单沟通原话提炼</span><span>异议化解逻辑拆解</span><span>结项成单率闭环验证</span></div>{children}</div>;
 }
 
 function UsageEvidence({ track, state }: { track: TalkTrack; state: WorkbenchState }) {

@@ -1,8 +1,9 @@
 'use client';
 
 import { useRef, useState, type FormEvent } from 'react';
-import { ArrowRight, CircleAlert, Eye, EyeOff, Loader2 } from 'lucide-react';
+import { ArrowRight, CircleAlert, Eye, EyeOff, Loader2, ShieldCheck } from 'lucide-react';
 import { BrandMark } from './CoreViews';
+import { LoginShowcaseIllustration } from './VisualIllustrations';
 import './role-workspaces.css';
 
 export interface WorkspaceLoginProps {
@@ -32,16 +33,58 @@ export default function WorkspaceLogin({ onLogin, error, busy }: WorkspaceLoginP
   };
 
   return <main className="workspace-login">
-    <div className="workspace-login-brand"><BrandMark small /><span>AI营销工作台</span></div>
-    <section className="workspace-login-panel" aria-labelledby="workspace-login-title">
-      <h1 id="workspace-login-title">登录</h1>
-      <form onSubmit={submit} aria-busy={busy}>
-        <div className="workspace-login-field"><label htmlFor="workspace-username">账号</label><input id="workspace-username" name="username" autoComplete="username" autoCapitalize="none" spellCheck={false} value={username} maxLength={80} disabled={busy} onChange={event => { setUsername(event.target.value); setValidation(''); }} required /></div>
-        <div className="workspace-login-field"><label htmlFor="workspace-password">密码</label><div className="workspace-password-input"><input id="workspace-password" name="password" type={showPassword ? 'text' : 'password'} autoComplete="current-password" value={password} maxLength={256} disabled={busy} onChange={event => { setPassword(event.target.value); setValidation(''); }} required /><button type="button" onClick={() => setShowPassword(value => !value)} aria-label={showPassword ? '隐藏密码' : '显示密码'} aria-pressed={showPassword}>{showPassword ? <EyeOff size={19} /> : <Eye size={19} />}</button></div></div>
-        {(validation || error) && <p className="workspace-login-error" role="alert"><CircleAlert size={18} /><span>{validation || error}</span></p>}
-        <button type="submit" className="workspace-login-submit" disabled={busy}>{busy ? <><Loader2 size={19} className="spin" />正在登录…</> : <>登录<ArrowRight size={18} /></>}</button>
-      </form>
-      <p className="workspace-login-help">忘记账号或密码，请联系管理员。</p>
-    </section>
+    <div className="workspace-login-shell">
+      <aside className="workspace-login-showcase" aria-hidden="true">
+        <div className="workspace-login-showcase-top">
+          <div className="workspace-login-brand workspace-login-brand-light">
+            <span className="workspace-login-emblem"><BrandMark small /></span>
+            <span>AI营销工作台</span>
+          </div>
+          <span className="workspace-login-live-pill"><i />多专家协同 · 事实可溯源</span>
+        </div>
+        <div className="workspace-login-showcase-copy">
+          <h2>让每一次客户推进都有据可依</h2>
+          <p>打通智能获客初筛、商机深度洞察、合同风险审查与话术沉淀。</p>
+        </div>
+        <div className="workspace-login-hero-graphic">
+          <LoginShowcaseIllustration />
+        </div>
+        <div className="workspace-login-pipeline">
+          <div className="workspace-login-step">
+            <span className="workspace-login-step-num">01</span>
+            <div><strong>智能获客与意向初筛</strong><small>多渠道评论采集 · 痛点评分与人工复核</small></div>
+            <em>AI 初筛</em>
+          </div>
+          <div className="workspace-login-step">
+            <span className="workspace-login-step-num">02</span>
+            <div><strong>商机跟进与下一步策略</strong><small>结合已确认原话与知识库生成推进清单</small></div>
+            <em>实时协同</em>
+          </div>
+          <div className="workspace-login-step">
+            <span className="workspace-login-step-num">03</span>
+            <div><strong>合同风险条款初审</strong><small>逐条定位风险原文并提供修订替换建议</small></div>
+            <em>风控护航</em>
+          </div>
+        </div>
+      </aside>
+      <section className="workspace-login-panel" aria-labelledby="workspace-login-title">
+        <div className="workspace-login-header">
+          <div className="workspace-login-brand workspace-login-brand-mobile"><span className="workspace-login-emblem" aria-hidden="true"><BrandMark small /></span><span>AI营销工作台</span></div>
+          <span className="workspace-login-kicker">WORKSPACE ACCESS</span>
+          <h1 id="workspace-login-title">登录工作空间</h1>
+          <p className="workspace-login-description">使用你的岗位账号进入对应科室与权限空间。</p>
+        </div>
+        <form onSubmit={submit} aria-busy={busy}>
+          <div className="workspace-login-field"><label htmlFor="workspace-username">账号</label><input id="workspace-username" name="username" placeholder="请输入工作台账号" autoComplete="username" autoCapitalize="none" spellCheck={false} value={username} maxLength={80} disabled={busy} onChange={event => { setUsername(event.target.value); setValidation(''); }} required /></div>
+          <div className="workspace-login-field"><label htmlFor="workspace-password">密码</label><div className="workspace-password-input"><input id="workspace-password" name="password" placeholder="请输入登录密码" type={showPassword ? 'text' : 'password'} autoComplete="current-password" value={password} maxLength={256} disabled={busy} onChange={event => { setPassword(event.target.value); setValidation(''); }} required /><button type="button" onClick={() => setShowPassword(value => !value)} aria-label={showPassword ? '隐藏密码' : '显示密码'} aria-pressed={showPassword}>{showPassword ? <EyeOff size={17} /> : <Eye size={17} />}</button></div></div>
+          {(validation || error) && <p className="workspace-login-error" role="alert"><CircleAlert size={17} /><span>{validation || error}</span></p>}
+          <button type="submit" className="workspace-login-submit" disabled={busy}>{busy ? <><Loader2 size={17} className="spin" />正在登录…</> : <>进入工作台<ArrowRight size={16} /></>}</button>
+        </form>
+        <div className="workspace-login-meta">
+          <span><ShieldCheck size={14} aria-hidden="true" />岗位权限与部门资料按会话严格隔离</span>
+          <p className="workspace-login-help">忘记账号或密码，请联系系统管理员。</p>
+        </div>
+      </section>
+    </div>
   </main>;
 }

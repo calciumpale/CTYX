@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useId, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react';
+import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react';
 import { BookOpen, Bot, Check, CircleAlert, GitBranch, Grip, Hand, Maximize, Minus, MoveRight, Plus, ScanLine, ShieldCheck, Square, Trash2, X } from 'lucide-react';
 import { AGENTS, type AgentId, type FlowEdge, type FlowNode, type NodeType, type TraceStep, type Workflow } from '../lib/types';
 import { autoLayoutWorkflow, canConnectNodes } from '../lib/workflow-graph';
@@ -19,6 +19,8 @@ export interface WorkflowCanvasProps {
   onChange: (workflow: Workflow) => void;
   statuses?: Record<string, TraceStep['status']>;
   onAddNode?: (type: NodeType, position: Point) => void;
+  toolbarPrefix?: ReactNode;
+  toolbarBadge?: ReactNode;
 }
 
 const WIDTH = 188;
@@ -36,8 +38,32 @@ const clampZoom = (zoom: number) => Math.max(.25, Math.min(2, zoom));
 const edgeKey = (edge: FlowEdge) => `${edge.from}\0${edge.to}`;
 const editableTarget = (target: EventTarget | null) => target instanceof HTMLElement && Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
 const curve = (from: Point, to: Point) => {
-  const bend = Math.max(64, Math.abs(to.x - from.x) * .44);
+  if (to.x < from.x - 20 && Math.abs(to.y - from.y) >= 80) {
+    const dy = to.y > from.y ? 1 : -1;
+    const midY = Math.round((from.y + to.y) / 2);
+    const r = 14;
+    const rx = from.x + 22;
+    const lx = Math.max(8, to.x - 22);
+    return `M ${from.x} ${from.y} L ${rx - r} ${from.y} Q ${rx} ${from.y} ${rx} ${from.y + dy * r} L ${rx} ${midY - dy * r} Q ${rx} ${midY} ${rx - r} ${midY} L ${lx + r} ${midY} Q ${lx} ${midY} ${lx} ${midY + dy * r} L ${lx} ${to.y - dy * r} Q ${lx} ${to.y} ${lx + r} ${to.y} L ${to.x} ${to.y}`;
+  }
+  const bend = Math.max(52, Math.abs(to.x - from.x) * .44);
   return `M ${from.x} ${from.y} C ${from.x + bend} ${from.y}, ${to.x - bend} ${to.y}, ${to.x} ${to.y}`;
+};
+const normalizeCrampedNodes = (nodes: FlowNode[]): FlowNode[] => {
+  if (nodes.length < 5) return nodes;
+  const firstY = nodes[0].y;
+  if (!nodes.every(node => node.y === firstY)) return nodes;
+  const sorted = [...nodes].sort((a, b) => a.x - b.x);
+  const cramped = sorted.slice(1).every((node, idx) => node.x - sorted[idx].x <= 215 && node.x - sorted[idx].x >= 180);
+  if (!cramped) return nodes;
+  const cols = 3;
+  const mapped = new Map<string, Point>();
+  sorted.forEach((node, index) => {
+    const row = Math.floor(index / cols);
+    const col = index % cols;
+    mapped.set(node.id, { x: 40 + col * 236, y: 90 + row * 186 });
+  });
+  return nodes.map(node => ({ ...node, ...mapped.get(node.id)! }));
 };
 const summary = (node: FlowNode) => node.type === 'agent'
   ? AGENTS.find(agent => agent.id === node.agentId)?.name ?? '尚未选择专家'
@@ -46,7 +72,7 @@ const summary = (node: FlowNode) => node.type === 'agent'
     : TYPES[node.type].description;
 const branchLabel = (condition: FlowEdge['condition']) => condition === 'default' ? '默认路径' : AGENTS.find(agent => agent.id === condition)?.name ?? '';
 
-export function WorkflowCanvas({ workflow, readOnly = false, selectedNodeId, onSelectNode, onChange, statuses = {}, onAddNode }: WorkflowCanvasProps) {
+export function WorkflowCanvas({ workflow, readOnly = false, selectedNodeId, onSelectNode, onChange, statuses = {}, onAddNode, toolbarPrefix, toolbarBadge }: WorkflowCanvasProps) {
   const viewport = useRef<HTMLDivElement>(null);
   const cameraRef = useRef<Camera>({ x: 36, y: 60, zoom: 1 });
   const [camera, setCameraState] = useState<Camera>({ x: 36, y: 60, zoom: 1 });
@@ -68,7 +94,8 @@ export function WorkflowCanvas({ workflow, readOnly = false, selectedNodeId, onS
   const suppressClick = useRef(false);
   const uniqueId = useId().replace(/[^a-zA-Z0-9_-]/g, '');
   const arrowId = `flow-arrow-${uniqueId}`;
-  const visibleNodes = workflow.nodes.map(node => movingNode?.id === node.id ? { ...node, ...movingNode.position } : node);
+  const baseNodes = useMemo(() => normalizeCrampedNodes(workflow.nodes), [workflow.nodes]);
+  const visibleNodes = baseNodes.map(node => movingNode?.id === node.id ? { ...node, ...movingNode.position } : node);
   const nodeMap = new Map(visibleNodes.map(node => [node.id, node]));
   const selectedEdgeData = workflow.edges.find(edge => edgeKey(edge) === selectedEdge);
 
@@ -85,13 +112,13 @@ export function WorkflowCanvas({ workflow, readOnly = false, selectedNodeId, onS
   const selectNode = (id: string) => { setSelectedEdge(null); onSelectNode(id); };
   const fit = () => {
     const rect = viewport.current?.getBoundingClientRect();
-    if (!rect || !workflow.nodes.length) return;
-    const left = Math.min(...workflow.nodes.map(node => node.x));
-    const top = Math.min(...workflow.nodes.map(node => node.y));
-    const right = Math.max(...workflow.nodes.map(node => node.x + WIDTH));
-    const bottom = Math.max(...workflow.nodes.map(node => node.y + HEIGHT));
-    const zoom = Math.min(1.2, clampZoom(Math.min((rect.width - 72) / (right - left), (rect.height - 96) / (bottom - top))));
-    setCamera({ x: (rect.width - (right - left) * zoom) / 2 - left * zoom, y: (rect.height - (bottom - top) * zoom) / 2 - top * zoom, zoom });
+    if (!rect || !baseNodes.length) return;
+    const left = Math.min(...baseNodes.map(node => node.x)) - 22;
+    const top = Math.min(...baseNodes.map(node => node.y));
+    const right = Math.max(...baseNodes.map(node => node.x + WIDTH)) + 22;
+    const bottom = Math.max(...baseNodes.map(node => node.y + HEIGHT));
+    const zoom = Math.min(1, clampZoom(Math.min((rect.width - 40) / (right - left), (rect.height - 72) / (bottom - top))));
+    setCamera({ x: Math.round((rect.width - (right - left) * zoom) / 2 - left * zoom), y: Math.round((rect.height - (bottom - top) * zoom) / 2 - top * zoom), zoom });
   };
   const zoomAt = (zoom: number, anchor?: Point) => {
     const rect = viewport.current?.getBoundingClientRect();
@@ -141,12 +168,18 @@ export function WorkflowCanvas({ workflow, readOnly = false, selectedNodeId, onS
 
   useEffect(() => {
     if (!size.width || !size.height) return;
-    const selected = workflow.nodes.find(node => node.id === selectedNodeId);
+    const selected = baseNodes.find(node => node.id === selectedNodeId);
     let frame = 0;
     if (!initialPositioned.current) {
-      const first = workflow.nodes.find(node => node.type === 'start') ?? workflow.nodes[0];
       frame = requestAnimationFrame(() => {
-        if (first) setCamera({ x: 36 - first.x, y: Math.max(56, (size.height - HEIGHT) / 2) - first.y, zoom: 1 });
+        if (baseNodes.length) {
+          const left = Math.min(...baseNodes.map(node => node.x)) - 22;
+          const top = Math.min(...baseNodes.map(node => node.y));
+          const right = Math.max(...baseNodes.map(node => node.x + WIDTH)) + 22;
+          const bottom = Math.max(...baseNodes.map(node => node.y + HEIGHT));
+          const zoom = Math.min(1, clampZoom(Math.min((size.width - 40) / (right - left), (size.height - 72) / (bottom - top))));
+          setCamera({ x: Math.round((size.width - (right - left) * zoom) / 2 - left * zoom), y: Math.round((size.height - (bottom - top) * zoom) / 2 - top * zoom), zoom });
+        }
         initialPositioned.current = true;
         previousSelected.current = selectedNodeId ?? '';
       });
@@ -160,7 +193,7 @@ export function WorkflowCanvas({ workflow, readOnly = false, selectedNodeId, onS
       previousSelected.current = selectedNodeId ?? '';
     }
     return () => cancelAnimationFrame(frame);
-  }, [workflow.id, workflow.nodes, selectedNodeId, size]);
+  }, [workflow.id, baseNodes, selectedNodeId, size]);
 
   const connect = (from: string, to: string) => {
     if (readOnly) return;
@@ -206,7 +239,7 @@ export function WorkflowCanvas({ workflow, readOnly = false, selectedNodeId, onS
     event.preventDefault(); event.stopPropagation();
     const distance = event.shiftKey ? 48 : 12;
     selectNode(node.id);
-    onChange({ ...workflow, nodes: workflow.nodes.map(item => item.id === node.id ? { ...item, x: Math.max(12, item.x + vector.x * distance), y: Math.max(12, item.y + vector.y * distance) } : item) });
+    onChange({ ...workflow, nodes: baseNodes.map(item => item.id === node.id ? { ...item, x: Math.max(12, item.x + vector.x * distance), y: Math.max(12, item.y + vector.y * distance) } : item) });
   };
   const startNodeMove = (event: PointerEvent<HTMLElement>, node: FlowNode) => {
     if (event.button !== 0 || (event.target as HTMLElement).closest('button')) return;
@@ -240,7 +273,7 @@ export function WorkflowCanvas({ workflow, readOnly = false, selectedNodeId, onS
     const active = move.current;
     if (active?.pointerId === event.pointerId) {
       if (!cancelled && active.moved && !readOnly) {
-        onChange({ ...workflow, nodes: workflow.nodes.map(node => node.id === active.id ? { ...node, ...active.position } : node) });
+        onChange({ ...workflow, nodes: baseNodes.map(node => node.id === active.id ? { ...node, ...active.position } : node) });
         suppressClick.current = true;
       }
       move.current = null; setMovingNode(null);
@@ -257,7 +290,7 @@ export function WorkflowCanvas({ workflow, readOnly = false, selectedNodeId, onS
 
   return <section className="flow-canvas" aria-label="工作流画布" onKeyDown={handleKey}>
     <div className="flow-canvas-toolbar">
-      <div className="flow-canvas-toolbar-group"><span className="flow-canvas-caption"><GitBranch size={14} />{workflow.nodes.length} 个节点<span className="flow-canvas-separator">·</span>{workflow.edges.length} 条连接</span>{readOnly && <span className="flow-canvas-readonly">只读</span>}</div>
+      <div className="flow-canvas-toolbar-group">{toolbarPrefix}<span className="flow-canvas-caption"><GitBranch size={14} /><strong>工作流画布</strong><span className="flow-canvas-separator">·</span>{workflow.nodes.length} 个节点<span className="flow-canvas-separator">·</span>{workflow.edges.length} 条连接</span>{toolbarBadge}{readOnly && <span className="flow-canvas-readonly">只读</span>}</div>
       <div className="flow-canvas-toolbar-group"><button type="button" onClick={() => zoomAt(camera.zoom - .1)} disabled={camera.zoom <= .25} title="缩小画布" aria-label="缩小画布"><Minus size={15} /></button><button type="button" className="flow-canvas-zoom" onClick={() => zoomAt(1)} title="重置为 100%">{Math.round(camera.zoom * 100)}%</button><button type="button" onClick={() => zoomAt(camera.zoom + .1)} disabled={camera.zoom >= 2} title="放大画布" aria-label="放大画布"><Plus size={15} /></button><span className="flow-canvas-toolbar-divider" /><button type="button" onClick={fit} title="适应全部节点" aria-label="适应画布"><Maximize size={15} /><span>适应</span></button>{!readOnly && <button type="button" onClick={() => { cancelConnection(); onChange(autoLayoutWorkflow(workflow)); setMessage('节点已整理，原有连线与分支均已保留。'); }} title="整理位置并保留所有连线"><ScanLine size={15} /><span>自动整理</span></button>}</div>
     </div>
     <div ref={viewport} className={`flow-canvas-viewport${panning ? ' is-panning' : ''}${dropActive ? ' is-drop-active' : ''}`} tabIndex={0} role="region" aria-label="节点编辑区域，拖动空白处平移，方向键移动节点" onPointerMove={handlePointerMove} onPointerUp={event => endGesture(event)} onPointerCancel={event => endGesture(event, true)}
@@ -299,7 +332,7 @@ export function WorkflowCanvas({ workflow, readOnly = false, selectedNodeId, onS
         </svg>
         {visibleNodes.map(node => {
           const meta = TYPES[node.type], Icon = meta.icon, status = statuses[node.id];
-          return <article key={node.id} data-flow-node={node.id} className={`flow-canvas-node${selectedNodeId === node.id ? ' is-selected' : ''}${movingNode?.id === node.id ? ' is-dragging' : ''}${status ? ` has-status-${status}` : ''}`} style={{ left: node.x, top: node.y, width: WIDTH, height: HEIGHT }} tabIndex={0} aria-label={`${node.label}，${meta.name}${status ? `，${STATUS_LABELS[status]}` : ''}`} aria-current={selectedNodeId === node.id ? 'true' : undefined} onFocus={event => { if (event.target === event.currentTarget) selectNode(node.id); }} onPointerDown={event => startNodeMove(event, node)} onKeyDown={event => handleNodeKey(event, node)} onClick={event => { if ((event.target as HTMLElement).closest('button')) return; if (suppressClick.current) { suppressClick.current = false; return; } selectNode(node.id); }}>
+          return <article key={node.id} data-flow-node={node.id} data-node-type={node.type} className={`flow-canvas-node${selectedNodeId === node.id ? ' is-selected' : ''}${movingNode?.id === node.id ? ' is-dragging' : ''}${status ? ` has-status-${status}` : ''}`} style={{ left: node.x, top: node.y, width: WIDTH, height: HEIGHT }} tabIndex={0} aria-label={`${node.label}，${meta.name}${status ? `，${STATUS_LABELS[status]}` : ''}`} aria-current={selectedNodeId === node.id ? 'true' : undefined} onFocus={event => { if (event.target === event.currentTarget) selectNode(node.id); }} onPointerDown={event => startNodeMove(event, node)} onKeyDown={event => handleNodeKey(event, node)} onClick={event => { if ((event.target as HTMLElement).closest('button')) return; if (suppressClick.current) { suppressClick.current = false; return; } selectNode(node.id); }}>
             <div className="flow-canvas-node-kind"><span className="flow-canvas-node-icon"><Icon size={14} /></span><span>{meta.name}</span>{!readOnly && <Grip size={12} className="flow-canvas-node-grip" />}</div>
             <strong title={node.label}>{node.label}</strong>
             <div className="flow-canvas-node-summary" title={summary(node)}>{summary(node)}</div>

@@ -15,7 +15,19 @@
   border: 1px solid var(--cds-border);
   border-radius: var(--cds-panel-radius);
   background: var(--cds-surface-2);
+  box-shadow: var(--cds-shadow-xs);
 }
+
+.training-setup-person:has(.training-profile-editor[open]) > :is(.training-persona-chips, .training-persona-concern) { display: none; }
+.training-persona-chips { display: flex; flex-wrap: wrap; gap: 5px; margin: 4px 0 6px; }
+.training-persona-chips > span { padding: 2px 7px; border-radius: 6px; background: var(--cds-surface-0); border: 1px solid var(--cds-border); color: var(--cds-text-secondary); font-size: 11.5px; }
+.training-persona-concern { margin: 0 0 4px; font-size: 12px; color: var(--cds-text-secondary); line-height: 1.5; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 1; overflow: hidden; }
+.training-mode-highlights { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--cds-border); display: grid; gap: 10px; }
+.training-mode-highlights > p { margin: 0; font-size: 12.5px; color: var(--cds-text-secondary); line-height: 1.6; }
+.training-mode-highlights > div { display: flex; flex-wrap: wrap; gap: 6px; }
+.training-mode-highlights > div > span { padding: 3px 8px; border-radius: 6px; background: var(--cds-surface-0); border: 1px solid var(--cds-border); color: var(--cds-text-secondary); font-size: 11.5px; }
+.training-rubric-pills { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 4px; }
+.training-rubric-pills > span { padding: 2px 8px; border-radius: 6px; background: var(--cds-surface-0); border: 1px solid var(--cds-border); color: var(--cds-text-secondary); font-size: 11.5px; }
 
 .studio-training-view .training-setup-card > h2 {
   flex: none;
@@ -93,7 +105,7 @@
 .training-setup-start .training-profile-preview { margin-top: 10px; padding: 12px 0 0; }
 .training-setup-start .training-profile-person { margin-bottom: 13px; }
 .studio-training-view .training-setup-start .training-profile-person h3 { font-size: 14px; }
-.training-setup-start .training-profile-ready { padding: 11px 0; }
+.training-setup-start .training-profile-ready { padding: 7px 0; }
 .training-setup-start .training-profile-actions {
   flex: none;
   flex-direction: row;

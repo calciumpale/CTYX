@@ -21,7 +21,7 @@
   flex: 1;
   overflow: auto;
   scrollbar-width: thin;
-  background: var(--cf-inset);
+  background: var(--cds-surface-1);
 }
 
 .cf :is(h2, h3, h4, p, label),
@@ -35,7 +35,7 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 8px 16px;
-  padding: 0 0 12px;
+  padding: 0 0 10px;
 }
 
 .cf-actions {
@@ -59,10 +59,10 @@
 
 .cf-grid {
   display: grid;
-  grid-template-columns: minmax(272px, 1fr) minmax(0, 2fr);
-  align-items: start;
+  grid-template-columns: minmax(290px, 1fr) minmax(0, 1.85fr);
+  align-items: stretch;
   gap: 16px;
-  padding-bottom: 20px;
+  padding-bottom: 10px;
 }
 
 .cf-panel, .cf-output { min-width: 0; }
@@ -70,10 +70,13 @@
   border: 1px solid var(--cf-rule);
   border-radius: var(--cf-panel-radius);
   background: var(--cf-paper);
+  box-shadow: var(--cds-shadow-xs);
 }
 
-.cf-brief, .cf-insight { padding: 16px; }
-.cf-output { display: grid; gap: 12px; }
+.cf-brief, .cf-insight { padding: 15px 16px; }
+.cf-output { display: flex; flex-direction: column; gap: 14px; }
+.cf-results { flex: 1; display: flex; flex-direction: column; }
+.cf-channel-panel { flex: 1; display: flex; flex-direction: column; }
 .cf-panel-head {
   display: flex;
   flex-wrap: wrap;
@@ -100,11 +103,11 @@
   font-size: 12px;
 }
 
-.cf-brief .cf-panel-head { margin-bottom: 15px; }
+.cf-brief .cf-panel-head { margin-bottom: 11px; }
 .cf-fields {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 13px 10px;
+  gap: 10px 10px;
   min-width: 0;
 }
 
@@ -113,12 +116,13 @@
 .cf .cf-field, .cf-queue .cf-field {
   display: grid;
   align-content: start;
-  gap: 5px;
+  gap: 4px;
   min-width: 0;
+  margin-bottom: 0;
   color: var(--cf-ink);
-  font-size: 13px;
+  font-size: 12.5px;
   font-weight: 550;
-  line-height: 1.4;
+  line-height: 1.35;
 }
 
 .cf :is(input, textarea, select),
@@ -136,9 +140,9 @@
 
 .cf .cf-field :is(input, textarea, select), .cf-queue .cf-field :is(input, textarea, select) { width: 100%; }
 .cf input::placeholder, .cf textarea::placeholder, .cf-queue input::placeholder { color: var(--cf-muted); opacity: 1; }
-.cf textarea { min-height: 74px; resize: vertical; line-height: 1.65; }
+.cf textarea { min-height: 58px; resize: vertical; line-height: 1.55; }
 .cf fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
-.cf legend { margin-bottom: 6px; padding: 0; color: var(--cf-ink); font-size: 13px; font-weight: 550; line-height: 1.4; }
+.cf legend { margin-bottom: 5px; padding: 0; color: var(--cf-ink); font-size: 12.5px; font-weight: 550; line-height: 1.35; }
 .cf legend span { color: var(--cf-muted); font-size: 12px; font-weight: 400; }
 
 .cf-chips {
@@ -183,9 +187,18 @@
 .cf .cf-channels button { justify-content: flex-start; }
 .cf svg, .cf-queue svg { flex-shrink: 0; }
 .cf .button.primary, .cf-queue .button.primary {
-  border-color: var(--cf-action);
+  border-color: color-mix(in srgb, var(--cf-action) 85%, #000);
   background: var(--cf-action);
   color: var(--cf-on-action);
+  box-shadow: var(--cds-btn-primary-shadow);
+}
+
+.cf .button.primary:disabled, .cf-queue .button.primary:disabled {
+  border-color: var(--cds-border);
+  background: var(--cds-fill-secondary);
+  color: var(--cds-text-muted);
+  box-shadow: none;
+  opacity: 1;
 }
 
 .cf .button.primary:not(:disabled):hover, .cf-queue .button.primary:not(:disabled):hover {
@@ -207,10 +220,10 @@
 }
 
 .cf .button.ghost:not(:disabled):hover, .cf-queue .button.ghost:not(:disabled):hover { background: var(--cf-hover); color: var(--cf-ink); }
-.cf :is(input, textarea, select, button, a):focus-visible,
-.cf-queue :is(input, textarea, select, button, a):focus-visible {
-  outline: 2px solid var(--cds-focus-color, var(--cf-action));
-  outline-offset: 2px;
+.cf :is(button, a):focus-visible,
+.cf-queue :is(button, a):focus-visible {
+  outline: none;
+  box-shadow: var(--cds-ring-soft);
 }
 
 .cf-generate { display: grid; gap: 8px; margin-top: 14px; }
@@ -262,19 +275,24 @@
 }
 
 .cf-empty {
-  display: grid;
-  justify-items: center;
-  align-content: center;
-  gap: 7px;
-  min-height: 228px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 280px;
   margin: 0;
-  padding: 22px 14px;
+  padding: 32px 24px;
   color: var(--cf-muted);
   text-align: center;
 }
+.cf-empty-art { margin-bottom: 4px; }
+.cf-empty-Badges { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; margin-top: 8px; }
+.cf-empty-Badges > span { padding: 3px 10px; border-radius: 999px; border: 1px solid var(--cds-border); background: var(--cds-surface-0); color: var(--cds-text-secondary); font-size: 11.5px; font-weight: 500; }
 
 .cf .cf-empty :is(h3, h4, strong) { color: var(--cf-ink); font-size: 14px; font-weight: 600; }
-.cf .cf-empty p { max-width: 40ch; }
+.cf .cf-empty p { max-width: 46ch; }
 .cf-preview {
   display: flex;
   flex-wrap: wrap;

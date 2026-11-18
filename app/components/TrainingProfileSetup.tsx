@@ -104,6 +104,12 @@ export function TrainingProfileSetup({ scenario, voice, busy, error, modelConnec
         <span className="training-profile-avatar" aria-hidden="true"><UserRound size={21} /></span>
         <div><strong>{draft.name} <small>{draft.role}</small></strong><p>{draft.industry}</p></div>
       </div>
+      <div className="training-persona-chips" aria-hidden="true">
+        <span>{draft.difficulty}难度</span>
+        <span>{draft.communicationStyle}</span>
+        <span>{draft.decisionMode}</span>
+      </div>
+      <p className="training-persona-concern" aria-hidden="true">顾虑：{draft.concern}</p>
       <details ref={profileEditor} className="training-profile-editor" onInvalidCapture={event => { event.currentTarget.open = true; }}>
         <summary ref={profileEditToggle}>编辑客户画像<ChevronDown size={14} aria-hidden="true" /></summary>
         <div className="training-profile-editor-scroll" role="region" aria-label="客户画像编辑" tabIndex={0}>
@@ -134,7 +140,10 @@ export function TrainingProfileSetup({ scenario, voice, busy, error, modelConnec
     <section className="training-setup-card training-setup-mode" aria-labelledby={`${id}-mode-heading`}>
       <h2 id={`${id}-mode-heading`}>选陪练方式</h2>
       {modeSelection}
-      {voiceSelection && <div className="training-setup-voice">{voiceSelection}</div>}
+      {voiceSelection ? <div className="training-setup-voice">{voiceSelection}</div> : <div className="training-mode-highlights" aria-hidden="true">
+        <p>文字模式支持实时话术提示与逐句复盘，适合拆解复杂商务异议。</p>
+        <div><span>实时应答锦囊</span><span>多轮追问演练</span><span>支持输入法保护</span></div>
+      </div>}
     </section>
     <section className="training-setup-card training-setup-start" aria-labelledby={`${id}-start-heading`}>
       <h2 id={`${id}-start-heading`}>开始陪练</h2>
@@ -143,8 +152,9 @@ export function TrainingProfileSetup({ scenario, voice, busy, error, modelConnec
         {error && <div className="training-profile-error" role="alert"><Info size={16} /><div><p>{error}</p><span>画像已保留，可重试开始或返回修改。</span></div></div>}
         <div className="training-profile-preview"><ProfileFacts profile={reviewed} /></div>
       </div> : <>
-        <p className="training-setup-help">确认客户画像后，进入练习对话。</p>
+        <p className="training-setup-help">确认客户画像后，进入练习对话并按五维标准评估。</p>
         <div className="training-profile-ready"><Check size={15} aria-hidden="true" /><p>{modelConnected ? '已配置模型' : '本地规则'}{voice ? ' · 语音连接后由你开启麦克风' : ' · 文字对话'}</p></div>
+        <div className="training-rubric-pills" aria-hidden="true"><span>需求追问</span><span>共情倾听</span><span>价值表达</span><span>推进动作</span><span>合规边界</span></div>
       </>}
       <div className="training-profile-actions">
         {reviewed ? <>

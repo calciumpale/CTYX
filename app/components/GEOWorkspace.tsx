@@ -8,6 +8,7 @@ import { emptyGeoDocument, emptyGeoWorkflow, GEO_STATUS_LABELS, type GeoArticle,
 import type { MemberSession } from '../lib/member-types';
 import { preferredScrollBehavior } from '../lib/scroll-behavior';
 import GeoKnowledgePicker from './GeoKnowledgePicker';
+import { GeoIllustration } from './VisualIllustrations';
 import {
   availableSlots, downloadGeoFile, downloadGeoReport, emptyCapture, GeoAiCaptureControls, GeoAnswerCapture, GeoAnswerLog,
   GEO_CAPTURE_PROVIDER_LABELS, GeoGapEditor, GeoGapSources, GeoPlanEditor, GeoRetestComparison, GeoVisibility, hasCaptureDraft,
@@ -159,11 +160,11 @@ function BriefEditor({ brief, onChange, disabled }: {
 }) {
   return <fieldset className="geo-fields" disabled={disabled}>
     <legend className="geo-visually-hidden">建模范围</legend>
-    <div className="geo-field-pair">
+    <div className="geo-field-triple">
       <label>品牌<input className="input" value={brief.brand} maxLength={120} onChange={e => onChange({ ...brief, brand: e.target.value })} /></label>
       <label>选题<input className="input" value={brief.topic} maxLength={120} onChange={e => onChange({ ...brief, topic: e.target.value })} /></label>
+      <label>目标受众<input className="input" value={brief.audience} maxLength={300} onChange={e => onChange({ ...brief, audience: e.target.value })} /></label>
     </div>
-    <label>目标受众<input className="input" value={brief.audience} maxLength={300} onChange={e => onChange({ ...brief, audience: e.target.value })} /></label>
     <label>用户主要问题<textarea className="textarea" rows={2} value={brief.question} maxLength={600}
       placeholder="例如：选择园区办公空间时，需要核对哪些条件？" onChange={e => onChange({ ...brief, question: e.target.value })} /></label>
   </fieldset>;
@@ -674,7 +675,9 @@ export default function GEOWorkspace({ member, notify, onDirtyChange, onBusyChan
     mutate('observe', { engine: engine.trim(), query: query.trim(), result, evidence: evidence.trim() }, '正在保存观察…', 'AI 可见性观察已记录');
   }
 
-  return <section className="geo-workspace" aria-label="GEO 内容优化">
+  const showEmptyOnboarding = !loading && !listError && !projects.length && !project;
+
+  return <section className="geo-workspace" aria-label="GEO 内容优化" data-empty={showEmptyOnboarding}>
     <aside className="geo-projects" aria-label="GEO 项目" data-open={projectsOpen}>
       <header className="geo-field-heading">
         <h2>GEO 内容优化</h2>
@@ -690,10 +693,16 @@ export default function GEOWorkspace({ member, notify, onDirtyChange, onBusyChan
           {projects.map(item => <li key={item.id}><button type="button" className="geo-project-button" aria-current={project?.id === item.id ? 'page' : undefined}
             disabled={busy} onClick={() => open(item.id)}><strong>{item.title || item.topic || '未命名项目'}</strong><Status status={item.status} /></button></li>)}
         </ul>
-        {!loading && !listError && !projects.length && !project && <p className="geo-muted">暂无已保存的项目。</p>}
       </div>
     </aside>
     <div className="geo-main" role="region" aria-label="GEO 项目内容" tabIndex={0}>
+      {showEmptyOnboarding && <header className="geo-page-header">
+        <div>
+          <h2>GEO 内容优化</h2>
+          <p>围绕目标客户真实提问追踪 AI 回答与引用表现，定位信源缺口并在发布后复测。</p>
+        </div>
+        <button type="button" className="button secondary" disabled={busy} onClick={start}><Plus size={15} aria-hidden="true" />立即新建</button>
+      </header>}
       {project && step > 0 && <div className="geo-capabilities" data-ready={capabilities.status === 'ready'}>
         <p className="geo-muted" role="status">{capabilities.status === 'loading' ? '正在读取 AI 服务状态…' : capabilities.status === 'error'
           ? '暂时无法读取 AI 服务状态。' : modelAvailable ? 'AI 服务状态已更新。' : '当前未发现可用的生成模型。'}</p>
@@ -704,11 +713,17 @@ export default function GEOWorkspace({ member, notify, onDirtyChange, onBusyChan
       {error && <div role="alert" className="geo-alert" ref={errorRef}>{error}
         {conflict && project && <button type="button" className="button secondary" disabled={busy} onClick={() => open(project.id, true)}><RotateCcw size={15} aria-hidden="true" />读取最新版本</button>}
       </div>}
-      {!project || !draft ? <div className="geo-empty">
-        <FileText size={25} aria-hidden="true" />
-        <h3>查看品牌在 AI 回答中的表现</h3>
-        <p>从用户可能提出的问题出发，记录实际答案和引用，找出需要补齐的信源，并在发布后复测。</p>
-        <button type="button" className="button primary" disabled={busy} onClick={start}><Plus size={16} aria-hidden="true" />新建内容项目</button>
+      {!project || !draft ? <div className="geo-empty-stage">
+        <div className="geo-empty">
+          <GeoIllustration className="geo-empty-art" />
+          <div className="geo-empty-engines" aria-hidden="true"><span>DeepSeek</span><span>豆包</span><span>Kimi</span><span>通义千问</span></div>
+          <h3>查看品牌在 AI 回答中的表现</h3>
+          <p>从用户可能提出的问题出发，记录实际答案和引用，找出需要补齐的信源，并在发布后复测。</p>
+          <ol className="geo-empty-steps" aria-hidden="true">
+            {STEPS.map((item, idx) => <li key={item.title}><span>0{idx + 1}</span><strong>{item.title}</strong><small>{item.detail}</small></li>)}
+          </ol>
+          <button type="button" className="button primary" disabled={busy} onClick={start}><Plus size={16} aria-hidden="true" />新建内容项目</button>
+        </div>
       </div> : <>
         <header className="geo-header">
           <div>

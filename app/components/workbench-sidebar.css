@@ -1,17 +1,19 @@
 .sidebar-account-header {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 4px;
-  margin-bottom: 15px;
+  margin-bottom: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--nav-border);
 }
 .sidebar-account { position: relative; flex: 1; min-width: 0; }
 .sidebar-account-trigger {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 9px;
   min-height: 44px;
-  padding: 4px 6px;
-  border-radius: var(--radius-lg);
+  padding: 5px 7px;
+  border-radius: 10px;
   list-style: none;
   cursor: pointer;
 }
@@ -22,37 +24,39 @@
 .sidebar-avatar {
   display: grid;
   place-items: center;
-  width: 32px;
+  width: 30px;
   aspect-ratio: 1;
   flex: none;
-  border-radius: var(--cds-radius-pill);
-  background: var(--app-accent);
+  border-radius: 9px;
+  background: linear-gradient(135deg, var(--app-accent), color-mix(in srgb, var(--app-accent) 78%, #6366f1));
   color: var(--app-accent-contrast);
   font-size: 12px;
   font-weight: 650;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 24%), var(--cds-shadow-xs);
 }
 .sidebar-account-identity { display: grid; gap: 2px; min-width: 0; flex: 1; }
 .sidebar-account-identity > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sidebar-account-identity strong { font-size: 13px; font-weight: 600; }
-.sidebar-account-identity small { font-size: 10px; color: var(--nav-muted); }
+.sidebar-account-identity strong { font-size: 13px; font-weight: 600; color: var(--nav-text); line-height: 1.3; }
+.sidebar-account-identity small { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--nav-muted); line-height: 1.25; }
+.sidebar-online-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--success); flex: none; }
 .sidebar-account-actions {
   position: absolute;
-  z-index: 2;
-  top: calc(100% + 4px);
+  z-index: 5;
+  top: calc(100% + 5px);
   inset-inline: 0;
   display: grid;
-  padding: 4px;
+  padding: 5px;
   border: 1px solid var(--nav-border);
-  border-radius: var(--radius-lg);
+  border-radius: 11px;
   background: var(--nav-raised);
   box-shadow: var(--cds-shadow-md);
 }
 .sidebar-account-actions button {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
   min-height: 36px;
-  padding: 7px 8px;
+  padding: 7px 9px;
   border: 0;
   border-radius: var(--radius-md);
   background: transparent;
@@ -60,31 +64,50 @@
   text-align: start;
   font-size: 12px;
 }
-.sidebar-account-actions button + button:last-child { border-top: 1px solid var(--nav-border); }
+.sidebar-account-actions button + button:last-child { border-top: 1px solid var(--nav-border); margin-top: 2px; padding-top: 8px; }
 .sidebar-account-actions button:hover { background: var(--nav-hover); }
 .sidebar-account-actions svg { flex: none; color: var(--nav-muted); }
+.sidebar-accent-picker { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 6px 8px 8px; margin-bottom: 2px; border-bottom: 1px solid var(--nav-border); font-size: 11.5px; color: var(--nav-muted); }
+.sidebar-accent-picker > div { display: flex; align-items: center; gap: 6px; }
+.sidebar-accent-actions .sidebar-accent-dot, .sidebar-account-actions .sidebar-accent-dot { width: 18px; height: 18px; min-height: 18px; padding: 0; border-radius: 50%; background: var(--swatch); border: 2px solid var(--nav-raised); box-shadow: 0 0 0 1px var(--nav-border); }
+.sidebar-account-actions .sidebar-accent-dot:hover { background: var(--swatch); transform: scale(1.12); }
+.sidebar-account-actions .sidebar-accent-dot.is-active { box-shadow: 0 0 0 2px var(--swatch); transform: scale(1.08); }
 .sidebar-account :is(summary, button):focus-visible { outline: 2px solid var(--app-accent); outline-offset: -2px; }
 .sidebar .nav-item { gap: 8px; padding-inline: 10px; }
 .sidebar .nav-item > svg { flex: none; }
 .sidebar .nav-item > span { min-width: 0; }
 .sidebar-business-label { white-space: nowrap; }
+.sidebar-management {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--nav-border);
+}
+.sidebar > .sidebar-management:first-of-type { margin-top: 0; padding-top: 0; border-top: 0; }
+.sidebar-admin-foot {
+  margin-top: auto;
+  padding-top: 10px;
+  border-top: 1px solid var(--nav-border);
+}
+.topbar-chat-btn { display: none; }
 .sidebar-recent .nav-caption {
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding-inline: 10px;
+  margin-bottom: 2px;
   color: var(--nav-muted);
   font-size: 11px;
+  font-weight: 550;
 }
-.sidebar-recent .nav-caption .icon-button { width: 25px; height: 25px; }
+.sidebar-recent .nav-caption .icon-button { width: 24px; height: 24px; }
 .sidebar-recent > button {
   display: grid;
   grid-template-columns: 18px minmax(0, 1fr);
   align-items: center;
   column-gap: 8px;
   width: 100%;
-  min-height: 33px;
-  padding: 7px 10px;
+  min-height: 32px;
+  padding: 6px 10px;
   border: 0;
   border-radius: var(--radius-lg);
   background: transparent;
@@ -93,38 +116,41 @@
   font-size: 11px;
   line-height: 1.5;
 }
-.sidebar-recent > button:hover { background: var(--nav-hover); }
-.sidebar-recent-marker { width: 4px; height: 4px; margin-inline: auto; border-radius: 50%; background: currentColor; }
+.sidebar-recent > button:hover { background: var(--nav-hover); color: var(--nav-text); }
+.sidebar-recent-marker { width: 5px; height: 5px; margin-inline: auto; border-radius: 50%; background: var(--app-accent); opacity: .75; }
 .sidebar-recent-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sidebar .sidebar-reminder-count {
-  min-width: 19px;
-  padding: 1px 5px;
+  min-width: 20px;
+  padding: 1px 6px;
   border-radius: var(--cds-radius-pill);
-  background: var(--nav-selected);
-  color: var(--nav-text);
+  background: color-mix(in srgb, var(--app-accent) 13%, var(--nav-raised));
+  color: var(--app-accent-ink);
   font-weight: 650;
   text-align: center;
   font-variant-numeric: tabular-nums;
 }
-.sidebar .nav-item.active .sidebar-reminder-count { background: var(--nav-bg); }
+.sidebar .nav-item.active .sidebar-reminder-count {
+  background: var(--app-accent);
+  color: var(--app-accent-contrast);
+}
 .workbench-chat-launcher {
   position: fixed;
   z-index: 21;
-  inset-inline-end: max(18px, env(safe-area-inset-right));
-  bottom: 18px;
-  width: 44px;
-  height: 44px;
+  inset-inline-end: max(20px, env(safe-area-inset-right));
+  bottom: 20px;
+  width: 42px;
+  height: 42px;
   display: grid;
   place-items: center;
-  border: 1px solid var(--cds-border-strong);
+  border: 1px solid color-mix(in srgb, var(--brand) 75%, #000);
   border-radius: var(--cds-radius-pill);
   color: var(--cds-on-action);
   background: var(--brand);
-  box-shadow: var(--cds-shadow-md);
+  box-shadow: var(--cds-btn-primary-shadow), var(--cds-shadow-md);
 }
-.workbench-chat-launcher:hover { transform: translateY(-2px); }
+.workbench-chat-launcher:hover { transform: translateY(-2px); background: var(--cds-clay-hover); }
 .workbench-chat-launcher:focus-visible { outline: 2px solid var(--cds-text-primary); outline-offset: 2px; }
-.app-shell:has(.prospect-chat-panel) .workbench-chat-launcher { bottom: calc(18px + var(--app-frame-inset)); }
+.app-shell:has(.prospect-chat-panel) .workbench-chat-launcher { bottom: calc(20px + var(--app-frame-inset)); }
 .app-shell:has(.workbench-chat-launcher) .prospect-chat-composer { padding-inline-end: 56px; }
 @media (max-width: 1200px) {
   .app-shell:has(.workbench-chat-launcher) .cw-composer-dock { padding-inline-end: max(var(--cw-chat-gutter), 60px); }
@@ -134,6 +160,6 @@
   .sidebar-account-actions { inset-inline-end: -32px; }
   .sidebar-account-actions button { min-height: 44px; }
   .sidebar-account-header .close-nav { width: 44px; height: 44px; flex: none; }
-  .workbench-chat-launcher { bottom: calc(70px + env(safe-area-inset-bottom)); inset-inline-end: 12px; }
-  .app-shell:has(.prospect-chat-panel) .workbench-chat-launcher { bottom: calc(70px + env(safe-area-inset-bottom)); }
+  .topbar-chat-btn { display: inline-flex; color: var(--app-accent); }
+  .workbench-chat-launcher { display: none; }
 }

@@ -1,6 +1,6 @@
 'use client';
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
-import { ArrowDown, ArrowRight, Bell, BookOpen, BriefcaseBusiness, CalendarDays, Check, ChevronDown, ChevronRight, CircleAlert, ClipboardCheck, Clock3, ExternalLink, FileAudio, GitBranch, Globe2, Home, Loader2, LogOut, Menu, MessageSquare, Moon, PanelLeftClose, Presentation, Search, Settings, ShieldCheck, Sun, Users, Video, Workflow, X } from 'lucide-react';
+import { ArrowDown, ArrowRight, Bell, BookOpen, BriefcaseBusiness, CalendarDays, Check, ChevronDown, ChevronRight, CircleAlert, ClipboardCheck, Clock3, ExternalLink, FileAudio, GitBranch, Globe2, Home, LayoutGrid, Loader2, LogOut, Menu, MessageSquare, Moon, PanelLeftClose, Presentation, Search, Settings, ShieldCheck, Sparkles, Sun, Users, Video, Workflow, X } from 'lucide-react';
 import { useWorkbench } from '../lib/api';
 import { useChatScroll } from '../lib/use-chat-scroll';
 import { upsertChatProgressStep, type ChatProgressStep } from '../lib/chat-progress';
@@ -61,6 +61,7 @@ export default function Workbench({member,onLogout}:{member:MemberSession;onLogo
   const [navigationKey, setNavigationKey] = useState(0);
   const [meetingEmbed, setMeetingEmbed] = useState(false);
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
+  const [accent, setAccent] = useState<'iris' | 'jade' | 'terracotta' | 'sapphire'>('iris');
   const [mobileMenu, setMobileMenu] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [search, setSearch] = useState('');
@@ -123,6 +124,11 @@ export default function Workbench({member,onLogout}:{member:MemberSession;onLogo
     const frame = requestAnimationFrame(() => {
       const saved = localStorage.getItem('ctai-theme');
       if (saved === 'dark' || saved === 'light') { setTheme(saved); document.documentElement.dataset.mode = saved; }
+      const savedAccent = localStorage.getItem('ctai-accent');
+      if (savedAccent === 'iris' || savedAccent === 'jade' || savedAccent === 'terracotta' || savedAccent === 'sapphire') {
+        setAccent(savedAccent);
+        document.documentElement.dataset.accent = savedAccent;
+      }
     });
     return () => cancelAnimationFrame(frame);
   }, []);
@@ -181,6 +187,7 @@ export default function Workbench({member,onLogout}:{member:MemberSession;onLogo
     guardedProceed();
   }, [notify, view, member.role, setView, setProjectIntent, setFocusedDeal, setFocusedApprovalContract, setFocusedApprovalId, setMobileMenu, setSearchOpen, setLeaveProject, setLeaveApproval, setLeaveContract]);
   const toggleTheme = () => { const next = theme === 'light' ? 'dark' : 'light'; setTheme(next); document.documentElement.dataset.mode = next; localStorage.setItem('ctai-theme', next); };
+  const chooseAccent = (next: 'iris' | 'jade' | 'terracotta' | 'sapphire') => { setAccent(next); document.documentElement.dataset.accent = next; localStorage.setItem('ctai-accent', next); };
   const onAsk = useCallback((query: string, agentId?: AgentId, dealId?: string, talkTrackIds?:string[], priorRunIds?:string[]) => {
     if(member.role==='admin'){notify('请在搭建中心调试 Agent，销售助手由业务账号使用');return;}
     if(projectBusy.current){notify('项目正在录入或更新，请等待完成。');return;}
@@ -268,10 +275,21 @@ export default function Workbench({member,onLogout}:{member:MemberSession;onLogo
         }}>
           <summary className="sidebar-account-trigger" role="button" aria-label="账号菜单" aria-controls="workbench-account-actions" aria-expanded={accountMenuOpen}>
             <span className="sidebar-avatar" aria-hidden="true">{Array.from(member.displayName.trim()).slice(0, /[\p{Script=Han}]/u.test(member.displayName) ? 1 : 2).join('') || member.username.slice(0, 2)}</span>
-            <span className="sidebar-account-identity"><strong>{member.displayName}</strong><small>{MEMBER_LABELS[member.role]}</small></span>
+            <span className="sidebar-account-identity"><strong>{member.displayName}</strong><small><i className="sidebar-online-dot" aria-hidden="true" />@{member.username}</small></span>
             <ChevronDown size={14} aria-hidden="true" />
           </summary>
           <div className="sidebar-account-actions" id="workbench-account-actions">
+            <div className="sidebar-accent-picker" role="group" aria-label="界面主题色调">
+              <span>主题色</span>
+              <div>
+                {([
+                  ['iris', '鸢尾', '#4f46e5'],
+                  ['jade', '青碧', '#0f766e'],
+                  ['terracotta', '暖陶', '#c2593f'],
+                  ['sapphire', '星蓝', '#2563eb'],
+                ] as const).map(([key, label, swatch]) => <button key={key} type="button" className={`sidebar-accent-dot${accent === key ? ' is-active' : ''}`} style={{ '--swatch': swatch } as React.CSSProperties} aria-label={`切换${label}色调`} aria-pressed={accent === key} title={`${label}色调`} onClick={() => chooseAccent(key)} />)}
+              </div>
+            </div>
             <button type="button" onClick={toggleTheme}>{theme==='light'?<Moon size={15}/>:<Sun size={15}/>} {theme==='light'?'切换深色主题':'切换浅色主题'}</button>
             <button type="button" onClick={requestLogout} disabled={accountBusy}>{accountBusy?<Loader2 size={15} className="spin"/>:<LogOut size={15}/>}退出登录</button>
           </div>
@@ -311,17 +329,28 @@ export default function Workbench({member,onLogout}:{member:MemberSession;onLogo
           <span className="sidebar-recent-label">{run.query}</span>
         </button>)}
       </div>}
-      {managementNavigation.length > 0 && <nav className="sidebar-management" aria-label="系统管理导航">
-        {managementNavigation.map(item => {
-          const Icon = navigationIcons[item.id] ?? Home;
+      {managementNavigation.length > 0 && <>
+        <nav className="sidebar-management" aria-label="系统管理导航">
+          {managementNavigation.filter(item => item.id !== 'runs').map(item => {
+            const Icon = navigationIcons[item.id] ?? Home;
+            const current = view === item.id;
+            return <a key={item.id} {...linkProps(item.id)} className={`nav-item${current ? ' active' : ''}`} aria-current={current ? 'page' : undefined}>
+              <Icon size={18} strokeWidth={1.7} /><span>{item.label}</span>
+            </a>;
+          })}
+        </nav>
+        {managementNavigation.filter(item => item.id === 'runs').map(item => {
+          const Icon = navigationIcons[item.id] ?? Clock3;
           const current = view === item.id;
-          return <a key={item.id} {...linkProps(item.id)} className={`nav-item${current ? ' active' : ''}`} aria-current={current ? 'page' : undefined}>
-            <Icon size={18} strokeWidth={1.7} /><span>{item.label}</span>
-          </a>;
+          return <div key={item.id} className="sidebar-admin-foot">
+            <a {...linkProps(item.id)} className={`nav-item${current ? ' active' : ''}`} aria-current={current ? 'page' : undefined}>
+              <Icon size={18} strokeWidth={1.7} /><span>{item.label}</span>
+            </a>
+          </div>;
         })}
-      </nav>}
+      </>}
     </aside>
-    <div className="workspace"><header className="topbar"><div className="topbar-left"><button className="icon-button menu-toggle" onClick={()=>setMobileMenu(true)} aria-label="展开导航"><Menu size={21}/></button><span className="breadcrumb"><strong>{title}</strong></span></div><div className="topbar-actions"><button className="global-search" aria-label="搜索工作空间" onClick={openSearch}><Search size={17}/></button></div></header>
+    <div className="workspace"><header className="topbar"><div className="topbar-left"><button className="icon-button menu-toggle" onClick={()=>setMobileMenu(true)} aria-label="展开导航"><Menu size={21}/></button><span className="breadcrumb"><strong>{title}</strong></span></div><div className="topbar-actions"><button className="global-search" aria-label="搜索工作空间" onClick={openSearch}><Search size={17}/></button>{member.role !== 'admin' && <button type="button" className="icon-button topbar-chat-btn" aria-label="AI 营销助手" title="AI 营销助手" disabled={chatBusy} onClick={() => { setConversation([]); setFailedRequest(null); setChatError(''); setChatOpen(true); }}><MessageSquare size={17} aria-hidden="true" /></button>}</div></header>
       <main className="main-content" ref={workspaceContent} key={view+':'+navigationKey}>
         {view==='home'&&member.role==='admin'&&<AdminHome state={state} onNavigate={navigate}/>}
         {view==='reports'&&member.role==='manager'&&<SalesDailyReport state={state} notify={notify} onNavigate={navigate}/>}
@@ -338,11 +367,11 @@ export default function Workbench({member,onLogout}:{member:MemberSession;onLogo
         {(view==='knowledge'||view==='talktracks')&&<KnowledgeWorkspace key={view+':'+(focusedDeal||'')} focus={focusedDeal} {...props} member={member} onBusyChange={onProjectBusy} onDirtyChange={onProjectDirty} initialTab={view==='talktracks'?'talktracks':'documents'} onUsePlaybook={id=>{if(member.role==='admin')return;setSelectedTalkIds([id]);setConversation([]);setFailedRequest(null);setChatError('');setChatOpen(true);}}/>}
         {view==='studio'&&<BuilderStudio {...props} readOnly={member.role!=='admin'} onGuardReady={onStudioGuardReady}/>}
         {view==='runs'&&<RunsView {...props} canExtract={member.role!=='admin'}/>}
-        {view==='settings'&&member.role==='admin'&&<><SettingsView {...props} onConnectionChanged={reload}/><section className="meeting-settings-status"><MeetingImportWorkspace state={state} onWorkspaceRefresh={reload} admin/></section></>}
+        {view==='settings'&&member.role==='admin'&&<SettingsView {...props} onConnectionChanged={reload} meetingSettings={<MeetingImportWorkspace state={state} onWorkspaceRefresh={reload} admin/>}/>}
         {view==='members'&&member.role==='admin'&&<MembersView member={member} notify={notify} onBusyChange={onProjectBusy} onDirtyChange={onProjectDirty}/>}
         {view==='rules'&&member.role==='admin'&&<BusinessRulesView state={state} notify={notify} onBusyChange={onApprovalBusy} onDirtyChange={onApprovalDirty}/>}
       </main>
-      {member.role!=='admin'&&<nav className="mobile-role-navigation" aria-label="快捷导航" inert={mobileMenu}>{navigation.map(item=>{const Icon=item.icon;return <button key={item.id} aria-label={item.label} aria-current={section===item.id?'page':undefined} onClick={()=>navigate(item.id)}><Icon size={20}/><span>{item.mobileLabel??item.label}</span></button>;})}</nav>}
+      {member.role!=='admin'&&(()=>{const primaryIds=new Set<string>(['reminders','prospecting','deals','recordings']);const primaryItems=navigation.filter(item=>primaryIds.has(item.id));const moreActive=section!==undefined&&!primaryIds.has(section);return <nav className="mobile-role-navigation" aria-label="快捷导航" inert={mobileMenu}>{primaryItems.map(item=>{const Icon=item.icon;return <button key={item.id} aria-label={item.label} aria-current={section===item.id?'page':undefined} onClick={()=>navigate(item.id)}><Icon size={19}/><span>{item.mobileLabel??item.label}</span></button>;})}<button type="button" aria-label="更多功能" aria-current={moreActive?'page':undefined} onClick={()=>setMobileMenu(true)}><LayoutGrid size={19}/><span>更多</span></button></nav>;})()}
     </div>
     {leaveProject&&<DiscardChangesDialog title="有尚未保存的内容" onCancel={()=>{setLeaveProject(false);pendingProjectLeave.current=null;}} onDiscard={()=>{projectDirty.current=false;setLeaveProject(false);const proceed=pendingProjectLeave.current;pendingProjectLeave.current=null;proceed?.();}}/>}
     {leaveApproval&&<DiscardChangesDialog title="审批内容尚未提交" onCancel={()=>{setLeaveApproval(false);pendingApprovalLeave.current=null;}} onDiscard={()=>{approvalDirty.current=false;setLeaveApproval(false);const proceed=pendingApprovalLeave.current;pendingApprovalLeave.current=null;proceed?.();}}/>}
@@ -358,8 +387,11 @@ export default function Workbench({member,onLogout}:{member:MemberSession;onLogo
       }} tabIndex={0}>
         <div className="chat-reading">
           {conversation.length === 0 && !pendingQuery && !failedRequest && <div className="chat-welcome">
-            <h2>新对话</h2>
-            <div>{AGENTS.map(a => <button key={a.id} onClick={() => onAsk(a.starter, a.id)}>{a.name}<ArrowRight size={13} /></button>)}</div>
+            <span className="chat-welcome-emblem" aria-hidden="true"><Sparkles size={22} /></span>
+            <span className="chat-welcome-context">{focusedDeal && state.deals.some(d => d.id === focusedDeal) ? `当前项目：${state.deals.find(d => d.id === focusedDeal)?.name}` : '全局智能工作台助手'}</span>
+            <h2>有什么可以一起推进？</h2>
+            <p className="chat-welcome-subtitle">自动识别意图并调度领域专家，结合已确认客户事实、合同与知识库生成可追溯建议。</p>
+            <div className="chat-welcome-grid">{AGENTS.map((a, idx) => <button key={a.id} onPointerMove={e => { const r = e.currentTarget.getBoundingClientRect(); e.currentTarget.style.setProperty('--spot-x', `${e.clientX - r.left}px`); e.currentTarget.style.setProperty('--spot-y', `${e.clientY - r.top}px`); }} onClick={() => onAsk(a.starter, a.id)}><span className="chat-agent-icon" data-avatar-tone={idx % 6} aria-hidden="true"><Sparkles size={15} /></span><span className="chat-agent-card-copy"><strong>{a.name}</strong><small>{a.description}</small></span><ArrowRight size={14} aria-hidden="true" /></button>)}<button type="button" onPointerMove={e => { const r = e.currentTarget.getBoundingClientRect(); e.currentTarget.style.setProperty('--spot-x', `${e.clientX - r.left}px`); e.currentTarget.style.setProperty('--spot-y', `${e.clientY - r.top}px`); }} onClick={() => onAsk('请结合当前客户事实与沟通记录，汇总项目现状、待核实风险及下一步推进清单。')}><span className="chat-agent-icon" data-avatar-tone={5} aria-hidden="true"><BriefcaseBusiness size={15} /></span><span className="chat-agent-card-copy"><strong>AI 项目复盘</strong><small>汇总关键事实、风险边界与推进清单</small></span><ArrowRight size={14} aria-hidden="true" /></button></div>
           </div>}
           {conversation.map(run => {
             const duration = Math.max(0.1, run.duration / 1000).toFixed(1);

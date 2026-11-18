@@ -7,7 +7,7 @@
 .project-intake textarea { display: block; width: 100%; min-width: 0; resize: vertical; padding: 12px 14px; border: 1px solid var(--cds-border); border-radius: var(--control-radius); background: var(--cds-surface-3); color: var(--cds-text-primary); font-family: inherit; font-size: 14px; line-height: 1.8; caret-color: var(--cds-clay); }
 .project-intake textarea::placeholder { color: var(--cds-text-secondary); opacity: 1; }
 .project-intake textarea::selection { background: var(--cds-alpha-2); color: var(--cds-text-primary); }
-.project-intake textarea:focus-visible, .project-intake button:focus-visible { outline: 2px solid var(--cds-clay); outline-offset: 3px; }
+.project-intake button:focus-visible { outline: none; box-shadow: var(--cds-ring-soft); }
 .project-intake textarea:disabled { opacity: .8; }
 .project-intake-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 14px; margin-top: 14px; }
 .project-intake-voice-actions, .project-intake-submit { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }

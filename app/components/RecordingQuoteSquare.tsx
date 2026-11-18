@@ -4,6 +4,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { AudioLines, Copy, Loader2, Quote, RotateCcw, Search, Trash2 } from 'lucide-react';
 import type { RecordingQuote } from '../lib/recording-quotes-types';
 import { Overlay } from './CoreViews';
+import { AudioWaveIllustration } from './VisualIllustrations';
 import './recording-quote-square.css';
 
 export type { RecordingQuote } from '../lib/recording-quotes-types';
@@ -151,7 +152,10 @@ export function RecordingQuoteSquare({ onOpenSource, refreshKey = 0 }: {
     {readError && <div className="recording-quote-error" role="alert"><p>{readError}</p><button type="button" className="button secondary" onClick={() => { setReadError(''); setRetryKey(value => value + 1); }}><RotateCcw size={14} aria-hidden="true" />重新加载</button></div>}
     {!quotes && !readError && <p className="recording-quote-empty" role="status"><Loader2 size={18} className="spin" aria-hidden="true" />正在读取金句</p>}
     {quotes && (quotes.length === 0 ? <div className="recording-quote-empty">
-      <Quote size={24} aria-hidden="true" /><strong>暂无金句</strong><p>可从录音转写原文添加金句。</p>
+      <AudioWaveIllustration />
+      <strong>暂无金句</strong>
+      <p>可从录音转写原文一键收藏高转化沟通表达，供全团队复盘与学习。</p>
+      <div className="recording-upload-pills" aria-hidden="true"><span>价格异议化解原话</span><span>客户核心痛点原声</span><span>关键决策推进表达</span></div>
     </div> : visible.length === 0 ? <p className="recording-quote-empty" role="status">没有匹配的金句</p> : <ul className="recording-quote-list" aria-label="已保存金句">
       {visible.map(quote => <li className="recording-quote-item" key={quote.id}>
         <blockquote>{quote.text}</blockquote>

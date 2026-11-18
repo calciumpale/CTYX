@@ -14,15 +14,22 @@ interface RowProps {
   onSelect: (company: CustomerCompany, preferredProjectId: string | null) => void;
 }
 
+const avatarTone = (name: string) => {
+  let hash = 0;
+  for (const ch of name) hash = (hash * 31 + (ch.codePointAt(0) ?? 0)) >>> 0;
+  return hash % 6;
+};
+
 const CompanyRow = memo(function CompanyRow({ company, selected, preferredProjectId, hasDraft, locked, onSelect }: RowProps) {
   const firstProject = company.projects[0];
   const label = company.projects.length > 1 ? `${company.projects.length} 个项目`
     : firstProject.dataOrigin === 'research' ? publicSourceLabel(firstProject)
       : firstProject.contact || firstProject.industry || '待补充联系人';
+  const stage = firstProject?.stage;
   return <button className={`cw-company${selected ? ' selected' : ''}`} aria-current={selected ? 'true' : undefined} disabled={locked} onClick={() => onSelect(company, preferredProjectId)}>
-    <span className="cw-company-avatar" aria-hidden="true">{company.name.slice(0, 1)}</span>
+    <span className="cw-company-avatar" data-avatar-tone={avatarTone(company.name)} aria-hidden="true">{company.name.slice(0, 1)}</span>
     <span className="cw-company-copy"><strong>{company.name}</strong><span>{label}</span></span>
-    {hasDraft && <span className="cw-draft-dot" title="有未保存草稿" aria-label="有未保存草稿" />}
+    {hasDraft ? <span className="cw-draft-dot" title="有未保存草稿" aria-label="有未保存草稿" /> : stage ? <span className="cw-company-stage" aria-hidden="true">{stage}</span> : null}
   </button>;
 });
 

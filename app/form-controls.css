@@ -96,3 +96,125 @@
   padding-block: 0 !important;
   border-radius: var(--control-radius) !important;
 }
+
+/* Unified crisp field borders, custom select chevron, and soft halo focus ring across all modules. */
+:root body :is(
+  input:not([type="checkbox"], [type="radio"], [type="range"], [type="color"], [type="file"], [type="hidden"], [type="button"], [type="submit"], [type="reset"], [type="image"]):not([hidden]):not([class*="sr-only"]):not(:where(
+    .search-field input, .project-search input, .approval-search input, .studio-search input,
+    .builder-search input, .talk-library-search input, .run-history-search input,
+    .meeting-search-input input, .api-settings-key-input input, .sales-report-controls > label input,
+    .web-prospect-toolbar .web-prospect-list-search input, .modal-search input, .builder-editor-name input
+  )),
+  select:not([multiple]):not([size]):not([hidden]):not(:where(.agent-select select, .talk-track-picker select, .role-switch select)),
+  select[size="1"]:not([multiple]):not([hidden]):not(:where(.agent-select select, .talk-track-picker select, .role-switch select)),
+  textarea:not([hidden]):not([class*="sr-only"]):not(:where(
+    .composer textarea, .conversation-composer textarea, .studio-reply-composer textarea,
+    .contract-text-field textarea, .studio-content-title textarea
+  ))
+) {
+  border: 1px solid var(--cds-field-border);
+  background-color: var(--cds-surface-2);
+  box-shadow: 0 1px 2px rgb(15 23 42 / 2.5%);
+  outline: none !important;
+  transition: border-color 150ms var(--cds-ease-swift), box-shadow 150ms var(--cds-ease-swift), background-color 150ms var(--cds-ease-swift);
+}
+
+:root body :is(
+  input:not([type="checkbox"], [type="radio"], [type="range"], [type="color"], [type="file"], [type="hidden"], [type="button"], [type="submit"], [type="reset"], [type="image"]):not([hidden]):not([class*="sr-only"]):not(:where(
+    .search-field input, .project-search input, .approval-search input, .studio-search input,
+    .builder-search input, .talk-library-search input, .run-history-search input,
+    .meeting-search-input input, .api-settings-key-input input, .sales-report-controls > label input,
+    .web-prospect-toolbar .web-prospect-list-search input, .modal-search input, .builder-editor-name input
+  )),
+  select:not([multiple]):not([size]):not([hidden]):not(:where(.agent-select select, .talk-track-picker select, .role-switch select)),
+  select[size="1"]:not([multiple]):not([hidden]):not(:where(.agent-select select, .talk-track-picker select, .role-switch select)),
+  textarea:not([hidden]):not([class*="sr-only"]):not(:where(
+    .composer textarea, .conversation-composer textarea, .studio-reply-composer textarea,
+    .contract-text-field textarea, .studio-content-title textarea
+  ))
+):hover:not(:disabled):not(:focus) {
+  border-color: var(--cds-field-border-hover);
+}
+
+:root body :is(
+  input:not([type="checkbox"], [type="radio"], [type="range"], [type="color"], [type="file"], [type="hidden"], [type="button"], [type="submit"], [type="reset"], [type="image"]):not([hidden]):not([class*="sr-only"]):not(:where(
+    .search-field input, .project-search input, .approval-search input, .studio-search input,
+    .builder-search input, .talk-library-search input, .run-history-search input,
+    .meeting-search-input input, .api-settings-key-input input, .sales-report-controls > label input,
+    .web-prospect-toolbar .web-prospect-list-search input, .modal-search input, .builder-editor-name input
+  )),
+  select:not([multiple]):not([size]):not([hidden]):not(:where(.agent-select select, .talk-track-picker select, .role-switch select)),
+  select[size="1"]:not([multiple]):not([hidden]):not(:where(.agent-select select, .talk-track-picker select, .role-switch select)),
+  textarea:not([hidden]):not([class*="sr-only"]):not(:where(
+    .composer textarea, .conversation-composer textarea, .studio-reply-composer textarea,
+    .contract-text-field textarea, .studio-content-title textarea
+  ))
+):is(:focus, :focus-visible) {
+  outline: none !important;
+  border-color: var(--cds-field-border-focus) !important;
+  box-shadow: var(--cds-focus-shadow) !important;
+}
+
+/* Custom minimal chevron for all standard dropdowns (replaces native OS select chrome). */
+:root body :is(
+  select:not([multiple]):not([size]):not([hidden]),
+  select[size="1"]:not([multiple]):not([hidden])
+):not(:where(.agent-select select, .talk-track-picker select, .role-switch select)) {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  background-size: 14px 14px;
+  cursor: pointer;
+}
+
+:root[data-mode="dark"] body :is(
+  select:not([multiple]):not([size]):not([hidden]),
+  select[size="1"]:not([multiple]):not([hidden])
+):not(:where(.agent-select select, .talk-track-picker select, .role-switch select)) {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+}
+
+/* Composite search and secret-key input wrappers share the same border & focus halo. */
+:root body :is(
+  .search-field, .project-search, .approval-search, .studio-search, .builder-search,
+  .talk-library-search, .run-history-search, .meeting-search-input,
+  .api-settings-key-input, .sales-report-controls > label,
+  .web-prospect-toolbar .web-prospect-list-search
+) {
+  border: 1px solid var(--cds-field-border);
+  background-color: var(--cds-surface-2);
+  box-shadow: 0 1px 2px rgb(15 23 42 / 2.5%);
+  transition: border-color 150ms var(--cds-ease-swift), box-shadow 150ms var(--cds-ease-swift);
+}
+
+:root body :is(
+  .search-field, .project-search, .approval-search, .studio-search, .builder-search,
+  .talk-library-search, .run-history-search, .meeting-search-input,
+  .api-settings-key-input, .sales-report-controls > label,
+  .web-prospect-toolbar .web-prospect-list-search
+):hover:not(:focus-within) {
+  border-color: var(--cds-field-border-hover);
+}
+
+:root body :is(
+  .search-field, .project-search, .approval-search, .studio-search, .builder-search,
+  .talk-library-search, .run-history-search, .meeting-search-input,
+  .api-settings-key-input, .sales-report-controls > label,
+  .web-prospect-toolbar .web-prospect-list-search
+):focus-within {
+  outline: none !important;
+  border-color: var(--cds-field-border-focus) !important;
+  box-shadow: var(--cds-focus-shadow) !important;
+}
+
+:root body :is(
+  .search-field, .project-search, .approval-search, .studio-search, .builder-search,
+  .talk-library-search, .run-history-search, .meeting-search-input,
+  .api-settings-key-input, .sales-report-controls > label,
+  .web-prospect-toolbar .web-prospect-list-search
+) input:is(:focus, :focus-visible) {
+  outline: none !important;
+  box-shadow: none !important;
+}

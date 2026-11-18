@@ -15,6 +15,7 @@ import { createKnowledgeRequestIdentity } from './knowledge-request-identity';
 import { drainImportQueue, type ImportQueueItem, type KnowledgePdfParser } from './knowledge-import-queue';
 import { importMineruPdf, readMineruAvailability } from './knowledge-mineru-import';
 import { Overlay } from './CoreViews';
+import { KnowledgeDocsIllustration } from './VisualIllustrations';
 import './knowledge-libraries.css';
 
 const endpoint = '/api/knowledge-library';
@@ -45,7 +46,7 @@ async function request<T>(signal: AbortSignal, body?: Record<string, unknown>, q
   return payload;
 }
 
-export function KnowledgeLibraries({ notify, onBusyChange, onDirtyChange }: { notify: (message: string) => void; onBusyChange?: (busy: boolean) => void; onDirtyChange?: (dirty: boolean) => void }) {
+export function KnowledgeLibraries({ notify, onBusyChange, onDirtyChange, embedded = false }: { notify: (message: string) => void; onBusyChange?: (busy: boolean) => void; onDirtyChange?: (dirty: boolean) => void; embedded?: boolean }) {
   const [snapshot, setSnapshot] = useState<KnowledgeLibrarySnapshot | null>(null);
   const [libraryId, setLibraryId] = useState('');
   const [view, setView] = useState<'documents' | 'search'>('documents');
@@ -316,14 +317,28 @@ export function KnowledgeLibraries({ notify, onBusyChange, onDirtyChange }: { no
   }
 
   return <div className="knowledge-libraries">
-    <header className="knowledge-libraries-heading"><div><h1>知识库</h1>{snapshot && !canManage && <span className="knowledge-readonly">只读 · 管理员和销售管理者可维护</span>}</div>
-      <div className="knowledge-actions"><button className="button ghost" disabled={Boolean(busy)} onClick={refresh}><RefreshCw size={15} />刷新</button>{canManage && <button className="button primary" disabled={Boolean(busy)} onClick={() => openDialog({ kind: 'create' })}><Plus size={16} />新建资料库</button>}</div>
-    </header>
+    {embedded ? (
+      <div className="knowledge-libraries-toolbar">
+        <span className="knowledge-libraries-summary">{snapshot ? (snapshot.libraries.length ? `共 ${snapshot.libraries.length} 个资料库 · ${snapshot.documents.length} 份已入库文档` : canManage ? '0 个可用资料库' : '0 个可用资料库 · 只读（管理员和销售管理者可维护）') : '正在同步资料库状态…'}</span>
+        <div className="knowledge-actions"><button className="button ghost" disabled={Boolean(busy)} onClick={refresh}><RefreshCw size={15} />刷新</button>{canManage && Boolean(snapshot?.libraries.length) && <button className="button primary" disabled={Boolean(busy)} onClick={() => openDialog({ kind: 'create' })}><Plus size={16} />新建资料库</button>}</div>
+      </div>
+    ) : (
+      <header className="knowledge-libraries-heading"><div><h1>知识库</h1>{snapshot && !canManage && <span className="knowledge-readonly">只读 · 管理员和销售管理者可维护</span>}</div>
+        <div className="knowledge-actions"><button className="button ghost" disabled={Boolean(busy)} onClick={refresh}><RefreshCw size={15} />刷新</button>{canManage && Boolean(snapshot?.libraries.length) && <button className="button primary" disabled={Boolean(busy)} onClick={() => openDialog({ kind: 'create' })}><Plus size={16} />新建资料库</button>}</div>
+      </header>
+    )}
     {error && <p className="knowledge-feedback is-error" role="alert"><CircleAlert size={17} />{error}</p>}
     {!snapshot ? (busy ? <p className="knowledge-feedback" role="status"><Loader2 size={17} className="spin" />正在读取资料库…</p> : <div className="knowledge-empty"><BookOpen size={24} /><h2>暂未能读取资料库</h2><button className="button secondary" onClick={refresh}>重新加载</button></div>) :
+      !snapshot.libraries.length ? <div className="knowledge-empty knowledge-empty-standalone">
+        <KnowledgeDocsIllustration className="knowledge-empty-art" />
+        <h3>还没有资料库</h3>
+        <p>{canManage ? '创建部门专属或全员共享资料库，上传业务文档后自动完成切块与检索索引。' : '当前工作空间尚未建立资料库，请联系管理员或销售管理者创建并导入资料。'}</p>
+        <div className="knowledge-format-pills" aria-hidden="true"><span>Excel (XLSX/XLS)</span><span>PDF</span><span>Word (DOCX)</span><span>Markdown</span><span>CSV / TXT</span></div>
+        {canManage && <button type="button" className="button primary" disabled={Boolean(busy)} onClick={() => openDialog({ kind: 'create' })}><Plus size={16} />新建资料库</button>}
+      </div> :
       <div className="knowledge-libraries-grid">
         <nav className="knowledge-library-list" aria-label="资料库列表">
-          {snapshot.libraries.length ? snapshot.libraries.map(library => <button className="knowledge-library-option" key={library.id} type="button" disabled={Boolean(busy)} aria-pressed={library.id === libraryId} onClick={() => selectLibrary(library.id)}><Database size={16} /><span>{library.name}</span><small>{library.documentCount} 份</small></button>) : <p>暂无资料库</p>}
+          {snapshot.libraries.map(library => <button className="knowledge-library-option" key={library.id} type="button" disabled={Boolean(busy)} aria-pressed={library.id === libraryId} onClick={() => selectLibrary(library.id)}><Database size={16} /><span>{library.name}</span><small>{library.documentCount} 份</small></button>)}
         </nav>
         <section className="knowledge-library-main" aria-label={current?.name || '资料库操作'}>
           <div className="knowledge-library-header"><div><h2>{current?.name || '全部资料'}</h2>{current && <span className="knowledge-library-count">{current.documentCount} 份</span>}</div>
@@ -341,7 +356,13 @@ export function KnowledgeLibraries({ notify, onBusyChange, onDirtyChange }: { no
               {document.rechunkJob && !['completed', 'cancelled'].includes(document.rechunkJob.status) && <div className="knowledge-form"><p role="status">重新切块：{document.rechunkJob.status} · {document.rechunkJob.indexedCount} / {document.rechunkJob.chunkCount} · 旧内容仍可用</p>{document.rechunkJob.error && <p role="alert">{document.rechunkJob.error}</p>}{canManage && <div className="knowledge-actions"><button className="button secondary" disabled={Boolean(busy)} onClick={() => void run('resume-rechunk', async signal => { pauseRechunk.current = false; await continueRechunk({ document, job: document.rechunkJob! }, signal, true); })}>继续重新切块</button><button className="button ghost" disabled={Boolean(busy)} onClick={() => void run('cancel-rechunk', async signal => { const result = await request<RechunkResult>(signal, { action: 'cancelRechunk', jobId: document.rechunkJob!.id }); acceptRechunk(result); setRechunkNotice(''); })}>取消暂存任务</button></div>}</div>}
               <div className="knowledge-actions knowledge-row-actions"><button className="button ghost" disabled={Boolean(busy)} onClick={() => preview(document)}><Layers size={15} />预览切片</button>{canManage && <button className="button ghost" disabled={Boolean(busy)} onClick={() => openDialog({ kind: 'rechunk', document })}>切块设置 / 重新切块</button>}{canManage && hasEmbedding && document.status !== 'ready' && <button className="button ghost" disabled={Boolean(busy)} onClick={() => retryIndex(document)}>{indexing ? <Loader2 size={15} className="spin" /> : <RefreshCw size={15} />}{document.status === 'error' ? '重试索引' : '继续索引'}</button>}{canManage && <button className="icon-button" disabled={Boolean(busy)} aria-label={'删除 ' + document.title} onClick={() => openDialog({ kind: 'remove', document })}><Trash2 size={17} /></button>}</div>
             </li>;
-          })}</ul> : <div className="knowledge-empty"><FileText size={26} /><h3>{current ? '这个库还没有资料' : '还没有资料库'}</h3>{!canManage && <p>请联系管理员或销售管理者导入。</p>}</div>
+          })}</ul> : <div className="knowledge-empty">
+            <KnowledgeDocsIllustration className="knowledge-empty-art" />
+            <h3>{current ? '这个库还没有资料' : '还没有资料库'}</h3>
+            <p>{!canManage ? '请联系管理员或销售管理者导入。' : current ? '上传业务文档或粘贴正文，自动完成切块与全文检索索引。' : '创建部门专属或全员共享资料库，为 AI 助手与获客接待提供可溯源知识支撑。'}</p>
+            <div className="knowledge-format-pills" aria-hidden="true"><span>Excel (XLSX/XLS)</span><span>PDF</span><span>Word (DOCX)</span><span>Markdown</span><span>CSV / TXT</span></div>
+            {canManage && !current && <button type="button" className="button primary" disabled={Boolean(busy)} onClick={() => openDialog({ kind: 'create' })}><Plus size={16} />新建第一个资料库</button>}
+          </div>
           : <div className="knowledge-search">
             <form className="knowledge-form" onSubmit={searchDocuments}>
               <label>检索问题<input placeholder="例如：客户续租时需要提供哪些资料？" value={query} maxLength={1500} disabled={Boolean(busy)} onChange={event => setQuery(event.target.value)} required /></label>
@@ -359,11 +380,12 @@ export function KnowledgeLibraries({ notify, onBusyChange, onDirtyChange }: { no
     {dialog && <Overlay title={dialog.kind === 'create' ? '新建资料库' : dialog.kind === 'rename' ? '资料库改名' : dialog.kind === 'upload' ? '导入资料' : dialog.kind === 'preview' ? '预览切片' : dialog.kind === 'settings' ? '资料库设置' : dialog.kind === 'rechunk' ? '切块设置 / 重新切块' : '删除资料'} onClose={closeDialog} wide={dialog.kind === 'preview'} className="knowledge-dialog">
       {dialogError && <p className="knowledge-feedback is-error" role="alert"><CircleAlert size={17} />{dialogError}</p>}
       {(dialog.kind === 'create' || dialog.kind === 'rename') && <form className="knowledge-form" onSubmit={saveLibrary}>
-        <label>资料库名称<input placeholder="例如：产品与服务" value={name} maxLength={60} onChange={event => setName(event.target.value)} required autoFocus disabled={Boolean(busy)} /></label>
+        <label>资料库名称<input placeholder="例如：产品方案与报价规范" value={name} maxLength={60} onChange={event => setName(event.target.value)} required autoFocus disabled={Boolean(busy)} /></label>
+        {dialog.kind === 'create' && <label>可见范围<select value={departmentId} onChange={event => setDepartmentId(event.target.value)} disabled={Boolean(busy)}><option value="shared">全部门共享</option>{KNOWLEDGE_DEPARTMENTS.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}</select><small>全部门共享可供所有岗位检索；指定部门仅授权对应业务团队与 AI 会话引用。</small></label>}
         <div className="knowledge-actions knowledge-dialog-actions"><button type="button" className="button secondary" disabled={Boolean(busy)} onClick={closeDialog}>取消</button><button className="button primary" disabled={Boolean(busy) || !name.trim()}>{busy === 'name' ? '正在保存…' : dialog.kind === 'create' ? '创建资料库' : '保存名称'}</button></div>
       </form>}
       {dialog.kind === 'upload' && <form className="knowledge-form" onSubmit={saveDocument}>
-        <p className="knowledge-dialog-description">{current?.name} · 保存解析正文和文件名</p>
+        <p className="knowledge-dialog-description">{current?.name} · {importMode === 'file' ? '批量解析文档并自动切块入库' : '粘贴文本正文并保存切块索引'}</p>
         <div className="knowledge-local-tabs" aria-label="资料来源"><button type="button" aria-pressed={importMode === 'file'} disabled={Boolean(busy)} onClick={() => { setImportMode('file'); setDialogError(''); }}><Upload size={15} />上传文件</button><button type="button" aria-pressed={importMode === 'text'} disabled={Boolean(busy)} onClick={() => { setImportMode('text'); setDialogError(''); }}><FileText size={15} />粘贴文本</button></div>
         {importMode === 'file' ? <>
           <div className="knowledge-parser-choice">
@@ -376,20 +398,35 @@ export function KnowledgeLibraries({ notify, onBusyChange, onDirtyChange }: { no
               : mineruAvailability === 'unavailable' ? '暂时无法读取 MinerU 配置，可使用浏览器解析。'
               : mineruAvailability === 'checking' ? '正在检查 MinerU 配置…' : '扫描件、表格或多栏 PDF 可选 MinerU 云解析。'}</small>
           </div>
-          <div onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); addFiles(Array.from(event.dataTransfer.files)); }}><label>选择或拖入多个文档<input type="file" multiple accept={KNOWLEDGE_UPLOAD_ACCEPT} disabled={Boolean(busy)} onChange={event => { addFiles(Array.from(event.currentTarget.files || [])); event.currentTarget.value = ''; }} /><small>最多20份 · 每份10MB · 两份并行 · 解析方式、参数与目标库在加入时固定</small></label>
-          <ul className="knowledge-import-queue">{queue.map(item => <li key={item.id}>
-            <span aria-live="polite">{item.file.name}{item.parser === 'mineru' && ' · MinerU 云解析'} · {{ queued: item.mineruTicket && item.text === undefined ? '可继续查询' : '等待导入', working: item.progress || '处理中', done: '已完成', error: '失败' }[item.state]} {item.text !== undefined && `· ${item.text.length} 字符`} {item.error}</span>
-            <p>{item.warnings?.join('；')}</p><button type="button" className="button secondary" disabled={Boolean(busy)} onClick={() => setQueue(previous => previous.filter(row => row.id !== item.id))}>移除此项</button>{item.state === 'error' && <button type="button" className="button secondary" disabled={Boolean(busy)} onClick={() => { item.state = 'queued'; item.error = undefined; setQueue([...queue]); }}>重试此项</button>}
-          </li>)}</ul>
-          <button type="button" className="button secondary" disabled={Boolean(busy)} onClick={() => setQueue(previous => previous.filter(item => item.state !== 'done'))}>清除已完成</button><button type="button" className="button secondary" disabled={Boolean(busy)} onClick={() => setQueue([])}>清空队列</button>
-          <button type="button" className="button primary" disabled={Boolean(busy) || !queue.some(item => item.state === 'queued')} onClick={startQueue}>开始 / 继续导入</button><button type="button" className="button secondary" disabled={busy !== 'batch'} onClick={() => { stopQueue.current = true; }}>停止后续导入（等待当前请求完成）</button>
-        </div></> :
-          <label>正文<textarea rows={6} maxLength={KNOWLEDGE_TEXT_LIMIT} value={draft.text} onChange={event => setDraft(previous => ({ ...previous, text: event.target.value }))} disabled={Boolean(busy)} required placeholder="粘贴政策、话术或说明正文" /><small>{draft.text.length.toLocaleString()} / {KNOWLEDGE_TEXT_LIMIT.toLocaleString()} 字符</small></label>}
-        {draft.warnings.map(warning => <p key={warning} className="knowledge-feedback"><CircleAlert size={16} />{warning}</p>)}
-        <label>资料标题<input value={draft.title} maxLength={titleLimit} onChange={event => setDraft(previous => ({ ...previous, title: event.target.value }))} disabled={Boolean(busy)} required /></label>
-        {hasEmbedding && <label className="knowledge-index-option"><input type="checkbox" checked={rebuildIndex} onChange={event => setRebuildIndex(event.target.checked)} disabled={Boolean(busy)} />建立向量索引（关闭后使用全文检索）</label>}
-        <KnowledgeChunkControls value={config} onChange={setConfig} disabled={Boolean(busy)} />
-        <div className="knowledge-actions knowledge-dialog-actions"><button type="button" className="button secondary" disabled={Boolean(busy)} onClick={closeDialog}>取消</button><button className="button primary" disabled={Boolean(busy) || !draft.title.trim() || !draft.text.trim() || (importMode === 'file' && !draft.fileName)}>{busy === 'upload' ? '正在导入…' : '导入资料'}</button></div>
+          <div className="knowledge-upload-dropzone" onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); addFiles(Array.from(event.dataTransfer.files)); }}>
+            <label>选择或拖入多个文档<input type="file" multiple accept={KNOWLEDGE_UPLOAD_ACCEPT} disabled={Boolean(busy)} onChange={event => { addFiles(Array.from(event.currentTarget.files || [])); event.currentTarget.value = ''; }} /><small>支持 PDF / Word / Excel / Markdown / CSV / TXT · 最多 20 份（每份 ≤ 10MB）</small></label>
+            {queue.length > 0 && <>
+              <ul className="knowledge-import-queue">{queue.map(item => <li key={item.id}>
+                <span aria-live="polite">{item.file.name}{item.parser === 'mineru' && ' · MinerU 云解析'} · {{ queued: item.mineruTicket && item.text === undefined ? '可继续查询' : '等待导入', working: item.progress || '处理中', done: '已完成', error: '失败' }[item.state]} {item.text !== undefined && `· ${item.text.length} 字符`} {item.error}</span>
+                {Boolean(item.warnings?.length) && <p>{item.warnings?.join('；')}</p>}
+                <div className="knowledge-actions"><button type="button" className="button secondary" disabled={Boolean(busy)} onClick={() => setQueue(previous => previous.filter(row => row.id !== item.id))}>移除此项</button>{item.state === 'error' && <button type="button" className="button secondary" disabled={Boolean(busy)} onClick={() => { item.state = 'queued'; item.error = undefined; setQueue([...queue]); }}>重试此项</button>}</div>
+              </li>)}</ul>
+              <div className="knowledge-actions knowledge-queue-toolbar">
+                {queue.some(item => item.state === 'done') && <button type="button" className="button ghost" disabled={Boolean(busy)} onClick={() => setQueue(previous => previous.filter(item => item.state !== 'done'))}>清除已完成</button>}
+                <button type="button" className="button ghost" disabled={Boolean(busy)} onClick={() => setQueue([])}>清空队列</button>
+                {busy === 'batch' && <button type="button" className="button secondary" onClick={() => { stopQueue.current = true; }}>停止后续导入</button>}
+              </div>
+            </>}
+          </div>
+          {hasEmbedding && <label className="knowledge-index-option"><input type="checkbox" checked={rebuildIndex} onChange={event => setRebuildIndex(event.target.checked)} disabled={Boolean(busy)} />建立向量索引（关闭后使用全文检索）</label>}
+          <KnowledgeChunkControls value={config} onChange={setConfig} disabled={Boolean(busy)} />
+          <div className="knowledge-actions knowledge-dialog-actions">
+            <button type="button" className="button secondary" disabled={Boolean(busy)} onClick={closeDialog}>取消</button>
+            <button type="button" className="button primary" disabled={Boolean(busy) || !queue.some(item => item.state === 'queued')} onClick={startQueue}>{busy === 'batch' ? '正在导入队列…' : `开始导入${queue.length ? `（${queue.filter(item => item.state === 'queued').length} 份）` : ''}`}</button>
+          </div>
+        </> : <>
+          <label>资料标题<input value={draft.title} maxLength={titleLimit} onChange={event => setDraft(previous => ({ ...previous, title: event.target.value }))} disabled={Boolean(busy)} required placeholder="例如：园区入驻政策与租金标准" /></label>
+          <label>正文<textarea rows={6} maxLength={KNOWLEDGE_TEXT_LIMIT} value={draft.text} onChange={event => setDraft(previous => ({ ...previous, text: event.target.value }))} disabled={Boolean(busy)} required placeholder="粘贴政策、话术或说明正文" /><small>{draft.text.length.toLocaleString()} / {KNOWLEDGE_TEXT_LIMIT.toLocaleString()} 字符</small></label>
+          {draft.warnings.map(warning => <p key={warning} className="knowledge-feedback"><CircleAlert size={16} />{warning}</p>)}
+          {hasEmbedding && <label className="knowledge-index-option"><input type="checkbox" checked={rebuildIndex} onChange={event => setRebuildIndex(event.target.checked)} disabled={Boolean(busy)} />建立向量索引（关闭后使用全文检索）</label>}
+          <KnowledgeChunkControls value={config} onChange={setConfig} disabled={Boolean(busy)} />
+          <div className="knowledge-actions knowledge-dialog-actions"><button type="button" className="button secondary" disabled={Boolean(busy)} onClick={closeDialog}>取消</button><button className="button primary" disabled={Boolean(busy) || !draft.title.trim() || !draft.text.trim()}>{busy === 'upload' ? '正在导入…' : '导入资料'}</button></div>
+        </>}
       </form>}
       {dialog.kind === 'preview' && <div className="knowledge-preview"><p className="knowledge-dialog-description">{dialog.document.title} · {strategies[dialog.document.strategy].name} · {dialog.document.chunkCount} 个可检索切片</p>
         {busy === 'preview' ? <p className="knowledge-feedback" role="status"><Loader2 size={17} className="spin" />正在读取切片…</p> : chunks.length ? chunks.slice(previewPage * previewPageSize, (previewPage + 1) * previewPageSize).map((chunk, index) => <details key={chunk.id} open={index === 0 || undefined}><summary><ChevronRight size={16} /><span>切片 {chunk.ordinal} · {chunkLabels[chunk.kind]}{chunk.heading ? ' · ' + chunk.heading : ''}{chunk.parentOrdinal !== null ? ' · 父块 ' + chunk.parentOrdinal : ''}</span></summary><p>{chunk.text}</p></details>) : !dialogError && <p>暂无可预览切片。</p>}

@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
-import { Archive, BadgeCheck, CalendarDays, Check, Clipboard, Download, FileText, Image, ListPlus, Loader2, Plus, RefreshCw, Sparkles, Trash2, Users, Video } from 'lucide-react';
+import { Archive, BadgeCheck, CalendarDays, Check, Clipboard, Download, FileText, ListPlus, Loader2, Plus, RefreshCw, Sparkles, Trash2, Users } from 'lucide-react';
 import { Overlay } from './CoreViews';
 import { CreativeCanvasIllustration } from './VisualIllustrations';
 import { preferredScrollBehavior } from '../lib/scroll-behavior';
@@ -38,7 +38,7 @@ export default function ContentFactory({ notify, onBusyChange, onDirtyChange }: 
   const [current, setCurrent] = useState<FactoryRecord | null>(null);
   const [document, setDocument] = useState<FactoryDocument>(blankFactoryDocument);
   const [ready, setReady] = useState<boolean | null>(null);
-  const [reading, setReading] = useState(false);
+  const [reading, setReading] = useState(true);
   const [operation, setOperation] = useState<Operation | null>(null);
   const [loadError, setLoadError] = useState('');
   const [error, setError] = useState('');
@@ -94,8 +94,9 @@ export default function ContentFactory({ notify, onBusyChange, onDirtyChange }: 
 
   useEffect(() => {
     mounted.current = true;
-    void refresh();
+    const initialRead = window.setTimeout(() => { void refresh(); }, 0);
     return () => {
+      window.clearTimeout(initialRead);
       mounted.current = false;
       campaignRead.current?.abort();
     };
@@ -107,8 +108,8 @@ export default function ContentFactory({ notify, onBusyChange, onDirtyChange }: 
     setHistoryError('');
     if (History) return;
     try {
-      const module = await import('./FactoryHistory');
-      if (mounted.current) setHistory(() => module.default);
+      const { default: HistoryPanel } = await import('./FactoryHistory');
+      if (mounted.current) setHistory(() => HistoryPanel);
     } catch {
       if (mounted.current) setHistoryError('历史素材加载失败，请重试。');
     }
@@ -412,10 +413,7 @@ export default function ContentFactory({ notify, onBusyChange, onDirtyChange }: 
             <h4>{active && (generated || error) ? `还没有${FACTORY_CHANNELS[active]}` : '从一次活动开始'}</h4>
             {canGenerateActive && active
               ? <button type="button" className="button secondary" disabled={busy} onClick={() => void generate(active)}><RefreshCw size={15} />生成当前渠道</button>
-              : <>
-                <p>填写左侧活动主题与受众定位，一键生成多渠道文案草稿、视觉物料与排期建议。</p>
-                <div className="cf-empty-Badges" aria-hidden="true"><span>公众号深度长文</span><span>小红书种草笔记</span><span>海报画板预览</span><span>受众触达建议</span></div>
-              </>}
+              : <p>填写左侧活动主题与受众定位，一键生成多渠道文案草稿、视觉物料与排期建议。</p>}
           </div>}
           </div>
         </section>

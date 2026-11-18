@@ -20,7 +20,7 @@ import { AnswerContent } from './AnswerContent';
 import { ChatProcessing } from './ChatProcessing';
 import './answer-content.css';
 import './workbench-chat.css';
-import { AdminHome, BusinessRulesView, KnowledgeWorkspace, MEMBER_LABELS, MembersView } from './AdminWorkspace';
+import { AdminHome, BusinessRulesView, KnowledgeWorkspace, MembersView } from './AdminWorkspace';
 import type { MemberSession } from '../lib/member-types';
 import { MeetingImportWorkspace } from './MeetingImportWorkspace';
 import { ProspectingWorkspace } from './ProspectingWorkspace';
@@ -37,6 +37,8 @@ const navigationIcons: Partial<Record<View, typeof Home>> = {
   knowledge:BookOpen, training:MessageSquare, approvals:ClipboardCheck, contracts:ClipboardCheck,
   members:Users, rules:ShieldCheck, settings:Settings, studio:Workflow, runs:Clock3,
 };
+
+const mobilePrimaryViews = new Set<string>(['reminders', 'prospecting', 'deals', 'recordings']);
 
 export default function Workbench({member,onLogout}:{member:MemberSession;onLogout:()=>Promise<void>}) {
   const navigation=workspaceNavigation(member.role).map(item=>({...item,icon:navigationIcons[item.id]??Home}));
@@ -69,6 +71,7 @@ export default function Workbench({member,onLogout}:{member:MemberSession;onLogo
   const workspaceContent = useRef<HTMLElement>(null);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
+  const [assistantDealId, setAssistantDealId] = useState<string>();
   const [chatBusy, setChatBusy] = useState(false);
   const [pendingQuery, setPendingQuery] = useState('');
   const [chatProgress, setChatProgress] = useState<ChatProgressStep[]>([]);
@@ -187,18 +190,27 @@ export default function Workbench({member,onLogout}:{member:MemberSession;onLogo
     guardedProceed();
   }, [notify, view, member.role, setView, setProjectIntent, setFocusedDeal, setFocusedApprovalContract, setFocusedApprovalId, setMobileMenu, setSearchOpen, setLeaveProject, setLeaveApproval, setLeaveContract]);
   const toggleTheme = () => { const next = theme === 'light' ? 'dark' : 'light'; setTheme(next); document.documentElement.dataset.mode = next; localStorage.setItem('ctai-theme', next); };
-  const chooseAccent = (next: 'iris' | 'jade' | 'terracotta' | 'sapphire') => { setAccent(next); document.documentElement.dataset.accent = next; localStorage.setItem('ctai-accent', next); };
+  const chooseAccent = (next: 'iris' | 'jade' | 'terracotta' | 'sapphire') => { setAccent(next); document.documentElement.setAttribute('data-accent', next); localStorage.setItem('ctai-accent', next); };
   const onAsk = useCallback((query: string, agentId?: AgentId, dealId?: string, talkTrackIds?:string[], priorRunIds?:string[]) => {
     if(member.role==='admin'){notify('请在搭建中心调试 Agent，销售助手由业务账号使用');return;}
     if(projectBusy.current){notify('项目正在录入或更新，请等待完成。');return;}
     if(approvalBusy.current){notify('审批操作正在保存，请等待完成。');return;}
     if(contractBusy.current){notify('合同初审正在进行，请等待完成。');return;}
     if (sending.current) { notify('当前任务正在生成，请等待完成后继续。'); return; }
+    if (!state || (dealId && !state.deals.some(deal => deal.id === dealId))) {
+      notify('该项目已无法访问，请刷新后重新选择项目。');
+      return;
+    }
     const proceed = () => {
       if (sending.current) return;
-      const conversationRunIds = priorRunIds ?? conversation
-        .filter(run => isCompletedChatRun(run) && (dealId === undefined || run.dealId === dealId))
-        .slice(-6).map(run => run.id);
+      const sameThread = chatOpen && assistantDealId === dealId;
+      const contextIds = priorRunIds ?? (sameThread ? conversation.map(run => run.id) : []);
+      const historyDealId = dealId ?? (sameThread ? conversation.at(-1)?.dealId : undefined);
+      const visibleRuns = new Set(state.runs.filter(run => isCompletedChatRun(run)
+        && run.dealId === historyDealId).map(run => run.id));
+      const conversationRunIds = contextIds.filter(id => visibleRuns.has(id)).slice(-6);
+      if (!sameThread) setConversation([]);
+      setAssistantDealId(dealId);
       const request = { query, agentId, dealId, conversationRunIds, talkTrackIds: talkTrackIds ?? selectedTalkIds };
       setChatOpen(true); setChatError(''); setFailedRequest(null); setPendingQuery(query); setChatProgress([]); setChatBusy(true); sending.current = true;
       void mutate('chat', request, step => setChatProgress(current => upsertChatProgressStep(current, step))).then(result => {
@@ -212,7 +224,7 @@ export default function Workbench({member,onLogout}:{member:MemberSession;onLogo
     };
     if(studioGuard.current&&!studioGuard.current(proceed)){setChatOpen(false);return;}
     proceed();
-  }, [mutate, notify, conversation,selectedTalkIds,member.role,setChatOpen,setChatError,setFailedRequest,setPendingQuery,setChatBusy,setConversation]);
+  }, [mutate, notify, state, chatOpen, assistantDealId, conversation, selectedTalkIds, member.role, setAssistantDealId, setChatOpen, setChatError, setFailedRequest, setPendingQuery, setChatBusy, setConversation]);
   const requestLogout = () => {
     if(accountBusy)return;
     if(projectBusy.current||approvalBusy.current||contractBusy.current||trainingPending.current||sending.current){notify('当前操作正在保存，请完成后再退出登录');return;}
@@ -250,6 +262,8 @@ export default function Workbench({member,onLogout}:{member:MemberSession;onLogo
   const props = { state, mutate, notify, onAsk };
   const title = workspaceTitle(view,member.role);
   const section = workspaceSection(view,member.role);
+  const primaryItems = navigation.filter(item => mobilePrimaryViews.has(item.id));
+  const moreActive = section !== undefined && !mobilePrimaryViews.has(section);
   const managementNavigation = workspaceManagementNavigation(member.role);
   const linkProps = (next:View,id?:string,intent?:'create'|'followup') => ({
     href:'/'+workspaceSearch('',{view:next,dealId:id,intent}),
@@ -260,6 +274,22 @@ export default function Workbench({member,onLogout}:{member:MemberSession;onLogo
       navigate(next,id,undefined,undefined,intent);
     },
   });
+  const assistantDeal = state.deals.find(deal => deal.id === assistantDealId);
+  function openAssistant(run?: Run, talkTrackIds?: string[]) {
+    if (sending.current) {
+      notify('当前任务正在生成，请等待完成后继续。');
+      return;
+    }
+    const projectId = view === 'deals' ? state?.deals.find(deal => deal.id === focusedDeal)?.id : undefined;
+    setAssistantDealId(run ? run.dealId : projectId);
+    setConversation(run ? [run] : []);
+    if (talkTrackIds) setSelectedTalkIds(talkTrackIds);
+    setFailedRequest(null);
+    setChatError('');
+    setChatOpen(true);
+    setMobileMenu(false);
+    setSearchOpen(false);
+  }
   const openSearch = () => { setSearch(''); setSearchOpen(true); setMobileMenu(false); };
   if(meetingEmbed)return <div className="meeting-embed-shell"><header className="meeting-embed-header"><span className="meeting-embed-brand"><BrandMark small/>AI营销工作台</span><a href="/?view=meetings" target="_blank" rel="noopener noreferrer">完整工作台 <ExternalLink size={13}/></a><button className="icon-button" disabled={accountBusy} onClick={requestLogout} aria-label={`退出${member.displayName}的账号`} title={`当前账号：${member.displayName}`}>{accountBusy?<Loader2 size={16} className="spin"/>:<LogOut size={16}/>}</button></header>{toast&&<p className="meeting-message" role="status">{toast}</p>}<MeetingImportWorkspace state={state} onWorkspaceRefresh={reload} initialDealId={focusedDeal} admin={member.role==='admin'} compact/></div>;
   return <div className="app-shell">
@@ -318,13 +348,7 @@ export default function Workbench({member,onLogout}:{member:MemberSession;onLogo
           <span>{state.runs.length ? '最近 AI 任务' : 'AI 任务记录'}</span>
           <button type="button" className="icon-button" onClick={() => navigate('runs')} aria-label="全部 AI 任务记录"><ChevronRight size={13} /></button>
         </div>
-        {state.runs.slice(0, 3).map(run => <button type="button" key={run.id} onClick={() => {
-          setConversation([run]);
-          setFailedRequest(null);
-          setChatError('');
-          setChatOpen(true);
-          setMobileMenu(false);
-        }} title={run.query}>
+        {state.runs.slice(0, 3).map(run => <button type="button" key={run.id} onClick={() => openAssistant(run)} disabled={chatBusy} title={run.query}>
           <span className="sidebar-recent-marker" aria-hidden="true" />
           <span className="sidebar-recent-label">{run.query}</span>
         </button>)}
@@ -350,7 +374,7 @@ export default function Workbench({member,onLogout}:{member:MemberSession;onLogo
         })}
       </>}
     </aside>
-    <div className="workspace"><header className="topbar"><div className="topbar-left"><button className="icon-button menu-toggle" onClick={()=>setMobileMenu(true)} aria-label="展开导航"><Menu size={21}/></button><span className="breadcrumb"><strong>{title}</strong></span></div><div className="topbar-actions"><button className="global-search" aria-label="搜索工作空间" onClick={openSearch}><Search size={17}/></button>{member.role !== 'admin' && <button type="button" className="icon-button topbar-chat-btn" aria-label="AI 营销助手" title="AI 营销助手" disabled={chatBusy} onClick={() => { setConversation([]); setFailedRequest(null); setChatError(''); setChatOpen(true); }}><MessageSquare size={17} aria-hidden="true" /></button>}</div></header>
+    <div className="workspace"><header className="topbar"><div className="topbar-left"><button className="icon-button menu-toggle" onClick={()=>setMobileMenu(true)} aria-label="展开导航"><Menu size={21}/></button><span className="breadcrumb"><strong>{title}</strong></span></div><div className="topbar-actions"><button className="global-search" aria-label="搜索工作空间" onClick={openSearch}><Search size={17}/></button>{member.role !== 'admin' && <button type="button" className="icon-button topbar-chat-btn" aria-label="AI 营销助手" title="AI 营销助手" disabled={chatBusy} onClick={() => openAssistant()}><MessageSquare size={17} aria-hidden="true" /></button>}</div></header>
       <main className="main-content" ref={workspaceContent} key={view+':'+navigationKey}>
         {view==='home'&&member.role==='admin'&&<AdminHome state={state} onNavigate={navigate}/>}
         {view==='reports'&&member.role==='manager'&&<SalesDailyReport state={state} notify={notify} onNavigate={navigate}/>}
@@ -364,22 +388,22 @@ export default function Workbench({member,onLogout}:{member:MemberSession;onLogo
         {(view==='contracts'||view==='approvals')&&member.role!=='admin'&&<ContractCenter {...props} initialTab={view==='approvals'?'approvals':'contracts'} initialDealId={focusedDeal} initialContractId={focusedApprovalContract} initialApprovalId={focusedApprovalId} onNavigate={navigate} onReloadWorkspace={reload} onBusyChange={view==='approvals'?onApprovalBusy:onContractBusy} onDirtyChange={view==='approvals'?onApprovalDirty:onContractDirty} pendingCount={approvalPendingCount}/>}
         {view==='training'&&member.role!=='admin'&&<TrainingView {...props} onPendingChange={onTrainingPendingChange} onMediaStopReady={onTrainingMediaReady}/>}
 
-        {(view==='knowledge'||view==='talktracks')&&<KnowledgeWorkspace key={view+':'+(focusedDeal||'')} focus={focusedDeal} {...props} member={member} onBusyChange={onProjectBusy} onDirtyChange={onProjectDirty} initialTab={view==='talktracks'?'talktracks':'documents'} onUsePlaybook={id=>{if(member.role==='admin')return;setSelectedTalkIds([id]);setConversation([]);setFailedRequest(null);setChatError('');setChatOpen(true);}}/>}
+        {(view==='knowledge'||view==='talktracks')&&<KnowledgeWorkspace key={view+':'+(focusedDeal||'')} focus={focusedDeal} {...props} member={member} onBusyChange={onProjectBusy} onDirtyChange={onProjectDirty} initialTab={view==='talktracks'?'talktracks':'documents'} onUsePlaybook={id=>{if(member.role==='admin')return;openAssistant(undefined, [id]);}}/>}
         {view==='studio'&&<BuilderStudio {...props} readOnly={member.role!=='admin'} onGuardReady={onStudioGuardReady}/>}
         {view==='runs'&&<RunsView {...props} canExtract={member.role!=='admin'}/>}
         {view==='settings'&&member.role==='admin'&&<SettingsView {...props} onConnectionChanged={reload} meetingSettings={<MeetingImportWorkspace state={state} onWorkspaceRefresh={reload} admin/>}/>}
         {view==='members'&&member.role==='admin'&&<MembersView member={member} notify={notify} onBusyChange={onProjectBusy} onDirtyChange={onProjectDirty}/>}
         {view==='rules'&&member.role==='admin'&&<BusinessRulesView state={state} notify={notify} onBusyChange={onApprovalBusy} onDirtyChange={onApprovalDirty}/>}
       </main>
-      {member.role!=='admin'&&(()=>{const primaryIds=new Set<string>(['reminders','prospecting','deals','recordings']);const primaryItems=navigation.filter(item=>primaryIds.has(item.id));const moreActive=section!==undefined&&!primaryIds.has(section);return <nav className="mobile-role-navigation" aria-label="快捷导航" inert={mobileMenu}>{primaryItems.map(item=>{const Icon=item.icon;return <button key={item.id} aria-label={item.label} aria-current={section===item.id?'page':undefined} onClick={()=>navigate(item.id)}><Icon size={19}/><span>{item.mobileLabel??item.label}</span></button>;})}<button type="button" aria-label="更多功能" aria-current={moreActive?'page':undefined} onClick={()=>setMobileMenu(true)}><LayoutGrid size={19}/><span>更多</span></button></nav>;})()}
+      {member.role!=='admin'&&<nav className="mobile-role-navigation" aria-label="快捷导航" inert={mobileMenu}>{primaryItems.map(item=>{const Icon=item.icon;return <button key={item.id} aria-label={item.label} aria-current={section===item.id?'page':undefined} onClick={()=>navigate(item.id)}><Icon size={19}/><span>{item.mobileLabel??item.label}</span></button>;})}<button type="button" aria-label="更多功能" aria-current={moreActive?'page':undefined} onClick={()=>setMobileMenu(true)}><LayoutGrid size={19}/><span>更多</span></button></nav>}
     </div>
     {leaveProject&&<DiscardChangesDialog title="有尚未保存的内容" onCancel={()=>{setLeaveProject(false);pendingProjectLeave.current=null;}} onDiscard={()=>{projectDirty.current=false;setLeaveProject(false);const proceed=pendingProjectLeave.current;pendingProjectLeave.current=null;proceed?.();}}/>}
     {leaveApproval&&<DiscardChangesDialog title="审批内容尚未提交" onCancel={()=>{setLeaveApproval(false);pendingApprovalLeave.current=null;}} onDiscard={()=>{approvalDirty.current=false;setLeaveApproval(false);const proceed=pendingApprovalLeave.current;pendingApprovalLeave.current=null;proceed?.();}}/>}
     {leaveContract&&<DiscardChangesDialog title="合同草稿尚未保存" onCancel={()=>{setLeaveContract(false);pendingContractLeave.current=null;}} onDiscard={()=>{contractDirty.current=false;setLeaveContract(false);const proceed=pendingContractLeave.current;pendingContractLeave.current=null;proceed?.();}}/>}
-    {searchOpen && <Overlay title="搜索工作空间" onClose={() => setSearchOpen(false)} className="search-dialog"><label className="modal-search"><Search size={19} /><input autoFocus placeholder="搜索项目、客户、知识或任务…" aria-label="搜索全部工作空间" value={search} onChange={e => setSearch(e.target.value)} /><kbd>ESC</kbd></label><div className="search-results">{!search.trim() ? <><p className="search-hint">快速前往</p>{navigation.filter(item=>item.id!=='reports'||state.role==='manager').map(n => { const Icon = n.icon; return <button className="search-result" key={n.id} onClick={() => navigate(n.id)}><Icon size={19} /><span><strong>{n.label}</strong></span><ArrowRight size={15} /></button>; })}</> : searchResults.length ? <><p className="search-hint">找到 {searchResults.length} 项结果</p>{searchResults.map((r, i) => <button key={`${r.type}-${r.id}-${i}`} className="search-result" onClick={() => { if (r.view === 'runs') { const run = state.runs.find(x => x.id === r.id); if (run) { setConversation([run]);setChatError('');setFailedRequest(null); setChatOpen(true); setSearchOpen(false); } } else { navigate(r.view, r.view === 'deals' ? r.id : undefined); } }}><span className="search-result-icon">{r.view === 'deals' ? <BriefcaseBusiness size={18} /> : r.view === 'runs' ? <Clock3 size={18} /> : r.view === 'schedule' ? <CalendarDays size={18} /> : <BookOpen size={18} />}</span><span><strong>{r.title}</strong><small>{r.type} · {r.subtitle}</small></span><ArrowRight size={15} /></button>)}</> : <div className="empty-state"><Search size={25} /><h3>没有找到“{search}”</h3><p>可以尝试客户名称、联系人或更短的关键词。</p></div>}</div></Overlay>}
+    {searchOpen && <Overlay title="搜索工作空间" onClose={() => setSearchOpen(false)} className="search-dialog"><label className="modal-search"><Search size={19} /><input autoFocus placeholder="搜索项目、客户、知识或任务…" aria-label="搜索全部工作空间" value={search} onChange={e => setSearch(e.target.value)} /><kbd>ESC</kbd></label><div className="search-results">{!search.trim() ? <><p className="search-hint">快速前往</p>{navigation.filter(item=>item.id!=='reports'||state.role==='manager').map(n => { const Icon = n.icon; return <button className="search-result" key={n.id} onClick={() => navigate(n.id)}><Icon size={19} /><span><strong>{n.label}</strong></span><ArrowRight size={15} /></button>; })}</> : searchResults.length ? <><p className="search-hint">找到 {searchResults.length} 项结果</p>{searchResults.map((r, i) => <button key={`${r.type}-${r.id}-${i}`} className="search-result" onClick={() => { if (r.view === 'runs') { const run = state.runs.find(x => x.id === r.id); if (run) openAssistant(run); } else { navigate(r.view, r.view === 'deals' ? r.id : undefined); } }}><span className="search-result-icon">{r.view === 'deals' ? <BriefcaseBusiness size={18} /> : r.view === 'runs' ? <Clock3 size={18} /> : r.view === 'schedule' ? <CalendarDays size={18} /> : <BookOpen size={18} />}</span><span><strong>{r.title}</strong><small>{r.type} · {r.subtitle}</small></span><ArrowRight size={15} /></button>)}</> : <div className="empty-state"><Search size={25} /><h3>没有找到“{search}”</h3><p>可以尝试客户名称、联系人或更短的关键词。</p></div>}</div></Overlay>}
     {member.role !== 'admin' && !mobileMenu && !chatOpen && <button
       type="button" className="workbench-chat-launcher" aria-label="AI 营销助手" title="AI 营销助手"
-      onClick={() => { setConversation([]); setFailedRequest(null); setChatError(''); setChatOpen(true); }}
+      onClick={() => openAssistant()}
       disabled={chatBusy}><MessageSquare size={21} aria-hidden="true" /></button>}
     {chatOpen && <Overlay title="AI 营销助手" onClose={() => setChatOpen(false)} className="drawer chat-drawer" wide actions={member.role !== 'admin' ? <AgentMemoryButton disabled={chatBusy} /> : undefined}>
       <div className="chat-stream" ref={containerRef} onScroll={onScroll} onWheel={markUserInput} onTouchStart={markUserInput} onKeyDown={e => {
@@ -388,10 +412,10 @@ export default function Workbench({member,onLogout}:{member:MemberSession;onLogo
         <div className="chat-reading">
           {conversation.length === 0 && !pendingQuery && !failedRequest && <div className="chat-welcome">
             <span className="chat-welcome-emblem" aria-hidden="true"><Sparkles size={22} /></span>
-            <span className="chat-welcome-context">{focusedDeal && state.deals.some(d => d.id === focusedDeal) ? `当前项目：${state.deals.find(d => d.id === focusedDeal)?.name}` : '全局智能工作台助手'}</span>
+            <span className="chat-welcome-context">{assistantDeal ? `当前项目：${assistantDeal.projectName || assistantDeal.name}` : '全局智能工作台助手'}</span>
             <h2>有什么可以一起推进？</h2>
             <p className="chat-welcome-subtitle">自动识别意图并调度领域专家，结合已确认客户事实、合同与知识库生成可追溯建议。</p>
-            <div className="chat-welcome-grid">{AGENTS.map((a, idx) => <button key={a.id} onPointerMove={e => { const r = e.currentTarget.getBoundingClientRect(); e.currentTarget.style.setProperty('--spot-x', `${e.clientX - r.left}px`); e.currentTarget.style.setProperty('--spot-y', `${e.clientY - r.top}px`); }} onClick={() => onAsk(a.starter, a.id)}><span className="chat-agent-icon" data-avatar-tone={idx % 6} aria-hidden="true"><Sparkles size={15} /></span><span className="chat-agent-card-copy"><strong>{a.name}</strong><small>{a.description}</small></span><ArrowRight size={14} aria-hidden="true" /></button>)}<button type="button" onPointerMove={e => { const r = e.currentTarget.getBoundingClientRect(); e.currentTarget.style.setProperty('--spot-x', `${e.clientX - r.left}px`); e.currentTarget.style.setProperty('--spot-y', `${e.clientY - r.top}px`); }} onClick={() => onAsk('请结合当前客户事实与沟通记录，汇总项目现状、待核实风险及下一步推进清单。')}><span className="chat-agent-icon" data-avatar-tone={5} aria-hidden="true"><BriefcaseBusiness size={15} /></span><span className="chat-agent-card-copy"><strong>AI 项目复盘</strong><small>汇总关键事实、风险边界与推进清单</small></span><ArrowRight size={14} aria-hidden="true" /></button></div>
+            <div className="chat-welcome-grid">{AGENTS.map((a, idx) => <button key={a.id} onPointerMove={e => { const r = e.currentTarget.getBoundingClientRect(); e.currentTarget.style.setProperty('--spot-x', `${e.clientX - r.left}px`); e.currentTarget.style.setProperty('--spot-y', `${e.clientY - r.top}px`); }} onClick={() => onAsk(a.starter, a.id, assistantDealId)}><span className="chat-agent-icon" data-avatar-tone={idx % 6} aria-hidden="true"><Sparkles size={15} /></span><span className="chat-agent-card-copy"><strong>{a.name}</strong><small>{a.description}</small></span><ArrowRight size={14} aria-hidden="true" /></button>)}{assistantDeal && <button type="button" onPointerMove={e => { const r = e.currentTarget.getBoundingClientRect(); e.currentTarget.style.setProperty('--spot-x', `${e.clientX - r.left}px`); e.currentTarget.style.setProperty('--spot-y', `${e.clientY - r.top}px`); }} onClick={() => onAsk('请结合当前客户事实与沟通记录，汇总项目现状、待核实风险及下一步推进清单。', undefined, assistantDealId)}><span className="chat-agent-icon" data-avatar-tone={5} aria-hidden="true"><BriefcaseBusiness size={15} /></span><span className="chat-agent-card-copy"><strong>AI 项目复盘</strong><small>汇总关键事实、风险边界与推进清单</small></span><ArrowRight size={14} aria-hidden="true" /></button>}</div>
           </div>}
           {conversation.map(run => {
             const duration = Math.max(0.1, run.duration / 1000).toFixed(1);
@@ -436,7 +460,7 @@ export default function Workbench({member,onLogout}:{member:MemberSession;onLogo
         </div>
       </div>
       {showJump && <button className="jump-latest button secondary" onClick={jumpToLatest}><ArrowDown size={14} />回到最新</button>}
-      <div className="chat-composer-wrap"><Composer talkTracks={state.talkTracks??[]} selectedTalkTrackIds={selectedTalkIds} onTalkTrackChange={setSelectedTalkIds} onSend={(q,a,ids)=>onAsk(q,a,undefined,ids)} placeholder="输入问题…" compact busy={chatBusy} modelConnected={state.model.connected} /></div>
+      <div className="chat-composer-wrap"><Composer talkTracks={state.talkTracks??[]} selectedTalkTrackIds={selectedTalkIds} onTalkTrackChange={setSelectedTalkIds} onSend={(q,a,ids)=>onAsk(q,a,assistantDealId,ids)} placeholder="输入问题…" compact busy={chatBusy} modelConnected={state.model.connected} /></div>
     </Overlay>}
     {toast && <div role="status" className="toast"><Check size={16} />{toast}<button className="icon-button" onClick={() => setToast('')} aria-label="关闭提示"><X size={14} /></button></div>}
   </div>;

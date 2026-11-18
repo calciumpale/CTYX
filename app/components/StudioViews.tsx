@@ -259,7 +259,7 @@ export function TrainingView({ state, mutate, notify,onPendingChange,onMediaStop
       </div>;
 
   return <section className="studio-view studio-training-view">
-    <header className="studio-heading training-page-heading"><h1>AI带练</h1><span className="training-page-subtitle">基于真实异议剧本进行多轮实战对练与五维复盘</span></header>
+    <header className="studio-heading training-page-heading"><h1>AI带练</h1><span className="training-page-subtitle">基于真实异议剧本进行多轮实战对练与六维复盘</span></header>
     {error && session && <Notice error>{error}</Notice>}
     <div className="studio-training-layout">
       <main className="studio-training-main">
@@ -392,20 +392,46 @@ const SERVICE_TABS = [
 
 export function SettingsView({ state, onConnectionChanged, meetingSettings }: ViewProps & { onConnectionChanged?: () => Promise<void>; meetingSettings?: ReactNode }) {
   const [activeService, setActiveService] = useState<(typeof SERVICE_TABS)[number]['id']>('llm');
-  const visibleServiceTabs = meetingSettings ? SERVICE_TABS : SERVICE_TABS.filter(item => item.id !== 'meeting');
+  const hasMeetingSettings = Boolean(meetingSettings);
+  const visibleServiceTabs = hasMeetingSettings ? SERVICE_TABS : SERVICE_TABS.filter(item => item.id !== 'meeting');
+  useEffect(() => {
+    const openLinkedService = () => {
+      const linked = SERVICE_TABS.find(item => window.location.hash === `#${item.id}-connection`);
+      if (linked && (linked.id !== 'meeting' || hasMeetingSettings)) setActiveService(linked.id);
+    };
+    openLinkedService();
+    window.addEventListener('hashchange', openLinkedService);
+    return () => window.removeEventListener('hashchange', openLinkedService);
+  }, [hasMeetingSettings]);
+  const panels: Record<typeof activeService, ReactNode> = {
+    llm: <ApiConnectionSettings onSaved={onConnectionChanged}/>,
+    material: <MaterialConnectionSettings onConnectionChanged={onConnectionChanged}/>,
+    zego: <ZegoConnectionSettings onConnectionChanged={onConnectionChanged}/>,
+    speech: <SpeechRecognitionSettings/>,
+    meeting: meetingSettings,
+    company: <><CompanyConnectionSettings provider="jinghai"/><CompanyConnectionSettings/></>,
+    embedding: <EmbeddingSettings/>,
+    mineru: <MineruConnectionSettings/>,
+  };
   return <section className="studio-view studio-settings-view">
     <PageHeading title="服务连接" description="统一配置大模型推理、营销素材生成、数字人直播、语音与会议接入及企业数据接口。"/>
     <div className="studio-service-nav" role="tablist" aria-label="服务连接">
-      {visibleServiceTabs.map(item => <button key={item.id} type="button" role="tab" aria-selected={activeService === item.id} className={activeService === item.id ? 'is-active' : ''} onClick={() => setActiveService(item.id)}>{item.label}</button>)}
+      {visibleServiceTabs.map((item, index) => <button key={item.id} id={`service-tab-${item.id}`} type="button" role="tab"
+        aria-selected={activeService === item.id} aria-controls={`${item.id}-connection`} tabIndex={activeService === item.id ? 0 : -1}
+        className={activeService === item.id ? 'is-active' : ''} onClick={() => setActiveService(item.id)}
+        onKeyDown={event => {
+          const count = visibleServiceTabs.length;
+          const destinations: Record<string, number> = { ArrowLeft: (index + count - 1) % count, ArrowRight: (index + 1) % count, Home: 0, End: count - 1 };
+          if (!Object.hasOwn(destinations, event.key)) return;
+          event.preventDefault();
+          const next = visibleServiceTabs[destinations[event.key]];
+          setActiveService(next.id);
+          document.getElementById(`service-tab-${next.id}`)?.focus();
+        }}>{item.label}</button>)}
     </div>
-    <div hidden={activeService !== 'llm'}><ApiConnectionSettings onSaved={onConnectionChanged}/></div>
-    <div id="material-connection" hidden={activeService !== 'material'}><MaterialConnectionSettings onConnectionChanged={onConnectionChanged}/></div>
-    <div id="zego-connection" hidden={activeService !== 'zego'}><ZegoConnectionSettings onConnectionChanged={onConnectionChanged}/></div>
-    <div hidden={activeService !== 'speech'}><SpeechRecognitionSettings/></div>
-    {meetingSettings && <div hidden={activeService !== 'meeting'} className="studio-meeting-settings">{meetingSettings}</div>}
-    <div hidden={activeService !== 'company'}><CompanyConnectionSettings provider="jinghai"/><CompanyConnectionSettings/></div>
-    <div hidden={activeService !== 'embedding'}><EmbeddingSettings/></div>
-    <div hidden={activeService !== 'mineru'}><MineruConnectionSettings/></div>
+    {visibleServiceTabs.map(item => <div key={item.id} role="tabpanel" id={`${item.id}-connection`}
+      aria-labelledby={`service-tab-${item.id}`} hidden={activeService !== item.id}
+      className={item.id === 'meeting' ? 'studio-meeting-settings' : undefined}>{panels[item.id]}</div>)}
     <details className="studio-setting-description studio-workspace-data"><summary>工作空间数据与运行环境</summary>
       <dl><div><dt>当前模型</dt><dd>{state.model.connected?modelDisplayName(state.model.name):'未配置'}</dd></div><div><dt>数据版本</dt><dd>{state.revision}</dd></div></dl>
       <p>客户与案例包含预置示例。企业 SSO、组织架构与 CRM 尚未接入；业务数据保存在当前工作空间。</p>

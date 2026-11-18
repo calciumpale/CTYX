@@ -10,6 +10,7 @@ import { KnowledgeLibraries } from './KnowledgeLibraries';
 import { KnowledgeView } from './StudioViews';
 import { TalkLibraryView } from './TalkLibraryView';
 import { DiscardChangesDialog } from './CoreViews';
+import { LiveSignalPill, MiniRingGauge } from './TelemetryWidgets';
 import './admin-workspace.css';
 
 export const MEMBER_LABELS = {sales:'一线销售',manager:'销售管理者',admin:'管理员'};
@@ -30,14 +31,31 @@ async function result<T>(response:Response):Promise<T>{const body=await response
 export function AdminHome({state,onNavigate}:{state:ViewProps['state'];onNavigate:(view:View)=>void}) {
   const knowledgeCount=state.knowledge.filter(item=>item.status==='published').length;
   const trackCount=(state.talkTracks??[]).filter(item=>item.status==='published').length;
+  const publishedAssets=knowledgeCount+trackCount;
+  const allAssets=state.knowledge.length+(state.talkTracks?.length??0);
   const workflowCount=state.workflows.length;
   const publishedWorkflows=state.workflows.filter(item=>item.status==='published'||Boolean(item.published)).length;
+  const publishPct=workflowCount>0?Math.round((publishedWorkflows/workflowCount)*100):0;
   return <div className="admin-home">
-    <header className="admin-page-heading"><div><h1>系统管理</h1><p>统一管理工作空间岗位账号、业务预警规则、模型服务连接与 AI 应用编排。</p></div></header>
+    <header className="admin-page-heading">
+      <div>
+        <div className="admin-title-row"><h1>系统管理</h1><LiveSignalPill tone={state.model.connected ? 'success' : 'accent'} shimmer>{state.model.connected ? '模型已配置' : '模型配置待检查'}</LiveSignalPill></div>
+        <p>统一管理工作空间岗位账号、业务预警规则、模型服务连接与 AI 应用编排。</p>
+      </div>
+    </header>
     <div className="admin-kpi-grid" aria-label="系统概览">
-      <div><span>已生效知识资产</span><strong>{knowledgeCount + trackCount}</strong><small>{knowledgeCount} 条知识 · {trackCount} 条成单话术</small></div>
-      <div><span>大模型与外部连接</span><strong>{state.model.connected ? '已就绪' : '待配置'}</strong><small>{state.model.connected ? '支持实时推理与审查' : '前往服务连接配置密钥'}</small></div>
-      <div><span>AI 应用与工作流</span><strong>{publishedWorkflows} / {workflowCount}</strong><small>线上已发布 / 全部编排应用</small></div>
+      <div>
+        <div className="admin-kpi-top"><span>已生效知识与话术</span>{allAssets > 0 && <MiniRingGauge size={34} value={publishedAssets / allAssets * 100} />}</div>
+        <strong>{publishedAssets}</strong><small>{knowledgeCount} 条知识 · {trackCount} 条成单话术</small>
+      </div>
+      <div>
+        <div className="admin-kpi-top"><span>大模型配置</span><Settings size={18} aria-hidden="true" /></div>
+        <strong>{state.model.connected ? '已配置' : '待检查'}</strong><small>{state.model.name}</small>
+      </div>
+      <div>
+        <div className="admin-kpi-top"><span>AI 应用与工作流</span>{workflowCount > 0 && <MiniRingGauge size={34} value={publishPct} tone="accent" centerLabel={`${publishPct}%`} />}</div>
+        <strong>{publishedWorkflows} / {workflowCount}</strong><small>线上已发布 / 全部编排应用</small>
+      </div>
     </div>
     <section className="admin-quick-list" aria-label="管理入口">
       <button onClick={()=>onNavigate('knowledge')}><span className="admin-quick-icon"><BookOpen size={18}/></span><span><strong>知识库</strong><em>维护部门专属资料库、业务方法沉淀与话术治理策略</em></span><small>{knowledgeCount} 条知识 · {trackCount} 条话术</small><ArrowRight size={16}/></button>
@@ -65,7 +83,7 @@ export function MembersView({member,notify,onBusyChange,onDirtyChange}:{member:M
   const enabledCount = members.filter(item => item.enabled).length;
   const salesCount = members.filter(item => item.role === 'sales').length;
   const filteredMembers = members.filter(item => (roleFilter === 'all' || item.role === roleFilter) && (!memberSearch.trim() || item.displayName.toLowerCase().includes(memberSearch.trim().toLowerCase()) || item.username.toLowerCase().includes(memberSearch.trim().toLowerCase())));
-  return <div className="admin-page"><header className="admin-page-heading"><div><h1>人员权限</h1><p>管理工作空间岗位账号、会话状态与角色隔离边界。</p></div><button className="button secondary" disabled={busy||dirty||loading} onClick={()=>setReload(value=>value+1)}><RefreshCw size={15}/>刷新</button></header>{!loading&&members.length>0&&<div className="admin-kpi-grid" aria-label="成员统计"><div><span>全部成员</span><strong>{members.length}</strong><small>独立工作台身份</small></div><div><span>业务团队</span><strong>{salesCount}</strong><small>一线销售科室账号</small></div><div><span>活跃启用</span><strong>{enabledCount} / {members.length}</strong><small>全部账号正常 · 角色会话隔离</small></div></div>}{error&&<ErrorNote error={error} retry={!busy&&!dirty?()=>setReload(value=>value+1):undefined}/>}<section className="admin-members" aria-label="工作台账号">{!loading&&members.length>0&&<div className="admin-members-toolbar"><div className="admin-role-filters" role="group" aria-label="按岗位角色筛选">{([['all',`全部 ${members.length}`],['sales',`一线销售 ${salesCount}`],['manager','销售管理者'],['admin','管理员']] as const).map(([key,label])=><button key={key} type="button" aria-pressed={roleFilter===key} className={roleFilter===key?'is-active':''} onClick={()=>setRoleFilter(key)}>{label}</button>)}</div><label className="admin-member-search"><Search size={14} aria-hidden="true"/><input type="search" aria-label="搜索成员账号" placeholder="搜索姓名或 @账号" value={memberSearch} onChange={event=>setMemberSearch(event.target.value)}/></label></div>}{!loading&&filteredMembers.length>0&&<div className="admin-members-head" aria-hidden="true"><span>成员与登录账号</span><span>岗位角色</span><span>权限与数据范围</span><span>状态与操作</span></div>}{loading?<p className="admin-loading" role="status"><Loader2 size={19} className="spin"/>正在读取账号…</p>:filteredMembers.length===0?<p className="admin-loading">没有符合筛选条件的成员账号。</p>:filteredMembers.map(item=><div className="admin-member" key={item.accountId}><div className="admin-member-identity"><span className="admin-member-avatar" data-avatar-tone={avatarTone(item.username)}>{item.displayName.slice(0,1)}</span><div><h2>{item.displayName}{item.accountId===member.accountId&&<span className="admin-current">当前账号</span>}</h2><p>@{item.username}</p></div></div>{editing===item.accountId?<form className="admin-member-form" onSubmit={event=>void save(event)}><label>显示名称<input value={name} maxLength={80} autoFocus required disabled={busy} onChange={event=>setName(event.target.value)}/></label><label className="admin-check"><input type="checkbox" checked={enabled} disabled={busy||item.accountId===member.accountId} onChange={event=>setEnabled(event.target.checked)}/>允许登录</label><div><button type="button" className="button secondary" disabled={busy} onClick={()=>setEditing('')}><X size={15}/>取消</button><button className="button primary" disabled={busy||!name.trim()||!dirty}>{busy?<Loader2 size={15} className="spin"/>:<Save size={15}/>}保存</button></div></form>:<>
+  return <div className="admin-page"><header className="admin-page-heading"><div><h1>人员权限</h1><p>管理工作空间岗位账号、会话状态与角色隔离边界。</p></div><button className="button secondary" disabled={busy||dirty||loading} onClick={()=>setReload(value=>value+1)}><RefreshCw size={15}/>刷新</button></header>{!loading&&members.length>0&&<div className="admin-kpi-grid" aria-label="成员统计"><div><span>全部成员</span><strong>{members.length}</strong><small>独立工作台身份</small></div><div><span>业务团队</span><strong>{salesCount}</strong><small>一线销售科室账号</small></div><div><span>活跃启用</span><strong>{enabledCount} / {members.length}</strong><small>{enabledCount === members.length ? '全部账号已启用' : `已停用 ${members.length - enabledCount} 个账号`}</small></div></div>}{error&&<ErrorNote error={error} retry={!busy&&!dirty?()=>setReload(value=>value+1):undefined}/>}<section className="admin-members" aria-label="工作台账号">{!loading&&members.length>0&&<div className="admin-members-toolbar"><div className="admin-role-filters" role="group" aria-label="按岗位角色筛选">{([['all',`全部 ${members.length}`],['sales',`一线销售 ${salesCount}`],['manager','销售管理者'],['admin','管理员']] as const).map(([key,label])=><button key={key} type="button" disabled={Boolean(editing)} aria-pressed={roleFilter===key} className={roleFilter===key?'is-active':''} onClick={()=>setRoleFilter(key)}>{label}</button>)}</div><label className="admin-member-search"><Search size={14} aria-hidden="true"/><input type="search" disabled={Boolean(editing)} aria-label="搜索成员账号" placeholder="搜索姓名或 @账号" value={memberSearch} onChange={event=>setMemberSearch(event.target.value)}/></label></div>}{!loading&&filteredMembers.length>0&&<div className="admin-members-head" aria-hidden="true"><span>成员与登录账号</span><span>岗位角色</span><span>权限与数据范围</span><span>状态与操作</span></div>}{loading?<p className="admin-loading" role="status"><Loader2 size={19} className="spin"/>正在读取账号…</p>:filteredMembers.length===0?<p className="admin-loading">没有符合筛选条件的成员账号。</p>:filteredMembers.map(item=><div className="admin-member" key={item.accountId}><div className="admin-member-identity"><span className="admin-member-avatar" data-avatar-tone={avatarTone(item.username)}>{item.displayName.slice(0,1)}</span><div><h2>{item.displayName}{item.accountId===member.accountId&&<span className="admin-current">当前账号</span>}</h2><p>@{item.username}</p></div></div>{editing===item.accountId?<form className="admin-member-form" onSubmit={event=>void save(event)}><label>显示名称<input value={name} maxLength={80} autoFocus required disabled={busy} onChange={event=>setName(event.target.value)}/></label><label className="admin-check"><input type="checkbox" checked={enabled} disabled={busy||item.accountId===member.accountId} onChange={event=>setEnabled(event.target.checked)}/>允许登录</label><div><button type="button" className="button secondary" disabled={busy} onClick={()=>setEditing('')}><X size={15}/>取消</button><button className="button primary" disabled={busy||!name.trim()||!dirty}>{busy?<Loader2 size={15} className="spin"/>:<Save size={15}/>}保存</button></div></form>:<>
     <div className="admin-member-role"><span className={`admin-role-pill role-${item.role}`}>{MEMBER_LABELS[item.role]}</span></div>
     <div className="admin-member-scope">{MEMBER_SCOPES[item.role]}</div>
     <div className="admin-member-actions"><span className={`admin-account-status ${item.enabled?'enabled':''}`}><i aria-hidden="true" />{item.enabled?'已启用':'已停用'}</span><button className="button secondary" disabled={!!editing||busy} onClick={()=>{setEditing(item.accountId);setName(item.displayName);setEnabled(item.enabled);setError('');}}><Pencil size={14}/>编辑</button></div>

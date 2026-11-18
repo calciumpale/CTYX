@@ -239,10 +239,7 @@ export default function WebProspecting({ onDirtyChange, onBusyChange, onNavigate
               term || filter !== 'all' ? '可以尝试放宽审核筛选或修改查找关键词。' :
                 latest?.status === 'completed' && latest.resultCount === 0 ? '本次搜索成功，但未找到匹配的公开来源。可调整关键词或地区。' :
                   latest ? '当前筛选下没有来源。' : '输入行业痛点或询价关键词，跨公开平台聚合潜在客户需求并一键建立待核实项目。'}</p>
-            {!loading && !latest && <>
-              <div className="web-prospect-source-pills" aria-hidden="true"><span>小红书</span><span>知乎</span><span>百度贴吧</span><span>微博</span><span>公开网页索引</span></div>
-              <button type="button" className="web-prospect-primary" disabled={busy} onClick={() => openPanel({ kind: 'search' })}><Search size={15} aria-hidden="true" />开始搜索公开网页</button>
-            </>}
+            {!loading && !latest && <button type="button" className="web-prospect-primary" disabled={busy} onClick={() => openPanel({ kind: 'search' })}><Search size={15} aria-hidden="true" />开始搜索公开网页</button>}
           </div>
         </div>}
       </div>

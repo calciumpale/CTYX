@@ -27,7 +27,7 @@ export function TalkTrackPicker({ tracks, selectedIds, onChange, disabled = fals
 }
 
 function Empty({ title, detail, children }: { title: string; detail: string; children?: ReactNode }) {
-  return <div className="talk-library-empty"><KnowledgeDocsIllustration /><h2>{title}</h2>{detail && <p>{detail}</p>}<div className="talk-library-empty-pills" aria-hidden="true"><span>成单沟通原话提炼</span><span>异议化解逻辑拆解</span><span>结项成单率闭环验证</span></div>{children}</div>;
+  return <div className="talk-library-empty"><KnowledgeDocsIllustration /><h2>{title}</h2>{detail && <p>{detail}</p>}{children}</div>;
 }
 
 function UsageEvidence({ track, state }: { track: TalkTrack; state: WorkbenchState }) {

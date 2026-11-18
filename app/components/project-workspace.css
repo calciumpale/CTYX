@@ -32,7 +32,7 @@
 .project-name-button > span:last-child { min-width: 0; }
 .project-name-button strong { display: block; font-size: 14px; font-weight: 550; line-height: 1.7; overflow-wrap: anywhere; }
 .project-name-button small { display: block; margin-top: 4px; color: var(--cds-text-secondary); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
-.project-company-avatar { display: flex; align-items: center; justify-content: center; flex-shrink: 0; width: 30px; height: 30px; color: var(--cds-text-secondary); background: var(--cds-alpha-1); border: 1px solid var(--cds-border); border-radius: 10px; }
+.project-company-avatar { display: flex; align-items: center; justify-content: center; flex-shrink: 0; width: 32px; height: 32px; color: var(--cds-text-secondary); background: var(--cds-alpha-1); border: 1px solid var(--cds-border); border-radius: 999px; }
 .project-stage { display: flex; flex-direction: column; align-items: flex-start; gap: 7px; }
 .project-stage .stage-tag, .project-entity-label .stage-tag { font-size: 11px; }
 .project-stage small { color: var(--cds-text-secondary); font-size: 11px; overflow-wrap: anywhere; }

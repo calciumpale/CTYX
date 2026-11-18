@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type FormEvent } from 'react';
-import { AlertCircle, ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Check, CheckCircle2, ChevronRight, ClipboardCheck, Copy, FileText, GitBranch, History, Inbox, Loader2, Plus, RefreshCw, Save, Search, Send, ShieldCheck, Trash2, X } from 'lucide-react';
+import { AlertCircle, ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Check, CheckCircle2, ChevronRight, ClipboardCheck, Copy, FileText, GitBranch, History, Loader2, Plus, RefreshCw, Save, Search, Send, ShieldCheck, Trash2, X } from 'lucide-react';
 import type { View, WorkbenchState } from '../lib/types';
 import type { ApprovalActor, ApprovalKind, ApprovalRequest, ApprovalRouteStep, ApprovalStatus, ApprovalTemplate, BusinessCondition } from '../lib/approval-types';
 import type { ContractDocument } from '../lib/contract-types';
@@ -43,7 +43,6 @@ function Empty({ title, children, icon = 'inbox' }: { title: string; children: R
     {icon === 'route' ? <span className="approval-empty-badge"><GitBranch size={24} /></span> : <ContractShieldIllustration />}
     <h2>{title}</h2>
     <div>{children}</div>
-    {icon === 'inbox' && <div className="approval-empty-pills" aria-hidden="true"><span>多级顺序流转</span><span>合同与商务快照冻结</span><span>退回修改全程留痕</span></div>}
   </div>;
 }
 

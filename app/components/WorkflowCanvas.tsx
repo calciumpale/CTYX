@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react';
 import { BookOpen, Bot, Check, CircleAlert, GitBranch, Grip, Hand, Maximize, Minus, MoveRight, Plus, ScanLine, ShieldCheck, Square, Trash2, X } from 'lucide-react';
 import { AGENTS, type AgentId, type FlowEdge, type FlowNode, type NodeType, type TraceStep, type Workflow } from '../lib/types';
 import { autoLayoutWorkflow, canConnectNodes } from '../lib/workflow-graph';
@@ -49,22 +49,6 @@ const curve = (from: Point, to: Point) => {
   const bend = Math.max(52, Math.abs(to.x - from.x) * .44);
   return `M ${from.x} ${from.y} C ${from.x + bend} ${from.y}, ${to.x - bend} ${to.y}, ${to.x} ${to.y}`;
 };
-const normalizeCrampedNodes = (nodes: FlowNode[]): FlowNode[] => {
-  if (nodes.length < 5) return nodes;
-  const firstY = nodes[0].y;
-  if (!nodes.every(node => node.y === firstY)) return nodes;
-  const sorted = [...nodes].sort((a, b) => a.x - b.x);
-  const cramped = sorted.slice(1).every((node, idx) => node.x - sorted[idx].x <= 215 && node.x - sorted[idx].x >= 180);
-  if (!cramped) return nodes;
-  const cols = 3;
-  const mapped = new Map<string, Point>();
-  sorted.forEach((node, index) => {
-    const row = Math.floor(index / cols);
-    const col = index % cols;
-    mapped.set(node.id, { x: 40 + col * 236, y: 90 + row * 186 });
-  });
-  return nodes.map(node => ({ ...node, ...mapped.get(node.id)! }));
-};
 const summary = (node: FlowNode) => node.type === 'agent'
   ? AGENTS.find(agent => agent.id === node.agentId)?.name ?? '尚未选择专家'
   : node.type === 'knowledge'
@@ -94,7 +78,7 @@ export function WorkflowCanvas({ workflow, readOnly = false, selectedNodeId, onS
   const suppressClick = useRef(false);
   const uniqueId = useId().replace(/[^a-zA-Z0-9_-]/g, '');
   const arrowId = `flow-arrow-${uniqueId}`;
-  const baseNodes = useMemo(() => normalizeCrampedNodes(workflow.nodes), [workflow.nodes]);
+  const baseNodes = workflow.nodes;
   const visibleNodes = baseNodes.map(node => movingNode?.id === node.id ? { ...node, ...movingNode.position } : node);
   const nodeMap = new Map(visibleNodes.map(node => [node.id, node]));
   const selectedEdgeData = workflow.edges.find(edge => edgeKey(edge) === selectedEdge);

@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useId, useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent, type ReactNode } from 'react';
-import { AlertCircle, ArrowLeft, Check, ChevronDown, ClipboardCheck, Copy, FileCheck2, FileText, History, Loader2, Pencil, Plus, Save, ShieldCheck, Upload, X } from 'lucide-react';
+import { AlertCircle, ArrowLeft, Check, ChevronDown, ClipboardCheck, Copy, FileCheck2, FileText, History, Loader2, Pencil, Plus, Save, Upload, X } from 'lucide-react';
 import { CONTRACT_TYPES, type ContractDocument, type ContractFinding, type ContractFindingStatus, type ContractKind, type ContractParty, type ContractRiskLevel } from '../lib/contract-types';
 import { importContractFile } from '../lib/contract-import';
 import { preferredScrollBehavior } from '../lib/scroll-behavior';
@@ -40,12 +40,6 @@ function ReviewEmpty({ busy }: { busy: boolean }) {
     {busy ? <span className="contract-review-empty-icon" aria-hidden="true"><Loader2 size={22} className="studio-spin" /></span> : <ContractShieldIllustration />}
     <h2>{busy ? 'AI 正在初审' : '暂无初审结果'}</h2>
     <p>{busy ? '正在逐条比对付款、违约与交付责任条款，请稍候。' : '导入或粘贴合同正文并选择我方立场，AI 将逐条定位风险原文并给出替换建议。'}</p>
-    {!busy && <div className="contract-review-dimensions" aria-hidden="true">
-      <span>付款与验收比例</span>
-      <span>违约责任上限</span>
-      <span>知识产权与保密</span>
-      <span>解除与争议管辖</span>
-    </div>}
   </div>;
 }
 

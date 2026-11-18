@@ -99,20 +99,14 @@
 .prospect-empty-pills { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; margin-top: 14px; }
 .prospect-empty-pills > span { padding: 3px 10px; border-radius: 999px; border: 1px solid var(--cds-border); background: var(--cds-surface-0); color: var(--cds-text-secondary); font-size: 11.5px; font-weight: 500; }
 .prospect-empty .button { margin-top: 16px; }
-.prospect-onboarding-stage { max-width: 920px; width: 100%; margin: 12px auto 20px; display: grid; gap: 14px; }
-.prospect-onboarding { margin: 0; max-width: none; width: 100%; padding: 34px 40px 36px; display: flex; flex-direction: column; align-items: center; background: var(--cds-surface-2); border: 1px solid var(--cds-border); border-radius: var(--radius-2xl); box-shadow: var(--cds-shadow-xs); }
-.prospect-onboarding-art { margin-bottom: 12px; }
-.prospect-onboarding > p { max-width: 56ch; }
-.prospect-onboarding-kicker { font-size: 10.5px; font-weight: 700; letter-spacing: .12em; color: var(--app-accent-ink); margin-bottom: 4px; }
-.prospect-onboarding h2 { font-size: 22px; font-weight: 700; letter-spacing: -.025em; }
-.prospect-onboarding-steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; width: 100%; margin-top: 24px; text-align: start; }
-.prospect-onboarding-steps > div { padding: 14px 16px; border: 1px solid var(--cds-border); border-radius: 12px; background: var(--cds-surface-0); display: grid; gap: 4px; }
-.prospect-onboarding-steps > div > span { font-size: 11px; font-weight: 700; color: var(--app-accent-ink); font-variant-numeric: tabular-nums; }
-.prospect-onboarding-steps > div > strong { font-size: 13.5px; font-weight: 650; color: var(--cds-text-primary); }
-.prospect-onboarding-steps > div > small { font-size: 12px; color: var(--cds-text-secondary); line-height: 1.5; }
-.prospect-onboarding-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 10px; margin-top: 24px; }
+.prospect-onboarding-stage { max-width: 680px; width: 100%; margin: 28px auto 24px; display: grid; gap: 14px; }
+.prospect-onboarding { margin: 0; max-width: none; width: 100%; padding: 44px 40px 42px; display: flex; flex-direction: column; align-items: center; background: var(--cds-surface-2); border: 1px solid var(--cds-border); border-radius: var(--radius-2xl); box-shadow: var(--cds-shadow-sm); }
+.prospect-onboarding-art { margin-bottom: 14px; }
+.prospect-onboarding > p { max-width: 44ch; }
+.prospect-onboarding h2 { font-size: 21px; font-weight: 700; letter-spacing: -.025em; }
+.prospect-onboarding-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 10px; margin-top: 22px; }
 .prospect-onboarding-actions > .button { margin-top: 0; }
-@media (max-width: 720px) { .prospect-onboarding { padding: 26px 18px; } .prospect-onboarding-steps { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 720px) { .prospect-onboarding { padding: 28px 18px; } }
 .prospect-selection-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; padding: 10px 12px; border: 1px solid var(--cds-border); border-radius: var(--control-radius); background: var(--cds-surface-2); margin-bottom: 8px; }
 .prospect-selection-toolbar > label { display: flex; align-items: center; gap: 9px; min-height: var(--control-height); cursor: pointer; }
 .prospect-selection-toolbar > span { margin-right: auto; font-size: 12px; color: var(--cds-text-secondary); }
@@ -236,7 +230,7 @@
   .prospect-daily input[type="time"], .prospect-daily button { height: 44px; min-height: 44px; }
 }
 /* The filter row stays in view while the list and detail scroll. */
-.prospect-content { width: 100%; min-width: 0; background: var(--cds-surface-1); display: flex; flex-direction: column; height: 100%; min-height: 0; overflow: auto; padding: 20px 28px 16px; }
+.prospect-content { width: 100%; min-width: 0; background: transparent; display: flex; flex-direction: column; height: 100%; min-height: 0; overflow: auto; padding: 20px 28px 16px; }
 .prospect-page-header { flex: none; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px 20px; padding: 0 2px 14px; margin-bottom: 14px; border-bottom: 1px solid var(--cds-border); }
 .prospect-page-title { min-width: 0; display: grid; gap: 3px; }
 .prospect-page-title > strong { font-size: 23px; font-weight: 700; letter-spacing: -.03em; line-height: 1.25; color: var(--cds-text-primary); }

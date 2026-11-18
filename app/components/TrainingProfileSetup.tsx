@@ -142,7 +142,6 @@ export function TrainingProfileSetup({ scenario, voice, busy, error, modelConnec
       {modeSelection}
       {voiceSelection ? <div className="training-setup-voice">{voiceSelection}</div> : <div className="training-mode-highlights" aria-hidden="true">
         <p>文字模式支持实时话术提示与逐句复盘，适合拆解复杂商务异议。</p>
-        <div><span>实时应答锦囊</span><span>多轮追问演练</span><span>支持输入法保护</span></div>
       </div>}
     </section>
     <section className="training-setup-card training-setup-start" aria-labelledby={`${id}-start-heading`}>
@@ -152,9 +151,8 @@ export function TrainingProfileSetup({ scenario, voice, busy, error, modelConnec
         {error && <div className="training-profile-error" role="alert"><Info size={16} /><div><p>{error}</p><span>画像已保留，可重试开始或返回修改。</span></div></div>}
         <div className="training-profile-preview"><ProfileFacts profile={reviewed} /></div>
       </div> : <>
-        <p className="training-setup-help">确认客户画像后，进入练习对话并按五维标准评估。</p>
+        <p className="training-setup-help">确认客户画像后，进入练习对话并按六维标准评估。</p>
         <div className="training-profile-ready"><Check size={15} aria-hidden="true" /><p>{modelConnected ? '已配置模型' : '本地规则'}{voice ? ' · 语音连接后由你开启麦克风' : ' · 文字对话'}</p></div>
-        <div className="training-rubric-pills" aria-hidden="true"><span>需求追问</span><span>共情倾听</span><span>价值表达</span><span>推进动作</span><span>合规边界</span></div>
       </>}
       <div className="training-profile-actions">
         {reviewed ? <>

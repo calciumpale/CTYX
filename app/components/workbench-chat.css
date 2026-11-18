@@ -110,12 +110,12 @@
   transform: translateY(-1.5px);
 }
 .chat-drawer .chat-agent-icon {
-  width: 32px;
-  height: 32px;
+  width: 34px;
+  height: 34px;
   flex: none;
   display: grid;
   place-items: center;
-  border-radius: 9px;
+  border-radius: 999px;
   border: 1px solid var(--cds-border);
 }
 .chat-drawer .chat-welcome-grid button > svg {

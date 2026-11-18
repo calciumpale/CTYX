@@ -49,23 +49,7 @@ export default function WorkspaceLogin({ onLogin, error, busy }: WorkspaceLoginP
         <div className="workspace-login-hero-graphic">
           <LoginShowcaseIllustration />
         </div>
-        <div className="workspace-login-pipeline">
-          <div className="workspace-login-step">
-            <span className="workspace-login-step-num">01</span>
-            <div><strong>智能获客与意向初筛</strong><small>多渠道评论采集 · 痛点评分与人工复核</small></div>
-            <em>AI 初筛</em>
-          </div>
-          <div className="workspace-login-step">
-            <span className="workspace-login-step-num">02</span>
-            <div><strong>商机跟进与下一步策略</strong><small>结合已确认原话与知识库生成推进清单</small></div>
-            <em>实时协同</em>
-          </div>
-          <div className="workspace-login-step">
-            <span className="workspace-login-step-num">03</span>
-            <div><strong>合同风险条款初审</strong><small>逐条定位风险原文并提供修订替换建议</small></div>
-            <em>风控护航</em>
-          </div>
-        </div>
+        <p className="workspace-login-showcase-foot">智能获客初筛 · 商机深度洞察 · 合同风控审阅 · 团队经验沉淀</p>
       </aside>
       <section className="workspace-login-panel" aria-labelledby="workspace-login-title">
         <div className="workspace-login-header">

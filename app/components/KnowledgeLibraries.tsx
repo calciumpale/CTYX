@@ -333,7 +333,6 @@ export function KnowledgeLibraries({ notify, onBusyChange, onDirtyChange, embedd
         <KnowledgeDocsIllustration className="knowledge-empty-art" />
         <h3>还没有资料库</h3>
         <p>{canManage ? '创建部门专属或全员共享资料库，上传业务文档后自动完成切块与检索索引。' : '当前工作空间尚未建立资料库，请联系管理员或销售管理者创建并导入资料。'}</p>
-        <div className="knowledge-format-pills" aria-hidden="true"><span>Excel (XLSX/XLS)</span><span>PDF</span><span>Word (DOCX)</span><span>Markdown</span><span>CSV / TXT</span></div>
         {canManage && <button type="button" className="button primary" disabled={Boolean(busy)} onClick={() => openDialog({ kind: 'create' })}><Plus size={16} />新建资料库</button>}
       </div> :
       <div className="knowledge-libraries-grid">
@@ -360,7 +359,6 @@ export function KnowledgeLibraries({ notify, onBusyChange, onDirtyChange, embedd
             <KnowledgeDocsIllustration className="knowledge-empty-art" />
             <h3>{current ? '这个库还没有资料' : '还没有资料库'}</h3>
             <p>{!canManage ? '请联系管理员或销售管理者导入。' : current ? '上传业务文档或粘贴正文，自动完成切块与全文检索索引。' : '创建部门专属或全员共享资料库，为 AI 助手与获客接待提供可溯源知识支撑。'}</p>
-            <div className="knowledge-format-pills" aria-hidden="true"><span>Excel (XLSX/XLS)</span><span>PDF</span><span>Word (DOCX)</span><span>Markdown</span><span>CSV / TXT</span></div>
             {canManage && !current && <button type="button" className="button primary" disabled={Boolean(busy)} onClick={() => openDialog({ kind: 'create' })}><Plus size={16} />新建第一个资料库</button>}
           </div>
           : <div className="knowledge-search">
@@ -398,6 +396,9 @@ export function KnowledgeLibraries({ notify, onBusyChange, onDirtyChange, embedd
               : mineruAvailability === 'unavailable' ? '暂时无法读取 MinerU 配置，可使用浏览器解析。'
               : mineruAvailability === 'checking' ? '正在检查 MinerU 配置…' : '扫描件、表格或多栏 PDF 可选 MinerU 云解析。'}</small>
           </div>
+          {hasEmbedding && <label className="knowledge-index-option"><input type="checkbox" checked={rebuildIndex} onChange={event => setRebuildIndex(event.target.checked)} disabled={Boolean(busy)} />建立向量索引（关闭后使用全文检索）</label>}
+          <KnowledgeChunkControls value={config} onChange={setConfig} disabled={Boolean(busy)} />
+          <p className="knowledge-dialog-description">文件加入队列时保存当前解析、切块与索引设置。修改设置后，新加入的文件会使用新设置。</p>
           <div className="knowledge-upload-dropzone" onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); addFiles(Array.from(event.dataTransfer.files)); }}>
             <label>选择或拖入多个文档<input type="file" multiple accept={KNOWLEDGE_UPLOAD_ACCEPT} disabled={Boolean(busy)} onChange={event => { addFiles(Array.from(event.currentTarget.files || [])); event.currentTarget.value = ''; }} /><small>支持 PDF / Word / Excel / Markdown / CSV / TXT · 最多 20 份（每份 ≤ 10MB）</small></label>
             {queue.length > 0 && <>
@@ -409,15 +410,13 @@ export function KnowledgeLibraries({ notify, onBusyChange, onDirtyChange, embedd
               <div className="knowledge-actions knowledge-queue-toolbar">
                 {queue.some(item => item.state === 'done') && <button type="button" className="button ghost" disabled={Boolean(busy)} onClick={() => setQueue(previous => previous.filter(item => item.state !== 'done'))}>清除已完成</button>}
                 <button type="button" className="button ghost" disabled={Boolean(busy)} onClick={() => setQueue([])}>清空队列</button>
-                {busy === 'batch' && <button type="button" className="button secondary" onClick={() => { stopQueue.current = true; }}>停止后续导入</button>}
+                {busy === 'batch' && <button type="button" className="button secondary" onClick={() => { stopQueue.current = true; }}>停止后续导入（等待当前请求完成）</button>}
               </div>
             </>}
           </div>
-          {hasEmbedding && <label className="knowledge-index-option"><input type="checkbox" checked={rebuildIndex} onChange={event => setRebuildIndex(event.target.checked)} disabled={Boolean(busy)} />建立向量索引（关闭后使用全文检索）</label>}
-          <KnowledgeChunkControls value={config} onChange={setConfig} disabled={Boolean(busy)} />
           <div className="knowledge-actions knowledge-dialog-actions">
             <button type="button" className="button secondary" disabled={Boolean(busy)} onClick={closeDialog}>取消</button>
-            <button type="button" className="button primary" disabled={Boolean(busy) || !queue.some(item => item.state === 'queued')} onClick={startQueue}>{busy === 'batch' ? '正在导入队列…' : `开始导入${queue.length ? `（${queue.filter(item => item.state === 'queued').length} 份）` : ''}`}</button>
+            <button type="button" className="button primary" disabled={Boolean(busy) || !queue.some(item => item.state === 'queued')} onClick={startQueue}>{busy === 'batch' ? '正在导入队列…' : '开始 / 继续导入'}</button>
           </div>
         </> : <>
           <label>资料标题<input value={draft.title} maxLength={titleLimit} onChange={event => setDraft(previous => ({ ...previous, title: event.target.value }))} disabled={Boolean(busy)} required placeholder="例如：园区入驻政策与租金标准" /></label>

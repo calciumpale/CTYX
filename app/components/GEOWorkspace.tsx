@@ -1,6 +1,6 @@
 'use client';
 
-import { ArrowLeft, ArrowRight, Check, ChevronRight, CircleAlert, Download, FileText, Plus, RotateCcw, Save, Sparkles, Trash2 } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Check, ChevronRight, CircleAlert, Download, Plus, RotateCcw, Save, Sparkles, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { StudioRequestError, studioRequest } from '../lib/creative-studio-client';
 import { buildGeoStructuredData } from '../lib/geo-structured-data';
@@ -716,12 +716,8 @@ export default function GEOWorkspace({ member, notify, onDirtyChange, onBusyChan
       {!project || !draft ? <div className="geo-empty-stage">
         <div className="geo-empty">
           <GeoIllustration className="geo-empty-art" />
-          <div className="geo-empty-engines" aria-hidden="true"><span>DeepSeek</span><span>豆包</span><span>Kimi</span><span>通义千问</span></div>
           <h3>查看品牌在 AI 回答中的表现</h3>
-          <p>从用户可能提出的问题出发，记录实际答案和引用，找出需要补齐的信源，并在发布后复测。</p>
-          <ol className="geo-empty-steps" aria-hidden="true">
-            {STEPS.map((item, idx) => <li key={item.title}><span>0{idx + 1}</span><strong>{item.title}</strong><small>{item.detail}</small></li>)}
-          </ol>
+          <p>围绕真实客户提问采样主流大模型答案，定位信源缺口并在内容发布后复测。</p>
           <button type="button" className="button primary" disabled={busy} onClick={start}><Plus size={16} aria-hidden="true" />新建内容项目</button>
         </div>
       </div> : <>

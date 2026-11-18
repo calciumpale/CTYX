@@ -336,7 +336,6 @@ export function RecordingUploadView({ state, initialDealId, mutate, uploadFollow
             <AudioWaveIllustration />
             <strong>{inInbox ? inboxStatus === 'loading' || inboxStatus === 'idle' ? '正在读取待归属录音…' : inboxError ? '暂时未能读取录音列表' : '待归属录音工作台' : '项目录音与转写'}</strong>
             <p>{inInbox ? inboxStatus === 'loading' || inboxStatus === 'idle' ? '正在读取待归属录音…' : inboxError ? '可重试读取或继续上传录音。' : '暂无待归属录音，上传后在这里查看转写。' : '此项目暂无录音。保存后可在这里查看转写。'}</p>
-            <div className="recording-upload-pills" aria-hidden="true"><span>多讲话人分离</span><span>时间轴点按回听</span><span>客户画像结构化提取</span><span>一键收藏金句</span></div>
           </div>}
         </section>
       </div>}

@@ -22,6 +22,7 @@ import { CustomerDirectoryResults } from './CustomerDirectoryResults';
 import { FollowupRecordingPlayer } from './FollowupRecordingField';
 import { ProjectIntake } from './ProjectIntake';
 import { ProjectSalesIntelligence } from './ProjectSalesIntelligence';
+import { MiniRingGauge } from './TelemetryWidgets';
 import './answer-content.css';
 import './customer-workspace.css';
 import './conversation-composer.css';
@@ -484,6 +485,13 @@ export function CustomerWorkspace({ state, member, mutate, notify, initialDealId
         </div>
         <section className="cw-insights-snapshot" aria-label="客户与项目概况">
           <div className="cw-section-heading"><h3>客户与项目概况</h3><button type="button" disabled={locked} onClick={() => openForm('edit')}>编辑</button></div>
+          {healthScore !== null && <div className="cw-snapshot-telemetry" aria-hidden="true">
+            <MiniRingGauge size={42} strokeWidth={4} value={healthScore} tone={healthScore >= 75 ? 'success' : healthScore >= 55 ? 'accent' : 'warning'} centerLabel={`${healthScore}`} />
+            <div>
+              <strong>商机推进健康度 · {healthScore} / 100</strong>
+              <small>当前所处：{deal.stage}阶段（第 {Math.max(1, (STAGES as readonly string[]).indexOf(deal.stage) + 1)} / {STAGES.length} 步）</small>
+            </div>
+          </div>}
           <dl className="cw-snapshot-grid">
             <div><dt>对接联系人</dt><dd>{deal.contact || '待补充'}{deal.position ? ` · ${deal.position}` : ''}</dd></div>
             <div><dt>行业与阶段</dt><dd>{deal.industry || '待补充'} · {deal.stage}</dd></div>

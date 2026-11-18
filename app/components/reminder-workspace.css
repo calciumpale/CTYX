@@ -3,7 +3,7 @@
   min-height: 100%;
   padding: 28px clamp(18px, 3vw, 36px) 48px;
   color: var(--cds-text-primary);
-  background: var(--cds-surface-1);
+  background: transparent;
 }
 
 .reminder-header,
@@ -35,34 +35,41 @@
 
 .reminder-overview {
   display: grid;
-  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1.05fr);
   align-items: center;
   gap: 24px;
   padding: 24px 28px;
-  background: linear-gradient(135deg, color-mix(in srgb, var(--app-accent) 4%, var(--cds-surface-2)), var(--cds-surface-2) 65%);
+  background: linear-gradient(145deg, color-mix(in srgb, var(--app-accent) 5%, var(--cds-surface-2)), var(--cds-surface-2) 68%);
+  box-shadow: var(--cds-shadow-sm);
 }
 .reminder-overview-main { display: grid; justify-items: start; gap: 8px; }
+.reminder-overview-kicker { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
 .reminder-overview h2 { margin: 0; color: var(--app-accent-ink); font-size: 12px; font-weight: 650; letter-spacing: .04em; text-transform: uppercase; }
 .reminder-overview-title,
 .reminder-overview-summary { margin: 0; overflow-wrap: anywhere; }
-.reminder-overview-title { font-size: 22px; font-weight: 650; line-height: 1.35; letter-spacing: -.02em; }
+.reminder-overview-title { font-size: 22px; font-weight: 700; line-height: 1.35; letter-spacing: -.022em; }
 .reminder-overview-summary { color: var(--cds-text-secondary); font-size: 13.5px; line-height: 1.65; }
 
+.reminder-telemetry-panel { display: grid; gap: 10px; min-width: 0; }
 .reminder-kpi-strip {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
   gap: 10px;
 }
 .reminder-kpi-item {
   display: grid;
-  gap: 4px;
-  padding: 13px 14px;
+  gap: 3px;
+  padding: 12px 13px;
   border: 1px solid var(--cds-border);
-  border-radius: 12px;
+  border-radius: 14px;
   background: var(--cds-surface-1);
+  box-shadow: var(--cds-shadow-xs);
+  transition: transform 200ms var(--cds-ease-enter), border-color 180ms var(--cds-ease-swift), box-shadow 200ms var(--cds-ease-enter);
 }
-.reminder-kpi-item > span { font-size: 12px; color: var(--cds-text-secondary); font-weight: 500; }
-.reminder-kpi-item > strong { font-size: 24px; font-weight: 650; line-height: 1.2; font-variant-numeric: tabular-nums; color: var(--cds-text-primary); }
+.reminder-kpi-item:hover { transform: translateY(-1.5px); border-color: color-mix(in srgb, var(--app-accent) 30%, var(--cds-border)); box-shadow: var(--cds-shadow-sm); }
+.reminder-kpi-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.reminder-kpi-head > span, .reminder-kpi-item > span { font-size: 12px; color: var(--cds-text-secondary); font-weight: 550; }
+.reminder-kpi-item > strong { font-size: 24px; font-weight: 700; line-height: 1.2; font-variant-numeric: tabular-nums; color: var(--cds-text-primary); }
 .reminder-kpi-item > small { font-size: 11px; color: var(--cds-text-muted); }
 
 .reminder-overview-counts,

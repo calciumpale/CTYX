@@ -1,7 +1,7 @@
 'use client';
 
 import { useId, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
-import { AlertCircle, ArrowLeft, BookOpen, Check, CheckCircle2, ChevronRight, Copy, FileText, GitBranch, History, Info, Loader2, MessageSquare, PauseCircle, Search, Sparkles, X, XCircle } from 'lucide-react';
+import { AlertCircle, ArrowLeft, BookOpen, Check, CheckCircle2, ChevronRight, Copy, FileText, GitBranch, Info, Loader2, MessageSquare, PauseCircle, Search, Sparkles, X, XCircle } from 'lucide-react';
 import { AnswerContent } from './AnswerContent';
 import { KnowledgeDocsIllustration } from './VisualIllustrations';
 import { AGENTS, type Run, type TraceStep, type ViewProps } from '../lib/types';
@@ -28,7 +28,6 @@ function Empty({ filtered, onClear }: { filtered: boolean; onClear: () => void }
     {filtered ? <Search size={28} aria-hidden="true" /> : <KnowledgeDocsIllustration />}
     <h2>{filtered ? '没有找到匹配的运行记录' : '还没有运行记录'}</h2>
     <p>{filtered ? '清除筛选查看全部记录。' : '在「项目跟进」或「AI 营销助手」发起提问与工作流后，执行轨迹与引用依据会自动保存在这里。'}</p>
-    {!filtered && <div className="run-history-empty-pills" aria-hidden="true"><span>完整回答存档</span><span>节点级执行耗时</span><span>知识切片引用溯源</span><span>一键提炼候选 Skill</span></div>}
     {filtered && <button type="button" className="studio-btn studio-btn-secondary" onClick={onClear}>清除筛选</button>}
   </div>;
 }

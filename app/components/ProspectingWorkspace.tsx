@@ -93,7 +93,7 @@ function CampaignForm({ busy, modelReady, onCreate, onCancel, onDirtyChange }: {
     <div className="prospect-form-grid">
       <section className="prospect-form-panel" aria-labelledby={`${id}-audience`}>
         <div className="prospect-form-panel-head"><span className="prospect-step-pill" aria-hidden="true">01</span><h2 id={`${id}-audience`}>目标与搜索词</h2></div>
-        <div className="prospect-field"><label htmlFor={`${id}-requirements`}>产品与目标客群</label><textarea id={`${id}-requirements`} disabled={busy} required minLength={5} maxLength={2000} rows={4} value={requirements} onChange={event => setRequirements(event.target.value)} placeholder="例如：我们提供中小企业财税服务，想找到正在咨询公司注册、代理记账和税务办理的创业者。" /><small>AI 将依据此画像为每条公开评论进行 0–100 意向度打分与理由拆解。</small></div>
+        <div className="prospect-field"><label htmlFor={`${id}-requirements`}>产品与目标客群</label><textarea id={`${id}-requirements`} disabled={busy} required minLength={5} maxLength={2000} rows={4} value={requirements} onChange={event => setRequirements(event.target.value)} placeholder="例如：我们提供中小企业财税服务，想找到正在咨询公司注册、代理记账和税务办理的创业者。" /><small>根据客群要求评估评论意向（0–100 分）。未接入模型或模型未返回有效结果时使用规则初筛。</small></div>
         <div className="prospect-field"><label htmlFor={`${id}-keywords`}>竞品搜索词（可选）</label><input id={`${id}-keywords`} disabled={busy} maxLength={204} value={keywords} onChange={event => setKeywords(event.target.value)} placeholder="例如：公司注册，代理记账，创业财税" /><small>最多 5 个词，用逗号分隔，每词不超过 40 字。留空时自动从客群要求提取。</small></div>
       </section>
       <section className="prospect-form-panel" aria-labelledby={`${id}-outreach`}>
@@ -521,14 +521,8 @@ export function ProspectingWorkspace({ onGuardReady, initialSection = 'screen', 
                 !snapshot ? <div className="prospect-empty">刷新后查看已保存的获客任务。</div> : !campaign ? <div className="prospect-onboarding-stage">
                   <div className="prospect-empty prospect-onboarding">
                     <ProspectingIllustration className="prospect-onboarding-art" />
-                    <span className="prospect-onboarding-kicker" aria-hidden="true">AI LEAD DISCOVERY</span>
                     <h2>创建获客任务，自动筛选高意向客户</h2>
-                    <p>围绕目标行业痛点采集公开视频评论，经 AI 意向评分后衔接人工复核与留资。</p>
-                    <div className="prospect-onboarding-steps" aria-hidden="true">
-                      <div><span>01</span><strong>设定客群与搜索词</strong><small>配置目标画像、搜索词与招呼模板</small></div>
-                      <div><span>02</span><strong>采集评论与 AI 初筛</strong><small>连接本机助手或导入评论自动评分</small></div>
-                      <div><span>03</span><strong>审核触达与转项目</strong><small>高意向线索一键转入待核实项目</small></div>
-                    </div>
+                    <p>围绕目标行业采集公开评论，经 AI 意向评分后衔接人工复核与触达。</p>
                     <div className="prospect-onboarding-actions">
                       <button className="button primary" onClick={startCampaign}><Plus size={15} />新建任务</button>
                       <button type="button" className="button secondary" onClick={() => openSection('web')}>检索全网公开线索</button>

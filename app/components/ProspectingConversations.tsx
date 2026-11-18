@@ -385,7 +385,7 @@ export function ProspectingConversations({ campaignId, active, view, blocked, pa
               </button>
             </li>;
           })}
-        </ul> : <div className="prospect-onboarding-stage"><div className="prospect-empty"><ProspectingIllustration className="prospect-onboarding-art" /><h3>{snapshot.conversations.length ? '没有匹配的会话' : '还没有同步的客户会话'}</h3><p>{snapshot.conversations.length ? '调整状态或搜索关键词后重试。' : campaignScope ? '完成评论线索的招呼并同步后，会话将显示在这里。' : '创建获客任务并发出首条触达招呼后，私信沟通将自动同步至此。'}</p><div className="prospect-empty-pills" aria-hidden="true"><span>抖音私信实时同步</span><span>部门知识库自动引用</span><span>一键人工无缝接管</span></div>{!snapshot.conversations.length && !campaignId && onNavigateCreate && <button type="button" className="button primary" disabled={mutationBlocked} onClick={onNavigateCreate}>新建获客任务</button>}</div></div> : pool.length ? <ProspectingList
+        </ul> : <div className="prospect-onboarding-stage"><div className="prospect-empty"><ProspectingIllustration className="prospect-onboarding-art" /><h3>{snapshot.conversations.length ? '没有匹配的会话' : '还没有同步的客户会话'}</h3><p>{snapshot.conversations.length ? '调整状态或搜索关键词后重试。' : campaignScope ? '完成评论线索的招呼并同步后，会话将显示在这里。' : '创建获客任务并发出首条招呼后，私信沟通将自动同步至此。'}</p>{!snapshot.conversations.length && !campaignId && onNavigateCreate && <button type="button" className="button primary" disabled={mutationBlocked} onClick={onNavigateCreate}>新建获客任务</button>}</div></div> : pool.length ? <ProspectingList
           label="留资线索池"
           selectedId={selectedPoolId}
           onSelect={id => { if (canChangeDetail()) { rememberRow(); setSelectedPoolId(id); setError(''); setNotice(''); } }}
@@ -396,7 +396,7 @@ export function ProspectingConversations({ campaignId, active, view, blocked, pa
             intent: <span className={`prospect-chat-badge is-grade-${item.grade}`}>{gradeLabels[item.grade]}</span>,
             status: <span className="prospect-chat-badge">{item.status === 'assigned' ? '已分配' : '待分配'}</span>,
           }))}
-        /> : <div className="prospect-onboarding-stage"><div className="prospect-empty"><ProspectingIllustration className="prospect-onboarding-art" /><h3>{snapshot.pool.length ? '没有匹配的留资线索' : '暂无可查看的留资线索'}</h3><p>{snapshot.pool.length ? '调整意向等级或搜索关键词后重试。' : '销售可查看分配给自己的线索，管理者可查看团队线索。'}</p><div className="prospect-empty-pills" aria-hidden="true"><span>手机与微信识别</span><span>A/B/C 意向分级</span><span>负责销售自动流转</span></div>{snapshot.pool.length ? <button className="button secondary" onClick={() => { setGrade('all'); setPoolQuery(''); }}>查看全部留资</button> : campaignId && <button className="button secondary" onClick={showCurrentTask}>进入当前任务聊天</button>}</div></div>}
+        /> : <div className="prospect-onboarding-stage"><div className="prospect-empty"><ProspectingIllustration className="prospect-onboarding-art" /><h3>{snapshot.pool.length ? '没有匹配的留资线索' : '暂无可查看的留资线索'}</h3><p>{snapshot.pool.length ? '调整意向等级或搜索关键词后重试。' : '销售可查看分配给自己的线索，管理者可查看团队线索。'}</p>{snapshot.pool.length ? <button className="button secondary" onClick={() => { setGrade('all'); setPoolQuery(''); }}>查看全部留资</button> : campaignId && <button className="button secondary" onClick={showCurrentTask}>进入当前任务聊天</button>}</div></div>}
       </div>
       {view === 'chat' && settingsOpen && <ProspectingPanel key="settings" title="跟进设置" closeLabel="关闭跟进设置" onClose={returnToList} className="prospect-chat-settings-panel">
         <div className="prospect-chat-agent-toolbar">

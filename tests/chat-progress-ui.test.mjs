@@ -51,7 +51,7 @@ test('project chat and the assistant show live progress and preserve the project
 
     const body = JSON.parse((await Array.fromAsync(request.setEncoding('utf8'))).join(''));
     const gate = gates.get(body.payload?.query);
-    posts.push({ method: request.method, action: body.action, query: body.payload?.query, dealId: body.payload?.dealId, accept: request.headers.accept });
+    posts.push({ method: request.method, action: body.action, query: body.payload?.query, dealId: body.payload?.dealId, conversationRunIds: body.payload?.conversationRunIds, accept: request.headers.accept });
     assert.ok(gate, 'only fixture questions may call chat');
     response.writeHead(200, { 'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-store' });
     response.flushHeaders();
@@ -163,8 +163,9 @@ test('project chat and the assistant show live progress and preserve the project
           assert.equal(await view.getByText(generation.detail, { exact: true }).count(), 0);
           const matchingPosts = posts.filter(post => post.query === query);
           assert.equal(matchingPosts.length, 1);
-          const [{ accept, ...request }] = matchingPosts;
-          assert.deepEqual(request, { method: 'POST', action: 'chat', query, dealId: project ? dealId : undefined });
+          const [{ accept, conversationRunIds, ...request }] = matchingPosts;
+          assert.deepEqual(conversationRunIds, []);
+          assert.deepEqual(request, { method: 'POST', action: 'chat', query, dealId });
           assert.match(accept, /\bapplication\/x-ndjson\b/);
         } finally {
           gate.lookup.resolve();
@@ -173,6 +174,45 @@ test('project chat and the assistant show live progress and preserve the project
         }
       });
     }
+
+    await t.test('assistant scopes project shortcuts and history independently of the active project', async () => {
+      const originalState = state;
+      const otherDealId = 'second-project';
+      const previous = { ...state.runs[0], id: 'other-project-run', query: '另一项目的历史问题', dealId: otherDealId };
+      state = { ...state, deals: [...state.deals, { ...state.deals[0], id: otherDealId, name: '另一家企业' }], runs: [previous, ...state.runs] };
+      const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+      page.setDefaultTimeout(6000);
+      const dialog = page.getByRole('dialog', { name: 'AI 营销助手', exact: true });
+      const assistant = page.getByRole('button', { name: 'AI 营销助手', exact: true });
+      const ask = async (query, expectedDeal, ids, shortcut = false) => {
+        const answer = `${query}的测试回复`;
+        gates.set(query, { lookup: { promise: Promise.resolve() }, generation: { promise: Promise.resolve() }, answer });
+        if (shortcut) await dialog.getByRole('button', { name: /AI 项目复盘/ }).click();
+        else {
+          await dialog.getByRole('textbox', { name: '描述你的任务' }).fill(query);
+          await dialog.getByRole('button', { name: '发送任务' }).click();
+        }
+        await dialog.getByText(answer, { exact: true }).waitFor();
+        assert.equal(posts.at(-1).dealId, expectedDeal);
+        assert.deepEqual(posts.at(-1).conversationRunIds, ids);
+      };
+      try {
+        await openProject(page);
+        await assistant.click();
+        await ask('请结合当前客户事实与沟通记录，汇总项目现状、待核实风险及下一步推进清单。', dealId, [], true);
+        await dialog.getByRole('button', { name: '关闭', exact: true }).click();
+        await page.locator('.sidebar-recent').getByRole('button', { name: previous.query, exact: true }).click();
+        await ask('继续讨论另一项目', otherDealId, [previous.id]);
+        await dialog.getByRole('button', { name: '关闭', exact: true }).click();
+        await page.locator('.sidebar nav').getByRole('link', { name: /^提醒/ }).click();
+        await assistant.click();
+        assert.equal(await dialog.getByRole('button', { name: /AI 项目复盘/ }).count(), 0);
+        await ask('全局任务测试', undefined, []);
+      } finally {
+        await page.close();
+        state = originalState;
+      }
+    });
 
     for (const reducedMotion of ['no-preference', 'reduce']) {
       await t.test(`项目对话：${reducedMotion} 时返回最新消息`, async () => {
@@ -240,7 +280,7 @@ test('project chat and the assistant show live progress and preserve the project
         }
       });
     }
-    assert.equal(posts.length, 4);
+    assert.equal(posts.length, 7);
   } finally {
     await browser?.close();
     await server?.close();

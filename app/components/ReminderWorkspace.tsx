@@ -9,6 +9,7 @@ import { preferredScrollBehavior } from '../lib/scroll-behavior';
 import type { View, WorkbenchState } from '../lib/types';
 import { deriveProjectReminders, type ProjectReminder } from '../lib/workspace-reminders';
 import { useBusinessSettings } from './BusinessSettingsContext';
+import { LiveSignalPill, MiniRingGauge, MiniSegmentBar, type TelemetryTone } from './TelemetryWidgets';
 import './reminder-workspace.css';
 
 type Props = {
@@ -57,6 +58,18 @@ export function ReminderWorkspace({ state, member, pendingApprovals = 0, pending
   ) : [];
   const visibleCount = visibleProjects.length + visibleReviews.reduce((count, item) => count + item.count, 0);
   const todayCount = items.filter(item => item.urgency !== 'overdue' && shanghaiDate(item.deadline) === today).length;
+
+  const metrics: { label: string; value: number; tone: TelemetryTone; description: string }[] = member.role === 'manager'
+    ? [
+        { label: '项目截止', value: counts.total, tone: 'warning', description: `${counts.overdue} 项已逾期` },
+        { label: '合同待审', value: pendingApprovals, tone: 'accent', description: '待人工审批' },
+        { label: '候选经验', value: pendingSkills, tone: 'success', description: '待核验发布' },
+      ]
+    : [
+        { label: '已逾期', value: counts.overdue, tone: 'danger', description: '已过截止时间' },
+        { label: '临近截止', value: counts.urgent, tone: 'warning', description: `不足 ${rules.urgentDays} 天` },
+        { label: '即将截止', value: counts.upcoming, tone: 'accent', description: `${rules.urgentDays} 天至 ${rules.warningDays} 天以内` },
+      ];
 
   useEffect(() => {
     if (now !== undefined) return;
@@ -120,33 +133,39 @@ export function ReminderWorkspace({ state, member, pendingApprovals = 0, pending
       <p className="sr-only" role="status">{feedback}</p>
       <section className="reminder-overview" aria-labelledby={`${id}-overview`}>
         <div className="reminder-overview-main">
-          <h2 id={`${id}-overview`}>今日待办概览</h2>
-          <p className="reminder-overview-title">{total ? `当前共 ${total} 项事项待跟进` : '当前没有待处理提醒'}</p>
-          <p className="reminder-overview-summary">{counts.total > 0 ? `${counts.overdue ? `${counts.overdue} 个项目已逾期` : '暂无逾期项目'}${todayCount > 0 ? `，另有 ${todayCount} 个项目今日截止` : ''}。` : visibleReviews.length > 0 ? '所有关联项目均在正常跟进周期内，请重点关注下方待审核事项。' : member.role === 'manager' ? '团队关联项目与待审核事项均已处理完毕，运行状态正常。' : '所有关联项目均在正常跟进周期内，暂无逾期或临近截止事项。'}</p>
+          <div className="reminder-overview-kicker">
+            <h2 id={`${id}-overview`}>待办概览</h2>
+            <LiveSignalPill tone={counts.overdue > 0 ? 'warning' : 'success'} shimmer>
+              {counts.overdue > 0 ? `${counts.overdue} 项逾期预警` : '暂无逾期提醒'}
+            </LiveSignalPill>
+          </div>
+          <p className="reminder-overview-title">{total ? `当前共 ${total} 项待跟进` : '当前没有待处理提醒'}</p>
+          <p className="reminder-overview-summary">{counts.total > 0 ? `${counts.overdue ? `${counts.overdue} 个项目已逾期` : '暂无逾期项目'}${todayCount > 0 ? `，另有 ${todayCount} 个项目今日截止` : ''}。` : '当前没有触发截止提醒的项目。'}</p>
           <div className="reminder-actions">
             {visibleCount > 0 && <button type="button" className="button primary" onClick={focusFirstReminder}><ArrowDown size={15} aria-hidden="true" />查看首条提醒</button>}
             <button type="button" className="button secondary" onClick={() => onNavigate('schedule')}><CalendarDays size={15} aria-hidden="true" />查看日程</button>
           </div>
         </div>
-        <div className="reminder-kpi-strip" aria-label="提醒分类统计">
-          {member.role === 'manager' ? <>
-            <div className="reminder-kpi-item"><span>项目截止</span><strong>{counts.total}</strong><small>{counts.overdue ? `${counts.overdue} 项逾期` : '进度正常'}</small></div>
-            <div className="reminder-kpi-item"><span>合同待审</span><strong>{pendingApprovals}</strong><small>{pendingApprovals ? '待人工审批' : '全部已处理'}</small></div>
-            <div className="reminder-kpi-item"><span>候选经验</span><strong>{pendingSkills}</strong><small>{pendingSkills ? '待核验发布' : '无积压候选'}</small></div>
-          </> : <>
-            <div className="reminder-kpi-item"><span>逾期跟进</span><strong>{counts.overdue}</strong><small>{counts.overdue ? '需优先推进' : '无逾期事项'}</small></div>
-            <div className="reminder-kpi-item"><span>临近截止</span><strong>{counts.total - counts.overdue}</strong><small>{counts.total > counts.overdue ? '关注截止节点' : '周期正常'}</small></div>
-            <div className="reminder-kpi-item"><span>在跟客户</span><strong>{state.deals.filter(deal => !deal.outcome && !deal.archive).length}</strong><small>持续推进中</small></div>
-          </>}
+        <div className="reminder-telemetry-panel">
+          <div className="reminder-kpi-strip" aria-label="提醒分类统计">
+            {metrics.map(metric => <div key={metric.label} className="reminder-kpi-item">
+              <div className="reminder-kpi-head">
+                <span>{metric.label}</span>
+                {total > 0 && <MiniRingGauge size={34} value={metric.value / total * 100} tone={metric.tone} />}
+              </div>
+              <strong>{metric.value}</strong><small>{metric.description}</small>
+            </div>)}
+          </div>
+          {total > 0 && <MiniSegmentBar segments={metrics} />}
         </div>
       </section>
 
-      {total === 0 && <section className="reminder-calm-panel" aria-label="巡检正常与快捷跟进">
+      {total === 0 && <section className="reminder-calm-panel" aria-label="快捷跟进">
         <div className="reminder-calm-head">
           <span className="reminder-calm-icon" aria-hidden="true"><ClipboardCheck size={20} /></span>
           <div>
-            <h3>项目截止巡检全部正常</h3>
-            <p>当前归属项目均处于健康推进周期内。你可以直接前往以下高频工作区推进今日业务。</p>
+            <h3>快捷跟进</h3>
+            <p>查看项目、安排日程或发现新的销售线索。</p>
           </div>
         </div>
         <div className="reminder-calm-shortcuts">
@@ -210,7 +229,7 @@ export function ReminderWorkspace({ state, member, pendingApprovals = 0, pending
           </section>}
           {counts.total === 0 && visibleReviews.length > 0 && <div className="reminder-rule-note" aria-hidden="true">
             <ClipboardCheck size={16} />
-            <span>项目截止巡检正常：当前团队 {state.deals.length} 个在跟项目均未触发逾期或临近截止预警。</span>
+            <span>当前团队暂无项目截止提醒。</span>
           </div>}
           {visibleCount === 0 && <div className="reminder-empty">
             <Bell size={22} aria-hidden="true" />

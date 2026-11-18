@@ -9,16 +9,19 @@ export function useChatScroll(contentKey: string, threadKey?: string) {
   const pinned = useRef(true);
   const previousThread = useRef(threadKey);
   const jumpTarget = useRef<number | null>(null);
+  const followedTop = useRef<number | null>(null);
   const [showJump, setShowJump] = useState(false);
   const resumeFollowing = useCallback(() => {
     pinned.current = true;
     lastUserInput.current = 0;
     jumpTarget.current = null;
+    followedTop.current = null;
   }, []);
   const markUserInput = useCallback(() => {
     lastUserInput.current = performance.now();
     pinned.current = false;
     jumpTarget.current = null;
+    followedTop.current = null;
   }, []);
   const onScroll = useCallback(() => {
     const el = containerRef.current;
@@ -32,6 +35,13 @@ export function useChatScroll(contentKey: string, threadKey?: string) {
       if (gap > 2) el.scrollTo({ top: bottom, behavior: 'instant' });
       return;
     }
+    // An instant follow can emit scroll after a resize but before ResizeObserver runs.
+    // Keep that acknowledgement from being mistaken for scrolling away from the bottom.
+    if (followedTop.current !== null && Math.abs(el.scrollTop - followedTop.current) < 2) {
+      followedTop.current = null;
+      return;
+    }
+    followedTop.current = null;
     if (performance.now() - lastUserInput.current > 150) pinned.current = gap < 40;
     setShowJump(gap > 120);
   }, []);
@@ -56,7 +66,10 @@ export function useChatScroll(contentKey: string, threadKey?: string) {
     const followLatest = () => {
       if (!pinned.current || jumpTarget.current !== null) return;
       const bottom = el.scrollHeight - el.clientHeight;
-      if (bottom - el.scrollTop > 1) el.scrollTo({ top: bottom, behavior: 'instant' });
+      if (bottom - el.scrollTop > 1) {
+        el.scrollTo({ top: bottom, behavior: 'instant' });
+        followedTop.current = el.scrollTop;
+      }
       setShowJump(false);
     };
     const frame = requestAnimationFrame(followLatest);

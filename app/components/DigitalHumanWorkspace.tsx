@@ -236,7 +236,7 @@ export default function DigitalHumanWorkspace({notify, onBusyChange, onDirtyChan
       </aside>
       <div className="digital-human-main">
         <h3>我的数字人</h3>
-        {loading ? <p role="status">正在读取数字人…</p> : !assets.length ? <div className="digital-human-empty"><span className="digital-human-empty-badge"><UserRound size={26}/></span><h4>从一张照片或一段视频开始</h4><p>保存素材后，定制进度、形象关联和直播配置会集中在这里。</p><div className="digital-human-empty-steps" aria-hidden="true"><span><b>01</b>上传照片或 MP4 素材</span><span><b>02</b>关联 ZEGO 定制形象 ID</span><span><b>03</b>配置推流地址与讲稿播报</span></div></div> : <>
+        {loading ? <p role="status">正在读取数字人…</p> : !assets.length ? <div className="digital-human-empty"><span className="digital-human-empty-badge"><UserRound size={26}/></span><h4>从一张照片或一段视频开始</h4><p>保存素材后，定制进度、形象关联和直播配置会集中在这里。</p></div> : <>
           <div className="digital-human-list" aria-label="数字人列表">{assets.map(item => <button type="button" key={item.id} disabled={pending} aria-pressed={asset?.id === item.id} onClick={() => setSelectedId(item.id)}>{item.sourceKind === 'video' ? <FileVideo size={18}/> : item.sourceKind === 'photo' ? <FileImage size={18}/> : <UserRound size={18}/>}<span><strong>{item.name}</strong><small>{sourceStatuses[item.status]}</small></span></button>)}</div>
           {asset && <article className="digital-human-detail" aria-label={`${asset.name}数字人详情`}>
             <div className="digital-human-detail-heading"><div><h3>{asset.name}</h3><p>{sourceStatuses[asset.status]}{asset.digitalHumanName ? ` · ${asset.digitalHumanName}` : ''}</p></div>{asset.sourceUrl && <a href={asset.sourceUrl} download>下载定制素材</a>}</div>
